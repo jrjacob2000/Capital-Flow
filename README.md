@@ -16,21 +16,21 @@ This project is pre-configured for automated deployment to GitHub Pages using Gi
    git add .
    git commit -m "Initial commit for go-live"
    git branch -M main
-   git remote add origin https://github.com/<your-username>/<your-repo-name>.git
+   git remote add origin https://github.com/jrjacob2000/Capital-Flow.git
    git push -u origin main
    ```
 
 2. **Enable GitHub Pages via GitHub Actions**:
-   - On GitHub, navigate to your repository.
+   - On GitHub, navigate to your repository (`jrjacob2000/Capital-Flow`).
    - Click on **Settings** (top navigation tab).
    - In the left sidebar, click on **Pages** (under the "Code and automation" section).
    - Under **Build and deployment** → **Source**, change the dropdown from *Deploy from a branch* to **GitHub Actions**.
 
 3. **Automatic Build & Publish**:
-   - The workflow defined in `.github/workflows/deploy.yml` will automatically trigger on any push to `main` or `master` (or manually via the **Actions** tab → **Deploy to GitHub Pages** → **Run workflow**).
+   - The workflow defined in `.github/workflows/deploy.yml` will automatically trigger on any push to `main` (or manually via the **Actions** tab → **Deploy to GitHub Pages** → **Run workflow**).
    - Once completed, your app will be live at:
      ```
-     https://<your-username>.github.io/<your-repo-name>/
+     https://jrjacob2000.github.io/Capital-Flow/
      ```
 
 ---
@@ -53,15 +53,15 @@ In your GitHub repository, navigate to **Settings** → **Secrets and variables*
 2. Under **Credentials** → **OAuth 2.0 Client IDs** (Web application):
    - Add your GitHub Pages domain to **Authorized JavaScript origins**:
      ```
-     https://<your-username>.github.io
+     https://jrjacob2000.github.io
      ```
    - Add your redirect URI to **Authorized redirect URIs**:
      ```
-     https://<your-username>.github.io/<your-repo-name>/
+     https://jrjacob2000.github.io/Capital-Flow/
      ```
 3. In Firebase Console → **Authentication** → **Settings** → **Authorized domains**, add:
    ```
-   <your-username>.github.io
+   jrjacob2000.github.io
    ```
 
 ---
