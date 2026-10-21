@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
-    "postbuild": "node -e \"import('fs').then(fs => { fs.copyFileSync('dist/index.html', 'dist/404.html'); fs.mkdirSync('dist-gh', { recursive: true }); const files = fs.readdirSync('dist/assets'); const js = files.find(f => f.endsWith('.js')); const css = files.find(f => f.endsWith('.css')); if (js) fs.copyFileSync('dist/assets/' + js, 'dist-gh/app.js'); if (css) fs.copyFileSync('dist/assets/' + css, 'dist-gh/app.css'); fs.copyFileSync('public/privacy.html', 'privacy.html'); fs.copyFileSync('public/terms.html', 'terms.html'); })\"",
+    "postbuild": "node -e \"import('fs').then(fs => { fs.copyFileSync('dist/index.html', 'dist/404.html'); if (fs.existsSync('public/privacy.html')) fs.copyFileSync('public/privacy.html', 'dist/privacy.html'); if (fs.existsSync('public/terms.html')) fs.copyFileSync('public/terms.html', 'dist/terms.html'); })\"",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

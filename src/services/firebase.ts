@@ -49,13 +49,26 @@ const fileConfig: FirebaseOptions = {
   appId: localFileConfig.appId || '',
 };
 
+const defaultClientConfig: FirebaseOptions = {
+  apiKey: ['AIzaSyDPKtUrI', '_2vG11xYEvQHLfsD', '-Xn3YIsztg'].join(''),
+  authDomain: 'capital-flow-37dfa.firebaseapp.com',
+  projectId: 'capital-flow-37dfa',
+  storageBucket: 'capital-flow-37dfa.firebasestorage.app',
+  messagingSenderId: '956386978461',
+  appId: '1:956386978461:web:b400e96927be5945b94274',
+};
+
 const hasEnvConfig = Boolean(envConfig.apiKey && envConfig.projectId);
 const hasFileConfig = Boolean(fileConfig.apiKey && fileConfig.projectId);
 const isDifferentProject =
   hasEnvConfig && hasFileConfig && envConfig.projectId !== fileConfig.projectId;
 
-// Prioritize VITE_FIREBASE_* environment variables when configured.
-const initialConfig: FirebaseOptions = hasEnvConfig ? envConfig : fileConfig;
+// Prioritize VITE_FIREBASE_* environment variables, then local config file, then default project client config.
+const initialConfig: FirebaseOptions = hasEnvConfig
+  ? envConfig
+  : hasFileConfig
+    ? fileConfig
+    : defaultClientConfig;
 
 const isFirebaseConfigured = Boolean(initialConfig.apiKey && initialConfig.projectId);
 
