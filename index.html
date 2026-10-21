@@ -27,6 +27,22 @@
         </p>
       </main>
     </div>
+    <script>
+      (function () {
+        var isViteDev = !!document.querySelector('script[src*="@vite/client"]');
+        var isViteProd = !!document.querySelector('script[src*="/assets/"]');
+        if (!isViteDev && !isViteProd) {
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = './dist-gh/app.css';
+          document.head.appendChild(link);
+          var script = document.createElement('script');
+          script.type = 'module';
+          script.src = './dist-gh/app.js';
+          document.body.appendChild(script);
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
