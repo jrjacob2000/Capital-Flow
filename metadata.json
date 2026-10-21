@@ -1,0 +1,6 @@
+{
+  "name": "CapitalFlow - Income, Expense & Savings Ledger",
+  "description": "Record monthly and bi-weekly income, expenses, and savings with yearly Google Drive JSON storage, cumulative savings ledger, and interactive visual analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
