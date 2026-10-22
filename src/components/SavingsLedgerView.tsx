@@ -1245,8 +1245,19 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  const firstNamedFund = categoryFunds.find((f) => f.id !== 'fund-general-unallocated');
+                  const unallocatedFund = categoryFunds.find((f) => f.id === 'fund-general-unallocated');
                   setReallocateFromCategory('General Reserves / Starting Capital');
-                  setReallocateToCategory(categoryFunds[0]?.name || '');
+                  setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
+                  const firstUnallocatedAcc = unallocatedFund?.accounts?.[0];
+                  setReallocateAccountId(firstUnallocatedAcc ? firstUnallocatedAcc.accountId : '');
+                  setReallocateAmount(
+                    firstUnallocatedAcc
+                      ? String(firstUnallocatedAcc.amount)
+                      : unallocatedFund
+                      ? String(unallocatedFund.currentBalance)
+                      : ''
+                  );
                   setIsReallocateModalOpen(true);
                 }}
                 className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -1361,9 +1372,30 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                                   {acc.accountName}
                                 </span>
                               </div>
-                              <span className="font-mono font-bold text-slate-900 dark:text-slate-100 shrink-0">
-                                {currencySymbol}{formatNumber(acc.amount)}
-                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                                  {currencySymbol}{formatNumber(acc.amount)}
+                                </span>
+                                {fund.id === 'fund-general-unallocated' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const firstNamedFund = categoryFunds.find(
+                                        (f) => f.id !== 'fund-general-unallocated'
+                                      );
+                                      setReallocateFromCategory('General Reserves / Starting Capital');
+                                      setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
+                                      setReallocateAccountId(acc.accountId);
+                                      setReallocateAmount(String(acc.amount));
+                                      setIsReallocateModalOpen(true);
+                                    }}
+                                    className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 rounded transition-colors cursor-pointer"
+                                    title={`Allocate ${acc.accountName} beginning balance to a fund`}
+                                  >
+                                    Allocate
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1394,13 +1426,26 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setReallocateFromCategory('General Reserves / Starting Capital');
-                          setReallocateToCategory(fund.name);
+                          if (fund.id === 'fund-general-unallocated') {
+                            const firstNamedFund = categoryFunds.find(
+                              (f) => f.id !== 'fund-general-unallocated'
+                            );
+                            const firstAcc = fund.accounts[0];
+                            setReallocateFromCategory('General Reserves / Starting Capital');
+                            setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
+                            setReallocateAccountId(firstAcc ? firstAcc.accountId : '');
+                            setReallocateAmount(
+                              firstAcc ? String(firstAcc.amount) : String(fund.currentBalance)
+                            );
+                          } else {
+                            setReallocateFromCategory('General Reserves / Starting Capital');
+                            setReallocateToCategory(fund.name);
+                          }
                           setIsReallocateModalOpen(true);
                         }}
                         className="px-2 py-1 text-[11px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
                       >
-                        Reallocate
+                        {fund.id === 'fund-general-unallocated' ? 'Allocate to Fund' : 'Reallocate'}
                       </button>
                       <button
                         type="button"
@@ -2865,7 +2910,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 </label>
                 <select
                   value={reallocateFromCategory}
-                  onChange={(e) => setReallocateFromCategory(e.target.value)}
+                  onChange={(e) => {
+                    const nextFrom = e.target.value;
+                    setReallocateFromCategory(nextFrom);
+                    if (reallocateToCategory === nextFrom) {
+                      const fallbackTarget = categoryFunds.find((f) => f.name !== nextFrom);
+                      setReallocateToCategory(fallbackTarget ? fallbackTarget.name : '__custom__');
+                    }
+                  }}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                 >
                   {!categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
@@ -2889,16 +2941,24 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                 >
                   <option value="">-- Select Target Category Fund --</option>
-                  {categoryFunds.map((f) => (
-                    <option key={f.id} value={f.name}>
-                      {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
-                    </option>
-                  ))}
-                  {budget?.customCategories?.saving?.map((cat) => (
-                    <option key={`custom-${cat}`} value={cat}>
-                      {cat} (Custom Budget Category)
-                    </option>
-                  ))}
+                  {categoryFunds
+                    .filter((f) => f.name !== reallocateFromCategory)
+                    .map((f) => (
+                      <option key={f.id} value={f.name}>
+                        {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
+                      </option>
+                    ))}
+                  {(budget?.customCategories?.saving || [])
+                    .filter(
+                      (cat) =>
+                        cat !== reallocateFromCategory &&
+                        !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
+                    )
+                    .map((cat) => (
+                      <option key={`custom-${cat}`} value={cat}>
+                        {cat} (Savings Category)
+                      </option>
+                    ))}
                   <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
                 </select>
                 {reallocateToCategory === '__custom__' && (
@@ -2913,11 +2973,71 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 )}
               </div>
 
+              <div>
+                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
+                  Physical Account Holding This Balance
+                </label>
+                <select
+                  value={reallocateAccountId}
+                  onChange={(e) => {
+                    const nextAccId = e.target.value;
+                    setReallocateAccountId(nextAccId);
+                    if (
+                      nextAccId &&
+                      reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
+                    ) {
+                      const unallocatedFund = categoryFunds.find((f) => f.id === 'fund-general-unallocated');
+                      const accUnalloc = unallocatedFund?.accounts.find((a) => a.accountId === nextAccId);
+                      if (accUnalloc && accUnalloc.amount > 0) {
+                        setReallocateAmount(String(accUnalloc.amount));
+                      }
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                >
+                  <option value="">All / Unspecified Account</option>
+                  {ledger.accounts.map((acc) => {
+                    const unallocatedFund = categoryFunds.find((f) => f.id === 'fund-general-unallocated');
+                    const accUnalloc = unallocatedFund?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
+                    const isFromUnallocated =
+                      reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
+                    return (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} — Total: {currencySymbol}{formatNumber(acc.balance)}
+                        {isFromUnallocated ? ` (Unallocated: ${currencySymbol}${formatNumber(accUnalloc)})` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Physical bank account balance stays unchanged; this tags which bank account holds the earmarked fund.
+                </p>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Amount ({currencySymbol})
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-600 dark:text-slate-300 font-semibold">
+                      Amount ({currencySymbol})
+                    </label>
+                    {(() => {
+                      const sourceFund = categoryFunds.find((f) => f.name === reallocateFromCategory);
+                      const accSlice = reallocateAccountId
+                        ? sourceFund?.accounts.find((a) => a.accountId === reallocateAccountId)
+                        : undefined;
+                      const maxAvail = accSlice ? accSlice.amount : sourceFund?.currentBalance || 0;
+                      if (maxAvail <= 0) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setReallocateAmount(String(maxAvail))}
+                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                        >
+                          Max ({currencySymbol}{formatNumber(maxAvail)})
+                        </button>
+                      );
+                    })()}
+                  </div>
                   <input
                     type="number"
                     step="0.01"
@@ -2945,32 +3065,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
               <div>
                 <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  Physical Account (Optional Tag)
-                </label>
-                <select
-                  value={reallocateAccountId}
-                  onChange={(e) => setReallocateAccountId(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                >
-                  <option value="">All / Unspecified Account</option>
-                  {ledger.accounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Bank balances will stay unchanged; this only specifies which account holds the reallocated amount.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
                   Note / Reason
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Reassigned reserve for unexpected car repair"
+                  placeholder="e.g. Allocated beginning balance to Emergency Fund"
                   value={reallocateNote}
                   onChange={(e) => setReallocateNote(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
@@ -2989,6 +3088,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   type="submit"
                   disabled={
                     !reallocateToCategory ||
+                    reallocateToCategory === reallocateFromCategory ||
                     (reallocateToCategory === '__custom__' && !reallocateCustomCategory.trim()) ||
                     !reallocateAmount
                   }

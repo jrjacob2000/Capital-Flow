@@ -208,9 +208,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       let fundName = '';
       let category = tx.category || 'Savings';
 
+      if (tx.category && tx.category.trim().toLowerCase() === 'general reserves / starting capital') {
+        return;
+      }
+
       if (tx.source === 'interest_yield') {
-        fundName = 'Compounding Yields & Dividend';
-        category = 'Yield & Interest';
+        fundName = tx.category && tx.category.trim() ? tx.category.trim() : 'Compounding Yields & Dividend';
+        category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
         fundName = tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim() || 'General Withdrawal';
         category = tx.category || 'Withdrawal';
@@ -221,6 +225,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         if (linkedEntry) {
           fundName = linkedEntry.item || linkedEntry.description || linkedEntry.category || 'General Savings';
           category = linkedEntry.category || category;
+        } else if (tx.source === 'manual_deposit' && !tx.category) {
+          const cleanNote = tx.note
+            .replace(/^Budget Sync:\s*/i, '')
+            .replace(/^Manual Deposit:\s*/i, '')
+            .trim();
+          if (cleanNote && fundMap.has(cleanNote.toLowerCase())) {
+            fundName = cleanNote;
+          } else {
+            return;
+          }
         } else {
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
