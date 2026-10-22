@@ -45,6 +45,10 @@ import {
   PAYMENT_METHODS,
   stripDefaultStarterTemplates,
   isTemplateValidForPeriod,
+  resolveCanonicalSinkingFundName,
+  findClosestSinkingFundMatch,
+  normalizeSavingCategoryGroup,
+  DEFAULT_SINKING_FUND_NAMES,
 } from '../services/sampleData';
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
 import { CarryOverModal } from './CarryOverModal';
@@ -191,6 +195,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [formToBeWithdrawn, setFormToBeWithdrawn] = useState<boolean>(false);
   const [formSavingAccountId, setFormSavingAccountId] = useState<string>(accounts[0]?.id || '');
   const [saveToTemplate, setSaveToTemplate] = useState<boolean>(false);
+  const [isCreatingNewSinkingFund, setIsCreatingNewSinkingFund] = useState<boolean>(false);
+
+  const existingSinkingFunds = useMemo(() => {
+    const basePool = [...DEFAULT_SINKING_FUND_NAMES];
+    const fromTemplates = itemTemplates
+      .filter((t) => t.type === 'saving')
+      .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, basePool));
+    const combinedPool = Array.from(new Set([...fromTemplates, ...basePool]));
+    const fromEntries = budget.entries
+      .filter((e) => e.type === 'saving')
+      .map((e) => resolveCanonicalSinkingFundName(e.item || e.description, e.category, combinedPool));
+    return Array.from(new Set([...fromTemplates, ...basePool, ...fromEntries])).filter(Boolean);
+  }, [itemTemplates, budget.entries]);
 
 
 
@@ -288,6 +305,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       periodIndex = Math.max(0, MONTH_NAMES.indexOf(selectedPeriod));
       periodDate = `${budget.year}-${String(periodIndex + 1).padStart(2, '0')}-01`;
     } else {
+      const bwIdx = BIWEEKLY_PERIODS.findIndex((p) => p.id === selectedPeriod);
+      periodIndex = bwIdx >= 0 ? bwIdx : 0;
       const bw = BIWEEKLY_PERIODS[periodIndex];
       const mIdx = Math.max(0, MONTH_NAMES.indexOf(bw?.approxMonth || 'Jan'));
       const isP2 = bw?.id.endsWith('-P2');
@@ -776,14 +795,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     // Default to Unplanned mode for quick, friction-free ad-hoc entry
     setEntrySourceMode('unplanned');
     setSelectedTemplateId('');
+    setIsCreatingNewSinkingFund(false);
+    const defaultFund = existingSinkingFunds[0] || 'General Savings';
     setFormCategory(
       type === 'income'
         ? incomeCategories[0] || 'Salary'
         : type === 'saving'
-        ? savingCategories[0] || 'Savings'
+        ? normalizeSavingCategoryGroup(defaultFund, savingCategories[0])
         : expenseCategories[0] || 'Food & Dining'
     );
-    setFormItem('');
+    setFormItem(type === 'saving' ? defaultFund : '');
     setFormEstimated('0');
     setFormActual('');
     setFormPaymentMethod('Bank Transfer');
@@ -891,6 +912,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           }
         : undefined;
 
+    const resolvedFundOrItem =
+      modalType === 'saving'
+        ? isCreatingNewSinkingFund
+          ? formItem.trim() || formCategory
+          : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
+        : formItem.trim() || formCategory;
+
     const entryPayload = {
       year: budget.year,
       period: modalPeriod,
@@ -898,7 +926,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       date: formDate,
       type: modalType,
       category: formCategory,
-      item: formItem.trim() || formCategory,
+      item: resolvedFundOrItem,
       estimatedCost: estNum,
       actualCost: actNum,
       amount: actNum,
@@ -908,7 +936,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       status: formStatus,
       reference: formReference.trim(),
       toBeWithdrawn: formToBeWithdrawn,
-      description: formItem.trim() || formCategory,
+      description: resolvedFundOrItem,
       savingAccountId: modalType === 'saving' ? formSavingAccountId : undefined,
       savingAccountName: modalType === 'saving' ? selectedAcc?.name : undefined,
     };
@@ -2002,14 +2030,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       type="button"
                       onClick={() => {
                         setModalType('saving');
+                        setIsCreatingNewSinkingFund(false);
                         if (entrySourceMode === 'unplanned') {
-                          setFormCategory(savingCategories[0] || 'Savings');
+                          const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
+                          setFormCategory(savingCategories[0] || 'General Savings');
+                          setFormItem(defaultFund);
                         } else {
                           const firstTpl = itemTemplates.find((t) => t.type === 'saving');
                           if (firstTpl) {
                             handleSelectTemplate(firstTpl.id);
                           } else {
-                            setFormCategory(savingCategories[0] || 'Savings');
+                            const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
+                            setFormCategory(savingCategories[0] || 'General Savings');
+                            setFormItem(defaultFund);
                             setSelectedTemplateId('');
                           }
                         }
@@ -2112,11 +2145,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   </div>
                 )}
 
-                {/* 5. CATEGORY & ITEM NAME */}
+                {/* 5. CATEGORY & ITEM NAME / TARGET SINKING FUND */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="block text-slate-600 dark:text-slate-400 font-semibold">Category</label>
+                      <label className="block text-slate-600 dark:text-slate-400 font-semibold">
+                        {modalType === 'saving' ? 'Saving Category' : 'Category'}
+                      </label>
                       <button
                         type="button"
                         onClick={() => setIsManagerModalOpen(true)}
@@ -2146,15 +2181,128 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Line Item Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Electricity Bill, Groceries & Market, Emergency Fund"
-                      value={formItem}
-                      onChange={(e) => handleItemChange(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-600 dark:text-slate-400 font-semibold">
+                        {modalType === 'saving' ? 'Target Sinking Fund (Envelope)' : 'Line Item Name'}
+                      </label>
+                      {modalType === 'saving' && isCreatingNewSinkingFund && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingNewSinkingFund(false);
+                            setFormItem(existingSinkingFunds[0] || formCategory || 'General Savings');
+                          }}
+                          className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
+                        >
+                          Select Existing Fund
+                        </button>
+                      )}
+                    </div>
+
+                    {modalType === 'saving' && !isCreatingNewSinkingFund ? (
+                      <select
+                        value={
+                          existingSinkingFunds.includes(formItem)
+                            ? formItem
+                            : resolveCanonicalSinkingFundName(formItem, formCategory, existingSinkingFunds)
+                        }
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '__CREATE_NEW_FUND__') {
+                            setIsCreatingNewSinkingFund(true);
+                            setFormItem('');
+                          } else {
+                            handleItemChange(val);
+                            setFormCategory(normalizeSavingCategoryGroup(val, formCategory));
+                          }
+                        }}
+                        className="w-full px-3 py-2 bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-semibold"
+                      >
+                        {(() => {
+                          const allFunds = Array.from(
+                            new Set([
+                              ...existingSinkingFunds,
+                              ...(formItem && formItem.trim()
+                                ? [resolveCanonicalSinkingFundName(formItem, formCategory, existingSinkingFunds)]
+                                : []),
+                            ])
+                          );
+                          const grouped = new Map<string, string[]>();
+                          allFunds.forEach((f) => {
+                            const grp = normalizeSavingCategoryGroup(f);
+                            if (!grouped.has(grp)) grouped.set(grp, []);
+                            grouped.get(grp)!.push(f);
+                          });
+                          return Array.from(grouped.entries()).map(([grpName, funds]) => (
+                            <optgroup key={grpName} label={grpName}>
+                              {funds.map((fundName) => (
+                                <option key={fundName} value={fundName}>
+                                  🎯 {fundName}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ));
+                        })()}
+                        <option value="__CREATE_NEW_FUND__">➕ Create a New Sinking Fund...</option>
+                      </select>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <input
+                          type="text"
+                          required
+                          list={modalType === 'saving' ? 'existing-sinking-funds-list' : undefined}
+                          placeholder={
+                            modalType === 'saving'
+                              ? 'Type new Sinking Fund name (e.g. Car Maintenance Fund)'
+                              : 'e.g. Electricity Bill, Groceries & Market, Emergency Fund'
+                          }
+                          value={formItem}
+                          onChange={(e) => handleItemChange(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
+                        />
+                        {modalType === 'saving' && (
+                          <>
+                            <datalist id="existing-sinking-funds-list">
+                              {existingSinkingFunds.map((f) => (
+                                <option key={f} value={f} />
+                              ))}
+                            </datalist>
+                            {(() => {
+                              const closeMatch = findClosestSinkingFundMatch(formItem, existingSinkingFunds);
+                              if (
+                                closeMatch &&
+                                formItem.trim() &&
+                                closeMatch.toLowerCase() !== formItem.trim().toLowerCase()
+                              ) {
+                                return (
+                                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-[11px] text-amber-800 dark:text-amber-200">
+                                    <span>
+                                      Similar to existing fund <strong>&quot;{closeMatch}&quot;</strong>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsCreatingNewSinkingFund(false);
+                                        handleItemChange(closeMatch);
+                                      }}
+                                      className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md cursor-pointer shrink-0"
+                                    >
+                                      Use &quot;{closeMatch}&quot;
+                                    </button>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {modalType === 'saving' && !isCreatingNewSinkingFund && (
+                      <p className="text-[10px] text-indigo-600 dark:text-indigo-400 mt-1">
+                        Allocates directly into this existing Sinking Fund without creating duplicate funds from typos. Use Reference/Memo below for specific notes.
+                      </p>
+                    )}
                   </div>
                 </div>
 

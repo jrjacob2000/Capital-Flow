@@ -2,7 +2,12 @@ import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Upload, FileSpreadsheet, CheckCircle2, X, AlertCircle } from 'lucide-react';
 import { BudgetEntry, PaymentMethod } from '../types/finance';
-import { MONTH_NAMES, normalizeCategoryWording } from '../services/sampleData';
+import {
+  MONTH_NAMES,
+  normalizeCategoryWording,
+  normalizeSavingCategoryGroup,
+  resolveCanonicalSinkingFundName,
+} from '../services/sampleData';
 
 interface ExcelImportModalProps {
   isOpen: boolean;
@@ -176,8 +181,8 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
           periodIndex,
           date: dateStr,
           type: isSaving ? 'saving' : 'expense',
-          category: isSaving ? 'General Savings' : categoryName,
-          item: itemName,
+          category: isSaving ? normalizeSavingCategoryGroup(itemName, categoryName) : categoryName,
+          item: isSaving ? resolveCanonicalSinkingFundName(itemName, categoryName) : itemName,
           estimatedCost: 0,
           actualCost: actualColE,
           amount: actualColE,
@@ -209,6 +214,11 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     setErrorMsg(null);
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMsg('Spreadsheet file is too large (max 10 MB allowed).');
+      e.target.value = '';
+      return;
+    }
     setFileName(file.name);
 
     try {

@@ -122,7 +122,7 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Cloud className="w-3.5 h-3.5" />
               <span>Drive Storage</span>
-              {driveStatus.isSignedIn && hasUnsavedChanges && (
+              {driveStatus.isSignedIn && hasUnsavedChanges && !driveStatus.isSyncing && (
                 <span
                   className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"
                   title="Local changes not yet synced to Google Drive"
@@ -235,13 +235,17 @@ export const Header: React.FC<HeaderProps> = ({
                   <div className="flex items-center gap-1.5 text-xs">
                     <span
                       className={`w-2 h-2 rounded-full shrink-0 ${
-                        hasUnsavedChanges ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'
+                        driveStatus.isSyncing
+                          ? 'bg-indigo-500 animate-pulse'
+                          : hasUnsavedChanges
+                          ? 'bg-amber-500 animate-pulse'
+                          : 'bg-emerald-500'
                       }`}
                     />
                     <span className="font-medium text-slate-700 dark:text-slate-200 max-w-[100px] truncate hidden lg:inline">
                       {driveStatus.userName || driveStatus.userEmail || 'Connected'}
                     </span>
-                    {hasUnsavedChanges && (
+                    {hasUnsavedChanges && !driveStatus.isSyncing && (
                       <span className="hidden sm:inline-block px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
                         Unsaved
                       </span>
@@ -263,7 +267,11 @@ export const Header: React.FC<HeaderProps> = ({
                         {driveStatus.userEmail}
                       </div>
                       <div className="mt-1 flex items-center gap-1 text-[10px] font-medium">
-                        {hasUnsavedChanges ? (
+                        {driveStatus.isSyncing ? (
+                          <span className="text-indigo-600 dark:text-indigo-400 flex items-center gap-1 font-semibold">
+                            <span>{driveStatus.syncMessage || 'Syncing with Google Drive...'}</span>
+                          </span>
+                        ) : hasUnsavedChanges ? (
                           <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
                             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                             Unsaved local changes
@@ -284,13 +292,13 @@ export const Header: React.FC<HeaderProps> = ({
                           onTriggerSync();
                         }}
                         disabled={driveStatus.isSyncing}
-                        className="w-full text-left px-2.5 py-1.5 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center justify-between transition-colors"
+                        className="w-full text-left px-2.5 py-1.5 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center justify-between transition-colors disabled:opacity-50"
                       >
                         <span className="flex items-center gap-2">
-                          <RefreshCw className={`w-3.5 h-3.5 ${driveStatus.isSyncing ? 'animate-spin text-indigo-500' : 'text-slate-400'}`} />
-                          <span>Sync Changes Now</span>
+                          <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{driveStatus.isSyncing ? 'Syncing in progress...' : 'Sync Changes Now'}</span>
                         </span>
-                        {hasUnsavedChanges && (
+                        {hasUnsavedChanges && !driveStatus.isSyncing && (
                           <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
                             Pending
                           </span>
@@ -329,19 +337,23 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={onSignInWithGoogle}
-                className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/70 dark:hover:bg-amber-900/80 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 rounded-xl shadow-2xs transition-all text-xs font-semibold cursor-pointer"
+                disabled={driveStatus.isSyncing}
+                className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/70 dark:hover:bg-amber-900/80 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 rounded-xl shadow-2xs transition-all text-xs font-semibold cursor-pointer disabled:opacity-60"
                 title="Google Drive session has expired. Click to sign in again."
               >
-                <KeyRound className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 animate-pulse" />
-                <span className="hidden sm:inline">Session Expired &bull; Reconnect</span>
-                <span className="sm:hidden">Reconnect</span>
+                <KeyRound className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                <span className="hidden sm:inline">
+                  {driveStatus.isSyncing ? 'Reconnecting...' : 'Session Expired • Reconnect'}
+                </span>
+                <span className="sm:hidden">{driveStatus.isSyncing ? 'Syncing...' : 'Reconnect'}</span>
               </button>
             ) : (
               /* Official Google Sign-In Button as mandated in workspace-integration */
               <button
                 type="button"
                 onClick={onSignInWithGoogle}
-                className="flex items-center gap-1.5 sm:gap-2.5 px-2 sm:px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-all text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
+                disabled={driveStatus.isSyncing}
+                className="flex items-center gap-1.5 sm:gap-2.5 px-2 sm:px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-all text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-60"
               >
                 <svg
                   version="1.1"
@@ -367,8 +379,10 @@ export const Header: React.FC<HeaderProps> = ({
                   />
                   <path fill="none" d="M0 0h48v48H0z" />
                 </svg>
-                <span className="hidden sm:inline">Sign in with Google</span>
-                <span className="sm:hidden">Sign in</span>
+                <span className="hidden sm:inline">
+                  {driveStatus.isSyncing ? 'Connecting...' : 'Sign in with Google'}
+                </span>
+                <span className="sm:hidden">{driveStatus.isSyncing ? 'Connecting...' : 'Sign in'}</span>
               </button>
             )}
 

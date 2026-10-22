@@ -33,6 +33,8 @@ import {
   isDefaultStarterTemplateItem,
   stripDefaultStarterTemplates,
   deriveCategoryBudgetsFromTemplates,
+  resolveCanonicalSinkingFundName,
+  normalizeSavingCategoryGroup,
 } from './sampleData';
 
 const LOCAL_STORAGE_KEY_PREFIX = 'capitalflow_local_budget_';
@@ -66,10 +68,28 @@ export class FinanceStorageService {
       const parsed = JSON.parse(raw) as UserTemplateProfile;
       if (parsed && Array.isArray(parsed.itemTemplates)) {
         let didUpdateCategories = false;
-        const cleanedTemplates = stripDefaultStarterTemplates(parsed.itemTemplates).map((t) => {
-          const normCat = normalizeCategoryWording(t.category);
-          if (normCat !== t.category) didUpdateCategories = true;
-          return { ...t, category: normCat };
+        const cleanedTemplates: BudgetItemTemplate[] = [];
+        stripDefaultStarterTemplates(parsed.itemTemplates).forEach((t) => {
+          if (t.type === 'saving') {
+            const canonItem = resolveCanonicalSinkingFundName(t.item, t.category);
+            const normCat = normalizeSavingCategoryGroup(canonItem, t.category);
+            if (canonItem !== t.item || normCat !== t.category) didUpdateCategories = true;
+            const existingIdx = cleanedTemplates.findIndex(
+              (c) => c.type === 'saving' && c.item.trim().toLowerCase() === canonItem.toLowerCase()
+            );
+            if (existingIdx >= 0) {
+              didUpdateCategories = true;
+              if ((t.defaultEstimatedCost || 0) > (cleanedTemplates[existingIdx].defaultEstimatedCost || 0)) {
+                cleanedTemplates[existingIdx].defaultEstimatedCost = t.defaultEstimatedCost;
+              }
+            } else {
+              cleanedTemplates.push({ ...t, item: canonItem, category: normCat });
+            }
+          } else {
+            const normCat = normalizeCategoryWording(t.category);
+            if (normCat !== t.category) didUpdateCategories = true;
+            cleanedTemplates.push({ ...t, category: normCat });
+          }
         });
         const hadDefaultItems = cleanedTemplates.length !== parsed.itemTemplates.length;
 
@@ -83,12 +103,22 @@ export class FinanceStorageService {
           }
         });
 
+        const rawSavingCats = parsed.customCategories?.saving || SAVING_CATEGORIES;
+        const normalizedSavingCats: string[] = [...SAVING_CATEGORIES];
+        rawSavingCats.forEach((c) => {
+          const norm = normalizeSavingCategoryGroup(c, c);
+          if (norm !== c) didUpdateCategories = true;
+          if (norm && !normalizedSavingCats.includes(norm)) {
+            normalizedSavingCats.push(norm);
+          }
+        });
+
         const normalizedProfile: UserTemplateProfile = {
           ...parsed,
           customCategories: {
             expense: normalizedExpenseCats,
             income: [...(parsed.customCategories?.income || INCOME_CATEGORIES)],
-            saving: [...(parsed.customCategories?.saving || SAVING_CATEGORIES)],
+            saving: normalizedSavingCats,
           },
           itemTemplates: cleanedTemplates,
           isPersonalizedTemplate: Boolean(parsed.isPersonalizedTemplate && cleanedTemplates.length > 0),
@@ -108,13 +138,36 @@ export class FinanceStorageService {
    * Saves the user's personalized template profile to localStorage
    */
   static saveUserTemplateProfile(profile: UserTemplateProfile): BudgetTemplateData {
-    const cleanedTemplates = stripDefaultStarterTemplates(profile.itemTemplates).map((t) => ({
-      ...t,
-      category: normalizeCategoryWording(t.category),
-    }));
+    const cleanedTemplates: BudgetItemTemplate[] = [];
+    stripDefaultStarterTemplates(profile.itemTemplates).forEach((t) => {
+      if (t.type === 'saving') {
+        const canonItem = resolveCanonicalSinkingFundName(t.item, t.category);
+        const normCat = normalizeSavingCategoryGroup(canonItem, t.category);
+        const existingIdx = cleanedTemplates.findIndex(
+          (c) => c.type === 'saving' && c.item.trim().toLowerCase() === canonItem.toLowerCase()
+        );
+        if (existingIdx >= 0) {
+          if ((t.defaultEstimatedCost || 0) > (cleanedTemplates[existingIdx].defaultEstimatedCost || 0)) {
+            cleanedTemplates[existingIdx].defaultEstimatedCost = t.defaultEstimatedCost;
+          }
+        } else {
+          cleanedTemplates.push({ ...t, item: canonItem, category: normCat });
+        }
+      } else {
+        cleanedTemplates.push({ ...t, category: normalizeCategoryWording(t.category) });
+      }
+    });
     const normalizedExpenseCats = (profile.customCategories?.expense || EXPENSE_CATEGORIES)
       .map(normalizeCategoryWording)
       .filter((cat, idx, arr) => Boolean(cat) && arr.indexOf(cat) === idx);
+    const normalizedSavingCats = Array.from(
+      new Set([
+        ...SAVING_CATEGORIES,
+        ...(profile.customCategories?.saving || SAVING_CATEGORIES).map((c) =>
+          normalizeSavingCategoryGroup(c, c)
+        ),
+      ])
+    ).filter(Boolean);
     const fullData: BudgetTemplateData = {
       version: profile.version || '1.0.0',
       lastUpdated: profile.lastUpdated || new Date().toISOString(),
@@ -122,7 +175,7 @@ export class FinanceStorageService {
       customCategories: {
         expense: normalizedExpenseCats,
         income: [...(profile.customCategories?.income || INCOME_CATEGORIES)],
-        saving: [...(profile.customCategories?.saving || SAVING_CATEGORIES)],
+        saving: normalizedSavingCats,
       },
       itemTemplates: cleanedTemplates,
     };
@@ -306,31 +359,102 @@ export class FinanceStorageService {
       didMigrate = true;
     }
 
-    // Upgrade any legacy/misspelled category wordings across entries, templates, and customCategories
+    // Upgrade any legacy/misspelled category wordings & group Sinking Funds across entries, templates, and customCategories
     if (Array.isArray(budget.itemTemplates)) {
-      budget.itemTemplates = budget.itemTemplates.map((t) => {
-        const normCat = normalizeCategoryWording(t.category);
-        if (normCat !== t.category) didMigrate = true;
-        return { ...t, category: normCat };
+      const deduplicatedTemplates: BudgetItemTemplate[] = [];
+      const seenSavingFunds = new Map<string, number>();
+
+      budget.itemTemplates.forEach((t) => {
+        if (t.type === 'saving') {
+          const normItem = resolveCanonicalSinkingFundName(t.item, t.category);
+          const normCat = normalizeSavingCategoryGroup(normItem, t.category);
+          if (normItem !== t.item || normCat !== t.category) {
+            didMigrate = true;
+          }
+          const fundKey = normItem.toLowerCase();
+          if (seenSavingFunds.has(fundKey)) {
+            didMigrate = true;
+            const existingIdx = seenSavingFunds.get(fundKey)!;
+            if ((t.defaultEstimatedCost || 0) > (deduplicatedTemplates[existingIdx].defaultEstimatedCost || 0)) {
+              deduplicatedTemplates[existingIdx].defaultEstimatedCost = t.defaultEstimatedCost;
+            }
+          } else {
+            seenSavingFunds.set(fundKey, deduplicatedTemplates.length);
+            deduplicatedTemplates.push({
+              ...t,
+              item: normItem,
+              category: normCat,
+            });
+          }
+        } else {
+          const normCat = normalizeCategoryWording(t.category);
+          if (normCat !== t.category) didMigrate = true;
+          deduplicatedTemplates.push({ ...t, category: normCat });
+        }
       });
+
+      budget.itemTemplates = deduplicatedTemplates;
     }
+
     if (Array.isArray(budget.entries)) {
       budget.entries = budget.entries.map((e) => {
+        if (e.type === 'saving') {
+          const normItem = resolveCanonicalSinkingFundName(e.item || e.description, e.category);
+          const normCat = normalizeSavingCategoryGroup(normItem, e.category);
+          if (normItem !== e.item || normCat !== e.category) {
+            didMigrate = true;
+          }
+          return {
+            ...e,
+            item: normItem,
+            description: e.description && e.description.toLowerCase() === 'savings' ? normItem : e.description,
+            category: normCat,
+          };
+        }
         const normCat = normalizeCategoryWording(e.category);
         if (normCat !== e.category) didMigrate = true;
         return { ...e, category: normCat };
       });
     }
-    if (budget.customCategories && Array.isArray(budget.customCategories.expense)) {
-      const normalizedExpense: string[] = [];
-      budget.customCategories.expense.forEach((c) => {
-        const norm = normalizeCategoryWording(c);
-        if (norm !== c) didMigrate = true;
-        if (norm && !normalizedExpense.includes(norm)) {
-          normalizedExpense.push(norm);
+
+    if (budget.customCategories) {
+      if (Array.isArray(budget.customCategories.expense)) {
+        const normalizedExpense: string[] = [];
+        budget.customCategories.expense.forEach((c) => {
+          const norm = normalizeCategoryWording(c);
+          if (norm !== c) didMigrate = true;
+          if (norm && !normalizedExpense.includes(norm)) {
+            normalizedExpense.push(norm);
+          }
+        });
+        budget.customCategories.expense = normalizedExpense;
+      }
+
+      if (Array.isArray(budget.customCategories.saving)) {
+        const normalizedSaving: string[] = [...SAVING_CATEGORIES];
+        budget.customCategories.saving.forEach((c) => {
+          const norm = normalizeSavingCategoryGroup(c, c);
+          if (norm !== c) didMigrate = true;
+          if (norm && norm !== 'Unallocated Cash Pool' && !normalizedSaving.includes(norm)) {
+            normalizedSaving.push(norm);
+          }
+        });
+        if (
+          normalizedSaving.length !== budget.customCategories.saving.length ||
+          normalizedSaving.some((v, idx) => budget.customCategories!.saving[idx] !== v)
+        ) {
+          didMigrate = true;
+          budget.customCategories.saving = normalizedSaving;
         }
+      }
+    }
+
+    if (didMigrate && budget.customCategories && Array.isArray(budget.itemTemplates)) {
+      FinanceStorageService.saveUserTemplateProfile({
+        customCategories: budget.customCategories,
+        itemTemplates: budget.itemTemplates,
+        isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
       });
-      budget.customCategories.expense = normalizedExpense;
     }
 
     budget.budgets = deriveCategoryBudgetsFromTemplates(budget.itemTemplates || []);
@@ -512,7 +636,39 @@ export class FinanceStorageService {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_LEDGER);
     if (raw) {
       try {
-        return JSON.parse(raw);
+        const parsed: SavingsLedgerData = JSON.parse(raw);
+        let ledgerMigrated = false;
+        if (Array.isArray(parsed.transactions)) {
+          parsed.transactions = parsed.transactions.map((tx) => {
+            const updated = { ...tx };
+            if (
+              updated.category &&
+              updated.category.trim().toLowerCase() !== 'general reserves / starting capital' &&
+              updated.source !== 'transfer'
+            ) {
+              const canonCat = resolveCanonicalSinkingFundName(updated.category, updated.category);
+              if (canonCat !== updated.category) {
+                updated.category = canonCat;
+                ledgerMigrated = true;
+              }
+            }
+            if (
+              updated.toCategory &&
+              updated.toCategory.trim().toLowerCase() !== 'general reserves / starting capital'
+            ) {
+              const canonTo = resolveCanonicalSinkingFundName(updated.toCategory, updated.toCategory);
+              if (canonTo !== updated.toCategory) {
+                updated.toCategory = canonTo;
+                ledgerMigrated = true;
+              }
+            }
+            return updated;
+          });
+        }
+        if (ledgerMigrated) {
+          FinanceStorageService.saveLocalSavingsLedger(parsed);
+        }
+        return parsed;
       } catch (e) {
         console.error('Failed to parse cached savings ledger', e);
       }
@@ -571,12 +727,13 @@ export class FinanceStorageService {
     isDelete: boolean = false
   ): SavingsLedgerData {
     const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    const effectiveAmount = entry.actualCost ?? entry.amount ?? 0;
 
     const existingIndex = ledger.transactions.findIndex(
       (tx) => tx.budgetEntryId === entry.id
     );
 
-    if (isDelete) {
+    if (isDelete || effectiveAmount <= 0) {
       if (existingIndex >= 0) {
         const removed = ledger.transactions.splice(existingIndex, 1)[0];
         // update account balance
@@ -588,7 +745,13 @@ export class FinanceStorageService {
     } else {
       const accountId = entry.savingAccountId || ledger.accounts[0]?.id || 'acc-hysa';
       const targetAccount = ledger.accounts.find((a) => a.id === accountId) || ledger.accounts[0];
-      const entryNote = entry.item || entry.description || entry.category || 'Savings';
+      const safeAccId = targetAccount ? targetAccount.id : accountId;
+      const safeAccName = targetAccount ? targetAccount.name : (entry.savingAccountName || 'Savings Account');
+      const canonicalFund = resolveCanonicalSinkingFundName(
+        entry.item || entry.description,
+        entry.category
+      );
+      const entryNote = canonicalFund || entry.category || 'General Savings';
 
       if (existingIndex >= 0) {
         // Update existing transaction
@@ -596,24 +759,24 @@ export class FinanceStorageService {
         const prevAccountId = prev.accountId;
         const prevAmount = prev.amount;
 
-        prev.amount = entry.amount;
+        prev.amount = effectiveAmount;
         prev.date = entry.date;
         prev.period = entry.period;
         prev.note = entryNote;
-        prev.category = entry.category;
-        prev.accountId = targetAccount.id;
-        prev.accountName = targetAccount.name;
+        prev.category = canonicalFund;
+        prev.accountId = safeAccId;
+        prev.accountName = safeAccName;
 
-        if (prevAccountId !== targetAccount.id) {
+        if (prevAccountId !== safeAccId) {
           const oldAcc = ledger.accounts.find((a) => a.id === prevAccountId);
           if (oldAcc) {
             oldAcc.balance = Math.max(0, oldAcc.balance - prevAmount);
           }
           if (targetAccount) {
-            targetAccount.balance = Math.max(0, targetAccount.balance + entry.amount);
+            targetAccount.balance = Math.max(0, targetAccount.balance + effectiveAmount);
           }
         } else if (targetAccount) {
-          const diff = entry.amount - prevAmount;
+          const diff = effectiveAmount - prevAmount;
           targetAccount.balance = Math.max(0, targetAccount.balance + diff);
         }
       } else {
@@ -623,16 +786,18 @@ export class FinanceStorageService {
           date: entry.date,
           year: entry.year,
           period: entry.period,
-          amount: entry.amount,
-          accountId: targetAccount.id,
-          accountName: targetAccount.name,
+          amount: effectiveAmount,
+          accountId: safeAccId,
+          accountName: safeAccName,
           source: 'budget_sync',
           budgetEntryId: entry.id,
-          category: entry.category,
+          category: canonicalFund,
           note: entryNote,
         };
         ledger.transactions.push(newTx);
-        targetAccount.balance += entry.amount;
+        if (targetAccount) {
+          targetAccount.balance += effectiveAmount;
+        }
       }
     }
 

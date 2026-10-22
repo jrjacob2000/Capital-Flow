@@ -20,6 +20,11 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { YearBudgetData, SavingsLedgerData, EntryFrequency, EntryType } from '../types/finance';
+import {
+  resolveCanonicalSinkingFundName,
+  normalizeSavingCategoryGroup,
+  DEFAULT_SINKING_FUND_NAMES,
+} from '../services/sampleData';
 import { CashflowChart } from './charts/CashflowChart';
 import { CapitalGrowthChart } from './charts/CapitalGrowthChart';
 import { CategoryDonutChart } from './charts/CategoryDonutChart';
@@ -145,15 +150,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       }
     >();
 
-    const getOrCreateFund = (name: string, category: string = 'Savings', customColor?: string) => {
-      const trimmed = name.trim();
+    const knownCanonicalPool = Array.from(
+      new Set([
+        ...DEFAULT_SINKING_FUND_NAMES,
+        ...(budget?.itemTemplates || [])
+          .filter((t) => t.type === 'saving')
+          .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, DEFAULT_SINKING_FUND_NAMES)),
+      ])
+    );
+
+    const getOrCreateFund = (name: string, category: string = 'Short-Term & General Savings', customColor?: string) => {
+      const canonical = resolveCanonicalSinkingFundName(name, category, knownCanonicalPool);
+      const trimmed = canonical.trim();
       const key = trimmed.toLowerCase();
+      if (!knownCanonicalPool.some((p) => p.toLowerCase() === key)) {
+        knownCanonicalPool.push(trimmed);
+      }
+      const resolvedCat = normalizeSavingCategoryGroup(trimmed, category);
       if (!fundMap.has(key)) {
         const assignedColor = customColor || FUND_COLORS[fundMap.size % FUND_COLORS.length];
         fundMap.set(key, {
           id: `fund-${fundMap.size + 1}`,
           name: trimmed,
-          category,
+          category: resolvedCat,
           color: assignedColor,
           inflow: 0,
           outflow: 0,
@@ -166,8 +185,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       budget.itemTemplates
         .filter((t) => t.type === 'saving')
         .forEach((tpl, idx) => {
-          const fund = getOrCreateFund(tpl.item, tpl.category || 'Savings', FUND_COLORS[idx % FUND_COLORS.length]);
-          fund.plannedAnnualTarget = (tpl.defaultEstimatedCost || 0) * 12;
+          const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
+          fund.plannedAnnualTarget = Math.max(fund.plannedAnnualTarget || 0, (tpl.defaultEstimatedCost || 0) * 12);
         });
     }
 
@@ -175,8 +194,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       budget.entries
         .filter((e) => e.type === 'saving')
         .forEach((entry) => {
-          const fundName = entry.item || entry.description || entry.category || 'Savings Fund';
-          getOrCreateFund(fundName, entry.category || 'Savings');
+          const fundName = resolveCanonicalSinkingFundName(
+            entry.item || entry.description,
+            entry.category,
+            knownCanonicalPool
+          );
+          getOrCreateFund(fundName, entry.category || 'General Savings');
         });
     }
 
@@ -195,18 +218,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         const isToUnallocated = toFundName.trim().toLowerCase() === 'general reserves / starting capital';
 
         if (!isFromUnallocated) {
-          const fromFund = getOrCreateFund(fromFundName, 'Savings / Envelope');
+          const fromFund = getOrCreateFund(fromFundName, fromFundName);
           fromFund.outflow += amt;
         }
         if (!isToUnallocated) {
-          const toFund = getOrCreateFund(toFundName, 'Savings / Envelope');
+          const toFund = getOrCreateFund(toFundName, toFundName);
           toFund.inflow += amt;
         }
         return;
       }
 
       let fundName = '';
-      let category = tx.category || 'Savings';
+      let category = tx.category || 'General Savings';
 
       if (tx.category && tx.category.trim().toLowerCase() === 'general reserves / starting capital') {
         return;
@@ -216,22 +239,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         fundName = tx.category && tx.category.trim() ? tx.category.trim() : 'Compounding Yields & Dividend';
         category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
-        fundName = tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim() || 'General Withdrawal';
+        fundName = resolveCanonicalSinkingFundName(
+          tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
+          tx.category,
+          knownCanonicalPool
+        ) || 'General Withdrawal';
         category = tx.category || 'Withdrawal';
       } else {
         const linkedEntry = tx.budgetEntryId
           ? budget?.entries?.find((e) => e.id === tx.budgetEntryId)
           : undefined;
         if (linkedEntry) {
-          fundName = linkedEntry.item || linkedEntry.description || linkedEntry.category || 'General Savings';
+          fundName = resolveCanonicalSinkingFundName(
+            linkedEntry.item || linkedEntry.description,
+            linkedEntry.category,
+            knownCanonicalPool
+          );
           category = linkedEntry.category || category;
         } else if (tx.source === 'manual_deposit' && !tx.category) {
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
             .trim();
-          if (cleanNote && fundMap.has(cleanNote.toLowerCase())) {
-            fundName = cleanNote;
+          const canonicalNote = resolveCanonicalSinkingFundName(cleanNote, undefined, knownCanonicalPool);
+          if (cleanNote && fundMap.has(canonicalNote.toLowerCase())) {
+            fundName = canonicalNote;
           } else {
             return;
           }
@@ -240,7 +272,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
             .trim();
-          fundName = tx.category || cleanNote || 'General Savings';
+          fundName = resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
         }
       }
 

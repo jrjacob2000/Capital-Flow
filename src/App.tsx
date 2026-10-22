@@ -19,6 +19,7 @@ import {
   APP_VERSION,
 } from './types/finance';
 import { FinanceStorageService } from './services/storageService';
+import { normalizeSavingCategoryGroup } from './services/sampleData';
 import {
   initAuth,
   googleSignIn,
@@ -181,21 +182,27 @@ export default function App() {
         }));
         // Fetch existing Drive folder & files
         try {
+          setDriveStatus((prev) => ({
+            ...prev,
+            isSyncing: true,
+            syncMessage: `Checking /${CAPITALFLOW_DRIVE_FOLDER_NAME}/ folder in Google Drive...`,
+          }));
           const [folder, files] = await Promise.all([
             FinanceStorageService.getOrCreateDriveFolder(token, false),
             FinanceStorageService.fetchDriveFiles(token),
           ]);
           setDriveFiles(files);
-          if (folder) {
-            setDriveStatus((prev) => ({
-              ...prev,
-              folderId: folder.id,
-              folderName: folder.name,
-            }));
-          }
+          setDriveStatus((prev) => ({
+            ...prev,
+            isSyncing: false,
+            syncMessage: null,
+            folderId: folder ? folder.id : prev.folderId,
+            folderName: folder ? folder.name : prev.folderName,
+          }));
           const years = FinanceStorageService.getKnownYears();
           setAvailableYears(years);
         } catch (e: any) {
+          setDriveStatus((prev) => ({ ...prev, isSyncing: false, syncMessage: null }));
           if (isSessionExpiredError(e)) {
             handleSessionExpired();
           } else {
@@ -259,10 +266,15 @@ export default function App() {
   // Google Sign-In handler with local overwrite protection & conflict check
   const handleSignInWithGoogle = async () => {
     try {
-      setDriveStatus((prev) => ({ ...prev, isSyncing: true, error: null }));
+      setDriveStatus((prev) => ({
+        ...prev,
+        isSyncing: true,
+        syncMessage: 'Authenticating with Google Drive...',
+        error: null,
+      }));
       const result = await googleSignIn();
       if (!result) {
-        setDriveStatus((prev) => ({ ...prev, isSyncing: false }));
+        setDriveStatus((prev) => ({ ...prev, isSyncing: false, syncMessage: null }));
         return;
       }
 
@@ -275,7 +287,8 @@ export default function App() {
         userEmail: result.user.email,
         userName: result.user.displayName || result.user.email?.split('@')[0] || 'User',
         userPhoto: result.user.photoURL,
-        isSyncing: false,
+        isSyncing: true,
+        syncMessage: `Scanning /${CAPITALFLOW_DRIVE_FOLDER_NAME}/ folder in Google Drive...`,
         error: null,
       }));
 
@@ -286,6 +299,7 @@ export default function App() {
         ...prev,
         folderId: folder.id,
         folderName: folder.name,
+        syncMessage: 'Comparing local data with Google Drive files...',
       }));
 
       const conflictItems: DriveConflictDetail[] = [];
@@ -349,9 +363,20 @@ export default function App() {
               },
               onPushToDrive: async () => {
                 try {
+                  setDriveStatus((p) => ({
+                    ...p,
+                    isSyncing: true,
+                    syncMessage: `Uploading ${currentYear} Annual Budget to Google Drive...`,
+                  }));
                   await FinanceStorageService.syncBudgetToDrive(result.accessToken, currentLocalBudget, existingBudgetFile?.id);
                   const updatedFiles = await FinanceStorageService.fetchDriveFiles(result.accessToken);
                   setDriveFiles(updatedFiles);
+                  setDriveStatus((p) => ({
+                    ...p,
+                    isSyncing: false,
+                    syncMessage: null,
+                    lastSyncedAt: new Date().toLocaleTimeString(),
+                  }));
                   showToast(`Uploaded local ${currentYear} budget to Google Drive!`, 'success');
                   setConflictModalState((prev) => ({
                     ...prev,
@@ -359,6 +384,7 @@ export default function App() {
                     isOpen: prev.items.filter((i) => i.id !== 'budget').length > 0,
                   }));
                 } catch (err: any) {
+                  setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                   showToast(`Upload failed: ${err.message}`, 'error');
                 }
               },
@@ -435,6 +461,11 @@ export default function App() {
               },
               onPushToDrive: async () => {
                 try {
+                  setDriveStatus((p) => ({
+                    ...p,
+                    isSyncing: true,
+                    syncMessage: 'Uploading Estimate Budget Template to Google Drive...',
+                  }));
                   await FinanceStorageService.syncTemplateToDrive(
                     result.accessToken,
                     currentLocalTemplate,
@@ -442,6 +473,12 @@ export default function App() {
                   );
                   const updatedFiles = await FinanceStorageService.fetchDriveFiles(result.accessToken);
                   setDriveFiles(updatedFiles);
+                  setDriveStatus((p) => ({
+                    ...p,
+                    isSyncing: false,
+                    syncMessage: null,
+                    lastSyncedAt: new Date().toLocaleTimeString(),
+                  }));
                   showToast('Uploaded local Estimate Budget Template to Google Drive!', 'success');
                   setConflictModalState((prev) => ({
                     ...prev,
@@ -449,6 +486,7 @@ export default function App() {
                     isOpen: prev.items.filter((i) => i.id !== 'template').length > 0,
                   }));
                 } catch (err: any) {
+                  setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                   showToast(`Upload failed: ${err.message}`, 'error');
                 }
               },
@@ -510,9 +548,20 @@ export default function App() {
               },
               onPushToDrive: async () => {
                 try {
+                  setDriveStatus((p) => ({
+                    ...p,
+                    isSyncing: true,
+                    syncMessage: 'Uploading Funds & Capital Ledger to Google Drive...',
+                  }));
                   await FinanceStorageService.syncLedgerToDrive(result.accessToken, currentLocalLedger, existingLedgerFile?.id);
                   const updatedFiles = await FinanceStorageService.fetchDriveFiles(result.accessToken);
                   setDriveFiles(updatedFiles);
+                  setDriveStatus((p) => ({
+                    ...p,
+                    isSyncing: false,
+                    syncMessage: null,
+                    lastSyncedAt: new Date().toLocaleTimeString(),
+                  }));
                   showToast('Uploaded local funds ledger to Google Drive!', 'success');
                   setConflictModalState((prev) => ({
                     ...prev,
@@ -520,6 +569,7 @@ export default function App() {
                     isOpen: prev.items.filter((i) => i.id !== 'ledger').length > 0,
                   }));
                 } catch (err: any) {
+                  setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                   showToast(`Upload failed: ${err.message}`, 'error');
                 }
               },
@@ -527,6 +577,8 @@ export default function App() {
           }
         }
       }
+
+      setDriveStatus((prev) => ({ ...prev, isSyncing: false, syncMessage: null }));
 
       // Check results: DO NOT overwrite local changes silently!
       if (conflictItems.length > 0) {
@@ -550,13 +602,14 @@ export default function App() {
         err?.code === 'auth/popup-closed-by-user' ||
         err?.code === 'auth/cancelled-popup-request'
       ) {
-        setDriveStatus((prev) => ({ ...prev, isSyncing: false }));
+        setDriveStatus((prev) => ({ ...prev, isSyncing: false, syncMessage: null }));
         return;
       }
       console.warn('Sign in note:', err);
       setDriveStatus((prev) => ({
         ...prev,
         isSyncing: false,
+        syncMessage: null,
         error: err.message || 'Google sign-in was aborted',
       }));
       showToast(err.message || 'Failed to authenticate with Google', 'error');
@@ -575,18 +628,38 @@ export default function App() {
       return;
     }
     try {
-      setDriveStatus((p) => ({ ...p, isSyncing: true }));
+      setDriveStatus((p) => ({
+        ...p,
+        isSyncing: true,
+        syncMessage: `Uploading ${currentYear} Annual Budget (1/3) to Google Drive...`,
+      }));
       const currentLocalBudget = FinanceStorageService.loadLocalBudget(currentYear);
       const currentLocalLedger = FinanceStorageService.loadLocalSavingsLedger();
       const currentLocalTemplate = FinanceStorageService.loadLocalTemplateData(currentLocalBudget);
       const budgetRes = await FinanceStorageService.syncBudgetToDrive(token, currentLocalBudget);
+
+      setDriveStatus((p) => ({
+        ...p,
+        syncMessage: 'Uploading Estimate Budget Template (2/3) to Google Drive...',
+      }));
       const templateRes = await FinanceStorageService.syncTemplateToDrive(token, currentLocalTemplate);
+
+      setDriveStatus((p) => ({
+        ...p,
+        syncMessage: 'Uploading Funds & Capital Ledger (3/3) to Google Drive...',
+      }));
       const ledgerRes = await FinanceStorageService.syncLedgerToDrive(token, currentLocalLedger);
+
+      setDriveStatus((p) => ({
+        ...p,
+        syncMessage: 'Refreshing Google Drive folder index...',
+      }));
       const files = await FinanceStorageService.fetchDriveFiles(token);
       setDriveFiles(files);
       setDriveStatus((p) => ({
         ...p,
         isSyncing: false,
+        syncMessage: null,
         lastSyncedAt: new Date().toLocaleTimeString(),
         budgetFileId: budgetRes.fileId,
         templateFileId: templateRes.fileId,
@@ -601,7 +674,7 @@ export default function App() {
         handleSessionExpired('Google Drive session expired while uploading. Please sign in again.');
         return;
       }
-      setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+      setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
       showToast(`Upload failed: ${err.message}`, 'error');
     }
   };
@@ -628,12 +701,19 @@ export default function App() {
     setCurrentYear(year);
     const loadedBudget = FinanceStorageService.loadLocalBudget(year);
     setBudget(loadedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(loadedBudget));
 
     // If signed into Google Drive, verify version safely
     const token = await getAccessToken();
     if (token) {
       try {
+        setDriveStatus((p) => ({
+          ...p,
+          isSyncing: true,
+          syncMessage: `Checking Google Drive for ${year} budget...`,
+        }));
         const driveRes = await FinanceStorageService.fetchBudgetFromDrive(token, year);
+        setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
         if (driveRes) {
           const timestampStatus = FinanceStorageService.compareTimestamps(
             loadedBudget.lastUpdated,
@@ -663,6 +743,7 @@ export default function App() {
               onConfirm: async () => {
                 FinanceStorageService.saveLocalBudget(driveRes.budget);
                 setBudget(driveRes.budget);
+                setTemplateData(FinanceStorageService.loadLocalTemplateData(driveRes.budget));
                 showToast(`Loaded ${year} budget from Google Drive`, 'success');
                 setConfirmationModal((m) => ({ ...m, isOpen: false }));
               },
@@ -679,6 +760,7 @@ export default function App() {
               onConfirm: async () => {
                 FinanceStorageService.saveLocalBudget(driveRes.budget);
                 setBudget(driveRes.budget);
+                setTemplateData(FinanceStorageService.loadLocalTemplateData(driveRes.budget));
                 showToast(`Loaded ${year} budget from Google Drive`, 'success');
                 setConfirmationModal((m) => ({ ...m, isOpen: false }));
               },
@@ -686,6 +768,7 @@ export default function App() {
           }
         }
       } catch (err) {
+        setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
         console.warn('Could not check year from Drive:', err);
       }
     }
@@ -751,8 +834,8 @@ export default function App() {
     FinanceStorageService.saveLocalBudget(updatedBudget);
     setHasUnsavedChanges(true);
 
-    // If saving entry: accumulate in the separate Savings Ledger!
-    if (newEntry.type === 'saving') {
+    // If saving entry with positive amount: accumulate in the separate Savings Ledger!
+    if (newEntry.type === 'saving' && newEntry.amount > 0) {
       const updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(newEntry, false);
       setLedger(updatedLedger);
       showToast(`Savings accumulated: +₱${newEntry.amount} transferred to ${newEntry.savingAccountName || 'Savings Ledger'}`);
@@ -1227,6 +1310,231 @@ export default function App() {
     );
   };
 
+  // Rename, merge, or update planned monthly target & saving category for a Sinking Fund
+  const handleRenameOrMergeFund = (
+    oldFundName: string,
+    newFundName: string,
+    newMonthlyTarget?: number,
+    newSavingCategory?: string
+  ) => {
+    const oldClean = oldFundName.trim();
+    const newClean = newFundName.trim();
+    if (!oldClean || !newClean) return;
+    const oldLower = oldClean.toLowerCase();
+    const newLower = newClean.toLowerCase();
+    const resolvedCategory = normalizeSavingCategoryGroup(newClean, newSavingCategory);
+
+    // 1. Update Ledger Transactions
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    let ledgerChanged = false;
+    currentLedger.transactions = currentLedger.transactions
+      .map((tx) => {
+        const updated = { ...tx };
+        if ((tx.category || '').trim().toLowerCase() === oldLower) {
+          updated.category = newClean;
+          ledgerChanged = true;
+        }
+        if ((tx.toCategory || '').trim().toLowerCase() === oldLower) {
+          updated.toCategory = newClean;
+          ledgerChanged = true;
+        }
+        const cleanNote = tx.note
+          .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+          .trim();
+        if (cleanNote.toLowerCase() === oldLower) {
+          updated.note = tx.note.replace(new RegExp(oldClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), newClean);
+          ledgerChanged = true;
+        }
+        return updated;
+      })
+      .filter((tx) => {
+        if (
+          tx.source === 'reallocation' &&
+          (tx.category || '').trim().toLowerCase() === (tx.toCategory || '').trim().toLowerCase()
+        ) {
+          ledgerChanged = true;
+          return false;
+        }
+        return true;
+      });
+
+    if (ledgerChanged) {
+      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+      setLedger({ ...currentLedger });
+    }
+
+    // 2. Update Budget Saving Entries & Saving Item Templates
+    const currentTemplates = [...(budget.itemTemplates || [])];
+    let matchedSavingTemplate = false;
+    const deduplicatedTemplates: BudgetItemTemplate[] = [];
+
+    currentTemplates.forEach((tpl) => {
+      if (
+        tpl.type === 'saving' &&
+        (tpl.item.trim().toLowerCase() === oldLower || tpl.item.trim().toLowerCase() === newLower)
+      ) {
+        if (!matchedSavingTemplate) {
+          matchedSavingTemplate = true;
+          deduplicatedTemplates.push({
+            ...tpl,
+            item: newClean,
+            category: newSavingCategory
+              ? resolvedCategory
+              : normalizeSavingCategoryGroup(newClean, tpl.category),
+            defaultEstimatedCost:
+              newMonthlyTarget !== undefined ? newMonthlyTarget : tpl.defaultEstimatedCost,
+          });
+        } else if (newMonthlyTarget === undefined && tpl.defaultEstimatedCost > 0) {
+          const existingIdx = deduplicatedTemplates.findIndex(
+            (d) => d.type === 'saving' && d.item.trim().toLowerCase() === newLower
+          );
+          if (existingIdx >= 0 && deduplicatedTemplates[existingIdx].defaultEstimatedCost === 0) {
+            deduplicatedTemplates[existingIdx].defaultEstimatedCost = tpl.defaultEstimatedCost;
+          }
+        }
+      } else {
+        deduplicatedTemplates.push(tpl);
+      }
+    });
+
+    if (!matchedSavingTemplate && ((newMonthlyTarget !== undefined && newMonthlyTarget > 0) || newSavingCategory)) {
+      deduplicatedTemplates.push({
+        id: `tpl-sav-${Date.now()}`,
+        type: 'saving',
+        category: resolvedCategory,
+        item: newClean,
+        defaultEstimatedCost: newMonthlyTarget || 0,
+        frequency: 'monthly',
+        biweeklyPeriod: 'both',
+        defaultPaymentMethod: 'Bank Transfer',
+      });
+    }
+
+    const updatedEntries = budget.entries.map((e) => {
+      if (
+        e.type === 'saving' &&
+        ((e.item || '').trim().toLowerCase() === oldLower ||
+          (e.description || '').trim().toLowerCase() === oldLower)
+      ) {
+        return {
+          ...e,
+          item: newClean,
+          description: newClean,
+          category: newSavingCategory ? resolvedCategory : e.category,
+        };
+      }
+      return e;
+    });
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: updatedEntries,
+      itemTemplates: deduplicatedTemplates,
+      isPersonalizedTemplate: deduplicatedTemplates.length > 0,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    setBudget(updatedBudget);
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
+    setHasUnsavedChanges(true);
+    showToast(
+      oldLower !== newLower
+        ? `Merged / renamed fund "${oldClean}" into "${newClean}"`
+        : `Updated sinking fund "${newClean}"`
+    );
+  };
+
+  // Delete a Sinking Fund and optionally reassign its balance to another fund or General Reserves
+  const handleDeleteFund = (fundName: string, reassignToFund?: string) => {
+    const targetLower = fundName.trim().toLowerCase();
+    if (!targetLower) return;
+
+    const destination = (reassignToFund || 'General Reserves / Starting Capital').trim();
+    const isDestUnallocated = destination.toLowerCase() === 'general reserves / starting capital';
+
+    // 1. Update Ledger Transactions
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    let ledgerChanged = false;
+
+    currentLedger.transactions = currentLedger.transactions
+      .map((tx) => {
+        const catLower = (tx.category || '').trim().toLowerCase();
+        const toCatLower = (tx.toCategory || '').trim().toLowerCase();
+        if (catLower === targetLower || toCatLower === targetLower) {
+          ledgerChanged = true;
+          const updated = { ...tx };
+          if (catLower === targetLower) {
+            updated.category = destination;
+          }
+          if (toCatLower === targetLower) {
+            updated.toCategory = destination;
+          }
+          return updated;
+        }
+        return tx;
+      })
+      .filter((tx) => {
+        if (
+          tx.source === 'reallocation' &&
+          (tx.category || '').trim().toLowerCase() === (tx.toCategory || '').trim().toLowerCase()
+        ) {
+          ledgerChanged = true;
+          return false;
+        }
+        return true;
+      });
+
+    if (ledgerChanged) {
+      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+      setLedger({ ...currentLedger });
+    }
+
+    // 2. Remove from Budget Saving Templates
+    const filteredTemplates = (budget.itemTemplates || []).filter(
+      (tpl) => !(tpl.type === 'saving' && tpl.item.trim().toLowerCase() === targetLower)
+    );
+
+    const updatedEntries = budget.entries.map((e) => {
+      if (
+        !isDestUnallocated &&
+        e.type === 'saving' &&
+        (e.item || '').trim().toLowerCase() === targetLower
+      ) {
+        return { ...e, item: destination, description: destination };
+      }
+      return e;
+    });
+
+    const updatedSavingCats = (budget.customCategories?.saving || []).filter(
+      (c) => c.trim().toLowerCase() !== targetLower
+    );
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: updatedEntries,
+      itemTemplates: filteredTemplates,
+      customCategories: budget.customCategories
+        ? {
+            ...budget.customCategories,
+            saving: updatedSavingCats,
+          }
+        : undefined,
+      isPersonalizedTemplate: filteredTemplates.length > 0,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    setBudget(updatedBudget);
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
+    setHasUnsavedChanges(true);
+    showToast(
+      isDestUnallocated
+        ? `Removed fund "${fundName}" (balance returned to Unallocated Cash)`
+        : `Removed fund "${fundName}" (merged into "${destination}")`
+    );
+  };
+
   // Add multiple entries (e.g. pre-populate period from estimated budgets or Excel import)
   const handleAddMultipleBudgetEntries = (
     entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[],
@@ -1237,6 +1545,11 @@ export default function App() {
       id: `entry-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
       createdAt: new Date().toISOString(),
     }));
+
+    // If replacing an existing period, roll back any previous saving entries from that period in the ledger first
+    const removedPeriodSavings = options?.replacePeriod
+      ? budget.entries.filter((e) => e.period === options.replacePeriod && e.type === 'saving')
+      : [];
 
     const baseEntries = options?.replacePeriod
       ? budget.entries.filter((e) => e.period !== options.replacePeriod)
@@ -1264,10 +1577,13 @@ export default function App() {
     setBudget(updatedBudget);
     FinanceStorageService.saveLocalBudget(updatedBudget);
 
-    // Sync any saving entries to ledger
+    // Sync any saving entries to ledger (rolling back replaced period savings first)
     let updatedLedger = ledger;
+    removedPeriodSavings.forEach((oldSaving) => {
+      updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldSaving, true);
+    });
     newEntries.forEach((entry) => {
-      if (entry.type === 'saving') {
+      if (entry.type === 'saving' && (entry.actualCost ?? entry.amount ?? 0) > 0) {
         updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, false);
       }
     });
@@ -1326,13 +1642,22 @@ export default function App() {
       confirmLabel: 'Save to Google Drive',
       onConfirm: async () => {
         try {
-          setDriveStatus((p) => ({ ...p, isSyncing: true }));
+          setDriveStatus((p) => ({
+            ...p,
+            isSyncing: true,
+            syncMessage: `Uploading ${fileName} to Google Drive...`,
+          }));
           const res = await FinanceStorageService.syncBudgetToDrive(token, budget);
+          setDriveStatus((p) => ({
+            ...p,
+            syncMessage: 'Refreshing Google Drive file list...',
+          }));
           const files = await FinanceStorageService.fetchDriveFiles(token);
           setDriveFiles(files);
           setDriveStatus((p) => ({
             ...p,
             isSyncing: false,
+            syncMessage: null,
             lastSyncedAt: new Date().toLocaleTimeString(),
             budgetFileId: res.fileId,
             folderId: res.folderId || p.folderId,
@@ -1343,7 +1668,7 @@ export default function App() {
             handleSessionExpired('Google Drive session expired while saving budget. Please sign in again.');
             return;
           }
-          setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+          setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
           showToast(`Error saving to Drive: ${err.message}`, 'error');
         } finally {
           setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -1367,14 +1692,23 @@ export default function App() {
       confirmLabel: 'Save Template to Google Drive',
       onConfirm: async () => {
         try {
-          setDriveStatus((p) => ({ ...p, isSyncing: true }));
+          setDriveStatus((p) => ({
+            ...p,
+            isSyncing: true,
+            syncMessage: `Uploading ${BUDGET_TEMPLATE_FILE_NAME} to Google Drive...`,
+          }));
           const latestTemplate = FinanceStorageService.loadLocalTemplateData(budget);
           const res = await FinanceStorageService.syncTemplateToDrive(token, latestTemplate);
+          setDriveStatus((p) => ({
+            ...p,
+            syncMessage: 'Refreshing Google Drive file list...',
+          }));
           const files = await FinanceStorageService.fetchDriveFiles(token);
           setDriveFiles(files);
           setDriveStatus((p) => ({
             ...p,
             isSyncing: false,
+            syncMessage: null,
             lastSyncedAt: new Date().toLocaleTimeString(),
             templateFileId: res.fileId,
             folderId: res.folderId || p.folderId,
@@ -1385,7 +1719,7 @@ export default function App() {
             handleSessionExpired('Google Drive session expired while saving template. Please sign in again.');
             return;
           }
-          setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+          setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
           showToast(`Error saving template: ${err.message}`, 'error');
         } finally {
           setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -1409,13 +1743,22 @@ export default function App() {
       confirmLabel: 'Save Ledger to Google Drive',
       onConfirm: async () => {
         try {
-          setDriveStatus((p) => ({ ...p, isSyncing: true }));
+          setDriveStatus((p) => ({
+            ...p,
+            isSyncing: true,
+            syncMessage: `Uploading ${SAVINGS_LEDGER_FILE_NAME} to Google Drive...`,
+          }));
           const res = await FinanceStorageService.syncLedgerToDrive(token, ledger);
+          setDriveStatus((p) => ({
+            ...p,
+            syncMessage: 'Refreshing Google Drive file list...',
+          }));
           const files = await FinanceStorageService.fetchDriveFiles(token);
           setDriveFiles(files);
           setDriveStatus((p) => ({
             ...p,
             isSyncing: false,
+            syncMessage: null,
             lastSyncedAt: new Date().toLocaleTimeString(),
             savingsFileId: res.fileId,
             folderId: res.folderId || p.folderId,
@@ -1426,7 +1769,7 @@ export default function App() {
             handleSessionExpired('Google Drive session expired while saving ledger. Please sign in again.');
             return;
           }
-          setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+          setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
           showToast(`Error saving ledger: ${err.message}`, 'error');
         } finally {
           setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -1455,16 +1798,36 @@ export default function App() {
       confirmLabel: 'Sync All Files Now',
       onConfirm: async () => {
         try {
-          setDriveStatus((p) => ({ ...p, isSyncing: true }));
+          setDriveStatus((p) => ({
+            ...p,
+            isSyncing: true,
+            syncMessage: `Syncing ${budget.year} Annual Budget (1/3) to Google Drive...`,
+          }));
           const latestTemplate = FinanceStorageService.loadLocalTemplateData(budget);
           const budgetRes = await FinanceStorageService.syncBudgetToDrive(token, budget);
+
+          setDriveStatus((p) => ({
+            ...p,
+            syncMessage: 'Syncing Estimate Budget Template (2/3) to Google Drive...',
+          }));
           const templateRes = await FinanceStorageService.syncTemplateToDrive(token, latestTemplate);
+
+          setDriveStatus((p) => ({
+            ...p,
+            syncMessage: 'Syncing Funds & Capital Ledger (3/3) to Google Drive...',
+          }));
           const ledgerRes = await FinanceStorageService.syncLedgerToDrive(token, ledger);
+
+          setDriveStatus((p) => ({
+            ...p,
+            syncMessage: 'Verifying files in Google Drive folder...',
+          }));
           const files = await FinanceStorageService.fetchDriveFiles(token);
           setDriveFiles(files);
           setDriveStatus((p) => ({
             ...p,
             isSyncing: false,
+            syncMessage: null,
             lastSyncedAt: new Date().toLocaleTimeString(),
             budgetFileId: budgetRes.fileId,
             templateFileId: templateRes.fileId,
@@ -1478,7 +1841,7 @@ export default function App() {
             handleSessionExpired('Google Drive session expired while syncing. Please sign in again.');
             return;
           }
-          setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+          setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
           showToast(`Sync failed: ${err.message}`, 'error');
         } finally {
           setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -1495,16 +1858,36 @@ export default function App() {
       return;
     }
     try {
-      setDriveStatus((p) => ({ ...p, isSyncing: true }));
+      setDriveStatus((p) => ({
+        ...p,
+        isSyncing: true,
+        syncMessage: `Syncing ${budget.year} Annual Budget (1/3) to Google Drive...`,
+      }));
       const latestTemplate = FinanceStorageService.loadLocalTemplateData(budget);
       const budgetRes = await FinanceStorageService.syncBudgetToDrive(token, budget);
+
+      setDriveStatus((p) => ({
+        ...p,
+        syncMessage: 'Syncing Estimate Budget Template (2/3) to Google Drive...',
+      }));
       const templateRes = await FinanceStorageService.syncTemplateToDrive(token, latestTemplate);
+
+      setDriveStatus((p) => ({
+        ...p,
+        syncMessage: 'Syncing Funds & Capital Ledger (3/3) to Google Drive...',
+      }));
       const ledgerRes = await FinanceStorageService.syncLedgerToDrive(token, ledger);
+
+      setDriveStatus((p) => ({
+        ...p,
+        syncMessage: 'Verifying files in Google Drive folder...',
+      }));
       const files = await FinanceStorageService.fetchDriveFiles(token);
       setDriveFiles(files);
       setDriveStatus((p) => ({
         ...p,
         isSyncing: false,
+        syncMessage: null,
         lastSyncedAt: new Date().toLocaleTimeString(),
         budgetFileId: budgetRes.fileId,
         templateFileId: templateRes.fileId,
@@ -1518,7 +1901,7 @@ export default function App() {
         handleSessionExpired('Google Drive session expired while syncing. Please sign in again.');
         return;
       }
-      setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+      setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
       showToast(`Sync failed: ${err.message}`, 'error');
     }
   };
@@ -1541,12 +1924,17 @@ export default function App() {
       confirmLabel: 'Organize Folder Now',
       onConfirm: async () => {
         try {
-          setDriveStatus((p) => ({ ...p, isSyncing: true }));
+          setDriveStatus((p) => ({
+            ...p,
+            isSyncing: true,
+            syncMessage: `Organizing files inside /${CAPITALFLOW_DRIVE_FOLDER_NAME}/...`,
+          }));
           const { folder, movedCount, files } = await FinanceStorageService.organizeFilesIntoFolder(token);
           setDriveFiles(files);
           setDriveStatus((p) => ({
             ...p,
             isSyncing: false,
+            syncMessage: null,
             folderId: folder.id,
             folderName: folder.name,
           }));
@@ -1560,7 +1948,7 @@ export default function App() {
             handleSessionExpired('Google Drive session expired while organizing folder. Please sign in again.');
             return;
           }
-          setDriveStatus((p) => ({ ...p, isSyncing: false, error: err.message }));
+          setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null, error: err.message }));
           showToast(`Folder organization failed: ${err.message}`, 'error');
         } finally {
           setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -1572,19 +1960,29 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100/60 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans flex flex-col antialiased">
       
+      {/* Clean Single Drive Sync Toast (Shown only when no modal is open) */}
+      {driveStatus.isSyncing && !confirmationModal.isOpen && !conflictModalState.isOpen && (
+        <div className="fixed bottom-6 right-4 sm:right-6 z-[90] animate-in slide-in-from-bottom-5 duration-200 pointer-events-none">
+          <div className="px-4 py-3 rounded-2xl shadow-xl bg-slate-900 dark:bg-slate-800 border border-slate-700/80 flex items-center gap-2.5 text-xs font-semibold text-white">
+            <RefreshCw className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
+            <span>{driveStatus.syncMessage || 'Syncing with Google Drive...'}</span>
+          </div>
+        </div>
+      )}
+
       {/* Floating Notification Banner: Unsaved Local Changes not yet saved to Drive */}
-      {hasUnsavedChanges && !isSyncReminderDismissed && (
+      {hasUnsavedChanges && !isSyncReminderDismissed && !driveStatus.isSyncing && (
         <div className="fixed bottom-6 left-4 right-4 sm:left-6 sm:right-auto z-40 max-w-md animate-in slide-in-from-bottom-5 duration-300">
           <div className="bg-slate-900/95 dark:bg-slate-800/95 backdrop-blur-md text-white rounded-2xl p-3.5 sm:p-4 shadow-2xl border border-amber-500/40 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
-                <Cloud className="w-5 h-5 animate-pulse" />
+                <Cloud className="w-5 h-5" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <h4 className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
                     <span>Unsaved to Drive</span>
-                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                    <span className="w-2 h-2 rounded-full bg-amber-400" />
                   </h4>
                 </div>
                 <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
@@ -1603,8 +2001,8 @@ export default function App() {
                   disabled={driveStatus.isSyncing}
                   className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition-all cursor-pointer"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${driveStatus.isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{driveStatus.isSyncing ? 'Syncing...' : 'Save to Drive'}</span>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Save to Drive</span>
                 </button>
               ) : (
                 <button
@@ -1661,6 +2059,7 @@ export default function App() {
         confirmLabel={confirmationModal.confirmLabel}
         isDestructive={confirmationModal.isDestructive}
         isLoading={driveStatus.isSyncing}
+        loadingMessage={driveStatus.syncMessage}
         onConfirm={confirmationModal.onConfirm}
         onCancel={() => setConfirmationModal((m) => ({ ...m, isOpen: false }))}
       />
@@ -1675,6 +2074,7 @@ export default function App() {
         onPushAllLocalToDrive={handlePushAllLocalToDrive}
         onOverwriteAllWithDrive={handleOverwriteAllWithDrive}
         isLoading={driveStatus.isSyncing}
+        loadingMessage={driveStatus.syncMessage}
       />
 
       {/* Drive Session Expired Modal */}
@@ -1825,6 +2225,8 @@ export default function App() {
             onAddAccount={handleAddSavingsAccount}
             onUpdateAccount={handleUpdateSavingsAccount}
             onDeleteAccount={handleDeleteSavingsAccount}
+            onRenameOrMergeFund={handleRenameOrMergeFund}
+            onDeleteFund={handleDeleteFund}
             currencySymbol="₱"
           />
         )}
@@ -1843,7 +2245,13 @@ export default function App() {
               const token = await getAccessToken();
               if (!token) return;
               try {
+                setDriveStatus((p) => ({
+                  ...p,
+                  isSyncing: true,
+                  syncMessage: `Fetching ${yr} Annual Budget from Google Drive...`,
+                }));
                 const driveRes = await FinanceStorageService.fetchBudgetFromDrive(token, yr);
+                setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 if (!driveRes) {
                   showToast(`No file found in Drive for year ${yr}`, 'info');
                   return;
@@ -1873,6 +2281,7 @@ export default function App() {
                   },
                 });
               } catch (err: any) {
+                setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 showToast(`Failed to pull from Drive: ${err.message}`, 'error');
               }
             }}
@@ -1880,7 +2289,13 @@ export default function App() {
               const token = await getAccessToken();
               if (!token) return;
               try {
+                setDriveStatus((p) => ({
+                  ...p,
+                  isSyncing: true,
+                  syncMessage: 'Fetching Estimate Budget Template from Google Drive...',
+                }));
                 const driveRes = await FinanceStorageService.fetchTemplateFromDrive(token);
+                setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 if (!driveRes) {
                   showToast(`No template file (${BUDGET_TEMPLATE_FILE_NAME}) found in Drive yet`, 'info');
                   return;
@@ -1913,6 +2328,7 @@ export default function App() {
                   },
                 });
               } catch (err: any) {
+                setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 showToast(`Failed to pull template: ${err.message}`, 'error');
               }
             }}
@@ -1920,7 +2336,13 @@ export default function App() {
               const token = await getAccessToken();
               if (!token) return;
               try {
+                setDriveStatus((p) => ({
+                  ...p,
+                  isSyncing: true,
+                  syncMessage: 'Fetching Funds & Capital Ledger from Google Drive...',
+                }));
                 const driveRes = await FinanceStorageService.fetchLedgerFromDrive(token);
+                setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 if (!driveRes) {
                   showToast('No savings ledger file found in Drive', 'info');
                   return;
@@ -1949,6 +2371,7 @@ export default function App() {
                   },
                 });
               } catch (err: any) {
+                setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 showToast(`Failed to pull ledger: ${err.message}`, 'error');
               }
             }}
@@ -1958,14 +2381,15 @@ export default function App() {
             onAddNewYear={handleAddNewYear}
             onSelectYear={handleSelectYear}
             onImportBudgetJson={(jsonData) => {
-              FinanceStorageService.saveLocalBudget(jsonData);
-              FinanceStorageService.registerKnownYear(jsonData.year);
+              const { budget: normalizedBudget } = FinanceStorageService.normalizeBudgetTemplates(jsonData);
+              FinanceStorageService.saveLocalBudget(normalizedBudget);
+              FinanceStorageService.registerKnownYear(normalizedBudget.year);
               setAvailableYears(FinanceStorageService.getKnownYears());
-              setBudget(jsonData);
-              setTemplateData(FinanceStorageService.loadLocalTemplateData(jsonData));
-              setCurrentYear(jsonData.year);
+              setBudget(normalizedBudget);
+              setTemplateData(FinanceStorageService.loadLocalTemplateData(normalizedBudget));
+              setCurrentYear(normalizedBudget.year);
               setHasUnsavedChanges(true);
-              showToast(`Imported budget for year ${jsonData.year}`);
+              showToast(`Imported budget for year ${normalizedBudget.year}`);
             }}
             onImportTemplateJson={(tplJson) => {
               const updatedBudget = FinanceStorageService.applyTemplateDataToBudget(tplJson, budget);
@@ -1976,7 +2400,8 @@ export default function App() {
             }}
             onImportLedgerJson={(ledgerJson) => {
               FinanceStorageService.saveLocalSavingsLedger(ledgerJson);
-              setLedger(ledgerJson);
+              const normalizedLedger = FinanceStorageService.loadLocalSavingsLedger();
+              setLedger(normalizedLedger);
               setHasUnsavedChanges(true);
               showToast('Imported Funds Ledger JSON');
             }}

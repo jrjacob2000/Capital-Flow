@@ -38,6 +38,10 @@ import {
   SAVING_CATEGORIES,
   stripDefaultStarterTemplates,
   isTemplateValidForPeriod,
+  resolveCanonicalSinkingFundName,
+  findClosestSinkingFundMatch,
+  normalizeSavingCategoryGroup,
+  DEFAULT_SINKING_FUND_NAMES,
 } from '../services/sampleData';
 
 import { BudgetSpreadsheetView } from './BudgetSpreadsheetView';
@@ -203,6 +207,19 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
   const [formAmount, setFormAmount] = useState<string>('');
   const [formDescription, setFormDescription] = useState<string>('');
   const [formAccountId, setFormAccountId] = useState<string>(accounts[0]?.id || '');
+  const [isCreatingNewSinkingFund, setIsCreatingNewSinkingFund] = useState<boolean>(false);
+
+  const existingSinkingFunds = useMemo(() => {
+    const basePool = [...DEFAULT_SINKING_FUND_NAMES];
+    const fromTemplates = itemTemplates
+      .filter((t) => t.type === 'saving')
+      .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, basePool));
+    const combinedPool = Array.from(new Set([...fromTemplates, ...basePool]));
+    const fromEntries = budget.entries
+      .filter((e) => e.type === 'saving')
+      .map((e) => resolveCanonicalSinkingFundName(e.item || e.description, e.category, combinedPool));
+    return Array.from(new Set([...fromTemplates, ...basePool, ...fromEntries])).filter(Boolean);
+  }, [itemTemplates, budget.entries]);
 
   // Paycheck splitter state
   const [splitterPaycheck, setSplitterPaycheck] = useState<string>(() => {
@@ -274,6 +291,8 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
       setFormAmount(String(entryToEdit.amount));
       setFormItem(entryToEdit.item || '');
       setFormDescription(entryToEdit.description);
+      setFormAccountId(entryToEdit.savingAccountId || accounts[0]?.id || '');
+      setIsCreatingNewSinkingFund(false);
       setModalPeriod(entryToEdit.period);
       setFormDate(entryToEdit.date);
       setModalFrequency(frequency);
@@ -293,11 +312,13 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
       setFormDate(getRepresentativeDateForPeriod(targetPeriod, frequency, budget.year));
       
       setSelectedTemplateId('');
+      setIsCreatingNewSinkingFund(false);
       setFormType('expense');
       setFormCategory(expenseCategories[0] || 'Budget');
       setFormItem('');
       setFormAmount('');
       setFormDescription('');
+      setFormAccountId(accounts[0]?.id || '');
     }
     setIsAddModalOpen(true);
   };
@@ -328,23 +349,25 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
 
     const currentRemaining = income - expenses - savings;
 
-    // Simulation with current typed amount
+    // Simulation with current typed amount (subtracting old entry amount if editing)
     const inputVal = parseFloat(formAmount) || 0;
-    let simulatedRemaining = currentRemaining;
-    let simulatedIncome = income;
-    let simulatedExpenses = expenses;
-    let simulatedSavings = savings;
+    const origEntry = editingEntryId
+      ? entriesInPeriod.find((e) => e.id === editingEntryId)
+      : undefined;
+
+    let simulatedIncome = income - (origEntry?.type === 'income' ? origEntry.amount : 0);
+    let simulatedExpenses = expenses - (origEntry?.type === 'expense' ? origEntry.amount : 0);
+    let simulatedSavings = savings - (origEntry?.type === 'saving' ? origEntry.amount : 0);
 
     if (formType === 'income') {
       simulatedIncome += inputVal;
-      simulatedRemaining += inputVal;
     } else if (formType === 'expense') {
       simulatedExpenses += inputVal;
-      simulatedRemaining -= inputVal;
     } else if (formType === 'saving') {
       simulatedSavings += inputVal;
-      simulatedRemaining -= inputVal;
     }
+
+    const simulatedRemaining = simulatedIncome - simulatedExpenses - simulatedSavings;
 
     const currentUsedPct = income > 0 ? ((expenses + savings) / income) * 100 : 0;
     const simulatedUsedPct = simulatedIncome > 0 ? ((simulatedExpenses + simulatedSavings) / simulatedIncome) * 100 : 0;
@@ -363,7 +386,7 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
       simulatedUsedPct,
       hasIncome: income > 0,
     };
-  }, [budget.entries, modalPeriod, formAmount, formType]);
+  }, [budget.entries, modalPeriod, formAmount, formType, editingEntryId]);
 
   // Compute stats for currently active filter in the main view
   const activeViewStats = useMemo(() => {
@@ -413,6 +436,12 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
     }
 
     const selectedAcc = accounts.find((a) => a.id === formAccountId);
+    const resolvedItemOrFund =
+      formType === 'saving'
+        ? isCreatingNewSinkingFund
+          ? formItem.trim() || formCategory
+          : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
+        : formItem.trim() || formCategory;
 
     if (editingEntryId && onUpdateEntry) {
       onUpdateEntry(editingEntryId, {
@@ -422,9 +451,9 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
         periodIndex,
         type: formType,
         category: formCategory,
-        item: formItem || formCategory,
+        item: resolvedItemOrFund,
         amount: amountNum,
-        description: formDescription || formItem || formCategory,
+        description: formDescription.trim() || resolvedItemOrFund,
         savingAccountId: formType === 'saving' ? formAccountId : undefined,
         savingAccountName: formType === 'saving' ? selectedAcc?.name : undefined,
       });
@@ -436,9 +465,9 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
         periodIndex,
         type: formType,
         category: formCategory,
-        item: formItem || formCategory,
+        item: resolvedItemOrFund,
         amount: amountNum,
-        description: formDescription || formItem || formCategory,
+        description: formDescription.trim() || resolvedItemOrFund,
         savingAccountId: formType === 'saving' ? formAccountId : undefined,
         savingAccountName: formType === 'saving' ? selectedAcc?.name : undefined,
       });
@@ -1175,7 +1204,10 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
                       type="button"
                       onClick={() => {
                         setFormType('saving');
-                        setFormCategory(savingCategories[0] || 'Savings');
+                        setIsCreatingNewSinkingFund(false);
+                        const defaultFund = existingSinkingFunds[0] || 'General Savings';
+                        setFormCategory(normalizeSavingCategoryGroup(defaultFund, savingCategories[0]));
+                        setFormItem(defaultFund);
                         setSelectedTemplateId('');
                       }}
                       className={`py-2 px-2 sm:px-3 rounded-xl font-semibold border text-center transition-all text-xs sm:text-sm cursor-pointer ${
@@ -1288,14 +1320,112 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
                 </div>
                 
                 <div>
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Item Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., Electricity Bill, Groceries & Market, Emergency Fund"
-                    value={formItem}
-                    onChange={(e) => setFormItem(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                      {formType === 'saving' ? 'Target Sinking Fund (Envelope)' : 'Item Name'}
+                    </label>
+                    {formType === 'saving' && isCreatingNewSinkingFund && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCreatingNewSinkingFund(false);
+                          setFormItem(existingSinkingFunds[0] || formCategory || 'General Savings');
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
+                      >
+                        Select Existing Fund
+                      </button>
+                    )}
+                  </div>
+
+                  {formType === 'saving' && !isCreatingNewSinkingFund ? (
+                    <select
+                      value={
+                        existingSinkingFunds.includes(formItem)
+                          ? formItem
+                          : resolveCanonicalSinkingFundName(formItem, formCategory, existingSinkingFunds)
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '__CREATE_NEW_FUND__') {
+                          setIsCreatingNewSinkingFund(true);
+                          setFormItem('');
+                        } else {
+                          setFormItem(val);
+                          setFormCategory(normalizeSavingCategoryGroup(val, formCategory));
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700 rounded-xl text-sm text-slate-900 dark:text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {(() => {
+                        const allFunds = Array.from(
+                          new Set([
+                            ...existingSinkingFunds,
+                            ...(formItem && formItem.trim()
+                              ? [resolveCanonicalSinkingFundName(formItem, formCategory, existingSinkingFunds)]
+                              : []),
+                          ])
+                        );
+                        const grouped = new Map<string, string[]>();
+                        allFunds.forEach((f) => {
+                          const grp = normalizeSavingCategoryGroup(f);
+                          if (!grouped.has(grp)) grouped.set(grp, []);
+                          grouped.get(grp)!.push(f);
+                        });
+                        return Array.from(grouped.entries()).map(([grpName, funds]) => (
+                          <optgroup key={grpName} label={grpName}>
+                            {funds.map((fundName) => (
+                              <option key={fundName} value={fundName}>
+                                🎯 {fundName}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ));
+                      })()}
+                      <option value="__CREATE_NEW_FUND__">➕ Create a New Sinking Fund...</option>
+                    </select>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <input
+                        type="text"
+                        placeholder={
+                          formType === 'saving'
+                            ? 'Type new Sinking Fund name (e.g., Car Maintenance Fund)'
+                            : 'e.g., Electricity Bill, Groceries & Market, Emergency Fund'
+                        }
+                        value={formItem}
+                        onChange={(e) => setFormItem(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      {formType === 'saving' && (() => {
+                        const closeMatch = findClosestSinkingFundMatch(formItem, existingSinkingFunds);
+                        if (
+                          closeMatch &&
+                          formItem.trim() &&
+                          closeMatch.toLowerCase() !== formItem.trim().toLowerCase()
+                        ) {
+                          return (
+                            <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-[11px] text-amber-800 dark:text-amber-200">
+                              <span>
+                                Similar to existing fund <strong>&quot;{closeMatch}&quot;</strong>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsCreatingNewSinkingFund(false);
+                                  setFormItem(closeMatch);
+                                }}
+                                className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md cursor-pointer shrink-0"
+                              >
+                                Use &quot;{closeMatch}&quot;
+                              </button>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 {/* If Saving: Select Destination Account for Ledger */}

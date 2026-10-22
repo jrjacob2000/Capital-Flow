@@ -36,6 +36,12 @@ import {
   SavingsTransaction,
   YearBudgetData,
 } from '../types/finance';
+import {
+  resolveCanonicalSinkingFundName,
+  normalizeSavingCategoryGroup,
+  SAVING_CATEGORIES,
+  DEFAULT_SINKING_FUND_NAMES,
+} from '../services/sampleData';
 import { CapitalGrowthChart } from './charts/CapitalGrowthChart';
 
 const ACCOUNT_COLORS = [
@@ -122,6 +128,13 @@ interface SavingsLedgerViewProps {
   onAddAccount: (account: Omit<SavingsAccount, 'id'>) => void;
   onUpdateAccount?: (accountId: string, updates: Partial<SavingsAccount>) => void;
   onDeleteAccount?: (accountId: string, reassignToAccountId?: string) => void;
+  onRenameOrMergeFund?: (
+    oldFundName: string,
+    newFundName: string,
+    newMonthlyTarget?: number,
+    newSavingCategory?: string
+  ) => void;
+  onDeleteFund?: (fundName: string, reassignToFund?: string) => void;
   currencySymbol?: string;
 }
 
@@ -134,6 +147,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   onAddAccount,
   onUpdateAccount,
   onDeleteAccount,
+  onRenameOrMergeFund,
+  onDeleteFund,
   currencySymbol = '$',
 }) => {
   // Transaction modal state (Unified Deposit, Withdraw, Transfer)
@@ -141,6 +156,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [transactionMode, setTransactionMode] = useState<'deposit' | 'withdraw' | 'transfer'>('deposit');
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [isManageAccountsModalOpen, setIsManageAccountsModalOpen] = useState(false);
+  const [isManageFundsModalOpen, setIsManageFundsModalOpen] = useState(false);
+  const [editingFund, setEditingFund] = useState<CategoryFundSummary | null>(null);
+  const [editFundName, setEditFundName] = useState('');
+  const [editFundCategory, setEditFundCategory] = useState('Short-Term & General Savings');
+  const [editFundMergeTarget, setEditFundMergeTarget] = useState('');
+  const [editFundMonthlyTarget, setEditFundMonthlyTarget] = useState('');
+  const [deletingFund, setDeletingFund] = useState<CategoryFundSummary | null>(null);
+  const [deleteFundReassignTo, setDeleteFundReassignTo] = useState('General Reserves / Starting Capital');
   const [activeTab, setActiveTab] = useState<'transactions' | 'sinking_funds' | 'accounts' | 'calculator'>('transactions');
   const [selectedFundFilter, setSelectedFundFilter] = useState<string>('all');
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('all');
@@ -309,15 +332,42 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
     >();
 
-    const getOrCreateFund = (name: string, category: string = 'Savings', customColor?: string) => {
-      const trimmed = name.trim();
+    const resolveSavingCategory = (fundName: string, fallbackCategory?: string): string => {
+      const clean = fundName.trim().toLowerCase();
+      // 1. Check if a saving itemTemplate matches by item name
+      const byItem = budget?.itemTemplates?.find(
+        (t) => t.type === 'saving' && t.item.trim().toLowerCase() === clean
+      );
+      if (byItem && byItem.category) {
+        return normalizeSavingCategoryGroup(fundName, byItem.category);
+      }
+
+      return normalizeSavingCategoryGroup(fundName, fallbackCategory);
+    };
+
+    const knownCanonicalPool = Array.from(
+      new Set([
+        ...DEFAULT_SINKING_FUND_NAMES,
+        ...(budget?.itemTemplates || [])
+          .filter((t) => t.type === 'saving')
+          .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, DEFAULT_SINKING_FUND_NAMES)),
+      ])
+    );
+
+    const getOrCreateFund = (name: string, category?: string, customColor?: string) => {
+      const canonical = resolveCanonicalSinkingFundName(name, category, knownCanonicalPool);
+      const trimmed = canonical.trim();
       const key = trimmed.toLowerCase();
+      if (!knownCanonicalPool.some((p) => p.toLowerCase() === key)) {
+        knownCanonicalPool.push(trimmed);
+      }
+      const resolvedCat = resolveSavingCategory(trimmed, category);
       if (!fundMap.has(key)) {
         const assignedColor = customColor || FUND_COLORS[fundMap.size % FUND_COLORS.length];
         fundMap.set(key, {
           id: `fund-${fundMap.size + 1}`,
           name: trimmed,
-          category,
+          category: resolvedCat,
           color: assignedColor,
           inflow: 0,
           outflow: 0,
@@ -333,8 +383,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       budget.itemTemplates
         .filter((t) => t.type === 'saving')
         .forEach((tpl, idx) => {
-          const fund = getOrCreateFund(tpl.item, tpl.category || 'Savings', FUND_COLORS[idx % FUND_COLORS.length]);
-          fund.plannedAnnualTarget = (tpl.defaultEstimatedCost || 0) * 12;
+          const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
+          fund.plannedAnnualTarget = Math.max(fund.plannedAnnualTarget || 0, (tpl.defaultEstimatedCost || 0) * 12);
         });
     }
 
@@ -343,8 +393,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       budget.entries
         .filter((e) => e.type === 'saving')
         .forEach((entry) => {
-          const fundName = entry.item || entry.description || entry.category || 'Savings Fund';
-          const fund = getOrCreateFund(fundName, entry.category || 'Savings');
+          const fundName = resolveCanonicalSinkingFundName(
+            entry.item || entry.description,
+            entry.category,
+            knownCanonicalPool
+          );
+          const fund = getOrCreateFund(fundName, entry.category || 'General Savings');
           fund.savedThisYear = (fund.savedThisYear || 0) + (entry.amount || entry.actualCost || 0);
         });
     }
@@ -359,7 +413,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         // Physical bank-to-bank transfers do not alter category fund inflow/outflow totals.
         // If tagged with a specific category fund, shift the physical account breakdown within that fund.
         if (tx.category) {
-          const targetFund = fundMap.get(tx.category.trim().toLowerCase());
+          const canonicalKey = resolveCanonicalSinkingFundName(tx.category, tx.category, knownCanonicalPool).toLowerCase();
+          const targetFund = fundMap.get(canonicalKey);
           if (targetFund) {
             targetFund.txCount += 1;
             const fromAcc = targetFund.accounts.get(tx.accountId) || { accountId: tx.accountId, accountName: accName, amount: 0 };
@@ -384,7 +439,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         const isToUnallocated = toFundName.trim().toLowerCase() === 'general reserves / starting capital';
 
         if (!isFromUnallocated) {
-          const fromFund = getOrCreateFund(fromFundName, 'Savings / Envelope');
+          const fromFund = getOrCreateFund(fromFundName);
           fromFund.txCount += 1;
           if (!fromFund.latestDate || new Date(tx.date) > new Date(fromFund.latestDate)) {
             fromFund.latestDate = tx.date;
@@ -398,7 +453,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         }
 
         if (!isToUnallocated) {
-          const toFund = getOrCreateFund(toFundName, 'Savings / Envelope');
+          const toFund = getOrCreateFund(toFundName);
           toFund.txCount += 1;
           if (!toFund.latestDate || new Date(tx.date) > new Date(toFund.latestDate)) {
             toFund.latestDate = tx.date;
@@ -414,7 +469,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
 
       let fundName = '';
-      let category = tx.category || 'Savings';
+      let category = tx.category || 'General Savings';
 
       // If explicitly placed into General Reserves / Starting Capital (unallocated),
       // skip creating a named category fund so it stays in the unallocated remainder pool.
@@ -426,23 +481,31 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         fundName = tx.category && tx.category.trim() ? tx.category.trim() : 'Compounding Yields & Dividend';
         category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
-        fundName = tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim() || 'General Withdrawal';
+        fundName = resolveCanonicalSinkingFundName(
+          tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
+          tx.category,
+          knownCanonicalPool
+        ) || 'General Withdrawal';
         category = tx.category || 'Withdrawal';
       } else {
         const linkedEntry = tx.budgetEntryId
           ? budget?.entries?.find((e) => e.id === tx.budgetEntryId)
           : undefined;
         if (linkedEntry) {
-          fundName = linkedEntry.item || linkedEntry.description || linkedEntry.category || 'General Savings';
+          fundName = resolveCanonicalSinkingFundName(
+            linkedEntry.item || linkedEntry.description,
+            linkedEntry.category,
+            knownCanonicalPool
+          );
           category = linkedEntry.category || category;
         } else if (tx.source === 'manual_deposit' && !tx.category) {
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
             .trim();
-          // Only match to a fund if the note matches a known fund name; otherwise keep in General Reserves
-          if (cleanNote && fundMap.has(cleanNote.toLowerCase())) {
-            fundName = cleanNote;
+          const canonicalNote = resolveCanonicalSinkingFundName(cleanNote, undefined, knownCanonicalPool);
+          if (cleanNote && fundMap.has(canonicalNote.toLowerCase())) {
+            fundName = canonicalNote;
           } else {
             return;
           }
@@ -451,7 +514,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
             .trim();
-          fundName = tx.category || cleanNote || 'General Savings';
+          fundName = resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
         }
       }
 
@@ -1241,7 +1304,15 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 This view breaks down your <strong>{currencySymbol}{formatNumber(totalCapital)}</strong> in total reserves by its earmarked purpose (Emergency Fund, Travel Sinking Fund, Car Maintenance, MP2, etc.) and shows which physical accounts store each fund.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsManageFundsModalOpen(true)}
+                className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-xl border border-white/15 transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Manage Funds</span>
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1276,194 +1347,230 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             </div>
           </div>
 
-          {/* Category Funds Cards Grid */}
+          {/* Category Funds Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categoryFunds.map((fund) => {
-              return (
-                <div
-                  key={fund.id}
-                  className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between space-y-4 hover:border-emerald-500/50 transition-all group"
-                >
-                  <div className="space-y-3">
-                    {/* Card Header */}
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-white shadow-xs text-sm"
-                          style={{ backgroundColor: fund.color }}
-                        >
-                          <Target className="w-5 h-5" />
-                        </div>
-                        <div className="min-w-0">
-                          <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate" title={fund.name}>
-                            {fund.name}
-                          </h4>
-                          <span className="inline-block text-[10px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md truncate max-w-[180px]">
-                            {fund.category}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Share Badge */}
-                      <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800 px-2 py-1 rounded-lg shrink-0">
-                        {fund.percentageOfTotal.toFixed(1)}% of total
-                      </span>
-                    </div>
-
-                    {/* Balance Display */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block mb-0.5">
-                        Earmarked Capital Balance
-                      </span>
-                      <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
-                        {currencySymbol}{formatNumber(fund.currentBalance)}
-                      </div>
-                      {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0 ? (
-                        <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
-                          <span>Planned Target: {currencySymbol}{formatNumber(fund.plannedAnnualTarget)}/yr</span>
-                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                            {((fund.currentBalance / fund.plannedAnnualTarget) * 100).toFixed(0)}% reached
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
-                          <span className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
-                            <ShieldCheck className="w-3 h-3" />
-                            <span>Open-Ended Cushion Reserve</span>
-                          </span>
-                          <span className="font-mono text-slate-500 text-[10px]">
-                            Continuous Pool
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Visual Progress Bar */}
-                    <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+            {categoryFunds.map((fund) => (
+              <div
+                key={fund.id}
+                className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between space-y-4 hover:border-emerald-500/50 transition-all group"
+              >
+                <div className="space-y-3">
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${Math.min(100, Math.max(3, fund.percentageOfTotal))}%`,
-                          backgroundColor: fund.color,
-                        }}
-                      />
+                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-white shadow-xs text-sm"
+                        style={{ backgroundColor: fund.color }}
+                      >
+                        <Target className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate" title={fund.name}>
+                          {fund.name}
+                        </h4>
+                        <span className="inline-block text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md truncate max-w-[190px]">
+                          {fund.category}
+                        </span>
+                      </div>
                     </div>
 
-                    {/* PHYSICAL LOCATION OF THESE FUNDS */}
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                        <Landmark className="w-3 h-3 text-slate-400" />
-                        <span>Physical Accounts Storing This Money:</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {/* Share Badge */}
+                      <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800 px-2 py-1 rounded-lg">
+                        {fund.percentageOfTotal.toFixed(1)}%
                       </span>
-
-                      {fund.accounts.length > 0 ? (
-                        <div className="space-y-1">
-                          {fund.accounts.map((acc) => (
-                            <div
-                              key={acc.accountId}
-                              className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
-                            >
-                              <div className="flex items-center gap-1.5 truncate pr-2">
-                                <span
-                                  className="w-2 h-2 rounded-full shrink-0"
-                                  style={{ backgroundColor: acc.accountColor || '#10b981' }}
-                                />
-                                <span className="font-semibold text-slate-700 dark:text-slate-200 truncate">
-                                  {acc.accountName}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
-                                  {currencySymbol}{formatNumber(acc.amount)}
-                                </span>
-                                {fund.id === 'fund-general-unallocated' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const firstNamedFund = categoryFunds.find(
-                                        (f) => f.id !== 'fund-general-unallocated'
-                                      );
-                                      setReallocateFromCategory('General Reserves / Starting Capital');
-                                      setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
-                                      setReallocateAccountId(acc.accountId);
-                                      setReallocateAmount(String(acc.amount));
-                                      setIsReallocateModalOpen(true);
-                                    }}
-                                    className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 rounded transition-colors cursor-pointer"
-                                    title={`Allocate ${acc.accountName} beginning balance to a fund`}
-                                  >
-                                    Allocate
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-[11px] text-slate-400 italic">
-                          No specific account assigned
-                        </p>
+                      {fund.id !== 'fund-general-unallocated' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingFund(fund);
+                              setEditFundName(fund.name);
+                              setEditFundCategory(fund.category || 'Short-Term & General Savings');
+                              setEditFundMergeTarget('');
+                              setEditFundMonthlyTarget(
+                                fund.plannedAnnualTarget ? String(Math.round(fund.plannedAnnualTarget / 12)) : '0'
+                              );
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                            title="Rename, merge, or change category/target for this fund"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeletingFund(fund);
+                              const otherNamed = categoryFunds.find(
+                                (f) => f.id !== 'fund-general-unallocated' && f.id !== fund.id
+                              );
+                              setDeleteFundReassignTo(
+                                otherNamed ? otherNamed.name : 'General Reserves / Starting Capital'
+                              );
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
+                            title="Delete or merge this fund"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
 
-                  {/* Action Footer Buttons */}
-                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
+                  {/* Balance Display */}
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block mb-0.5">
+                      Earmarked Capital Balance
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedFundFilter(fund.name);
-                          setActiveTab('transactions');
-                        }}
-                        className="px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 rounded-lg transition-colors cursor-pointer"
-                      >
-                        View Entries
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (fund.id === 'fund-general-unallocated') {
-                            const firstNamedFund = categoryFunds.find(
-                              (f) => f.id !== 'fund-general-unallocated'
-                            );
-                            const firstAcc = fund.accounts[0];
-                            setReallocateFromCategory('General Reserves / Starting Capital');
-                            setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
-                            setReallocateAccountId(firstAcc ? firstAcc.accountId : '');
-                            setReallocateAmount(
-                              firstAcc ? String(firstAcc.amount) : String(fund.currentBalance)
-                            );
-                          } else {
-                            setReallocateFromCategory('General Reserves / Starting Capital');
-                            setReallocateToCategory(fund.name);
-                          }
-                          setIsReallocateModalOpen(true);
-                        }}
-                        className="px-2 py-1 text-[11px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
-                      >
-                        {fund.id === 'fund-general-unallocated' ? 'Allocate to Fund' : 'Reallocate'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDepositType('manual_deposit');
-                          setDepositCategory(fund.name);
-                          setDepositNote(fund.name);
-                          handleOpenTransactionModal('deposit');
-                        }}
-                        className="px-2.5 py-1 text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer"
-                      >
-                        Deposit
-                      </button>
+                    <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+                      {currencySymbol}{formatNumber(fund.currentBalance)}
                     </div>
+                    {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0 ? (
+                      <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
+                        <span>Planned Target: {currencySymbol}{formatNumber(fund.plannedAnnualTarget)}/yr</span>
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          {((fund.currentBalance / fund.plannedAnnualTarget) * 100).toFixed(0)}% reached
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
+                        <span className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
+                          <ShieldCheck className="w-3 h-3" />
+                          <span>Open-Ended Cushion Reserve</span>
+                        </span>
+                        <span className="font-mono text-slate-500 text-[10px]">
+                          Continuous Pool
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Visual Progress Bar */}
+                  <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.min(100, Math.max(3, fund.percentageOfTotal))}%`,
+                        backgroundColor: fund.color,
+                      }}
+                    />
+                  </div>
+
+                  {/* PHYSICAL LOCATION OF THESE FUNDS */}
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <Landmark className="w-3 h-3 text-slate-400" />
+                      <span>Physical Accounts Storing This Money:</span>
+                    </span>
+
+                    {fund.accounts.length > 0 ? (
+                      <div className="space-y-1">
+                        {fund.accounts.map((acc) => (
+                          <div
+                            key={acc.accountId}
+                            className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
+                          >
+                            <div className="flex items-center gap-1.5 truncate pr-2">
+                              <span
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: acc.accountColor || '#10b981' }}
+                              />
+                              <span className="font-semibold text-slate-700 dark:text-slate-200 truncate">
+                                {acc.accountName}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                                {currencySymbol}{formatNumber(acc.amount)}
+                              </span>
+                              {fund.id === 'fund-general-unallocated' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const firstNamedFund = categoryFunds.find(
+                                      (f) => f.id !== 'fund-general-unallocated'
+                                    );
+                                    setReallocateFromCategory('General Reserves / Starting Capital');
+                                    setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
+                                    setReallocateAccountId(acc.accountId);
+                                    setReallocateAmount(String(acc.amount));
+                                    setIsReallocateModalOpen(true);
+                                  }}
+                                  className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 rounded transition-colors cursor-pointer"
+                                  title={`Allocate ${acc.accountName} beginning balance to a fund`}
+                                >
+                                  Allocate
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-400 italic">
+                        No specific account assigned
+                      </p>
+                    )}
                   </div>
                 </div>
-              );
-            })}
+
+                {/* Action Footer Buttons */}
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFundFilter(fund.name);
+                        setActiveTab('transactions');
+                      }}
+                      className="px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 rounded-lg transition-colors cursor-pointer"
+                    >
+                      View Entries
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (fund.id === 'fund-general-unallocated') {
+                          const firstNamedFund = categoryFunds.find(
+                            (f) => f.id !== 'fund-general-unallocated'
+                          );
+                          const firstAcc = fund.accounts[0];
+                          setReallocateFromCategory('General Reserves / Starting Capital');
+                          setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
+                          setReallocateAccountId(firstAcc ? firstAcc.accountId : '');
+                          setReallocateAmount(
+                            firstAcc ? String(firstAcc.amount) : String(fund.currentBalance)
+                          );
+                        } else {
+                          setReallocateFromCategory('General Reserves / Starting Capital');
+                          setReallocateToCategory(fund.name);
+                        }
+                        setIsReallocateModalOpen(true);
+                      }}
+                      className="px-2 py-1 text-[11px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
+                    >
+                      {fund.id === 'fund-general-unallocated' ? 'Allocate to Fund' : 'Reallocate'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDepositType('manual_deposit');
+                        setDepositCategory(fund.name);
+                        setDepositNote(fund.name);
+                        handleOpenTransactionModal('deposit');
+                      }}
+                      className="px-2.5 py-1 text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Deposit
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -3226,6 +3333,380 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Manage All Sinking Funds Overview */}
+      {isManageFundsModalOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Target className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Manage Sinking Funds &amp; Envelopes</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Rename funds, merge redundant funds together, edit monthly targets, or remove unused funds
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsManageFundsModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto my-4 space-y-2.5 pr-1">
+              {categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').length === 0 ? (
+                <div className="p-8 text-center text-slate-400">
+                  No named sinking funds yet. Allocate or deposit into a fund to create one.
+                </div>
+              ) : (
+                categoryFunds
+                  .filter((f) => f.id !== 'fund-general-unallocated')
+                  .map((fund) => (
+                    <div
+                      key={fund.id}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-white font-bold"
+                          style={{ backgroundColor: fund.color }}
+                        >
+                          <Target className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                              {fund.name}
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-semibold">
+                              {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-3 mt-0.5">
+                            <span>
+                              Balance: <strong className="font-mono text-slate-800 dark:text-slate-200">{currencySymbol}{formatNumber(fund.currentBalance)}</strong>
+                            </span>
+                            {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0 ? (
+                              <span>
+                                Target: <strong className="font-mono text-emerald-600 dark:text-emerald-400">{currencySymbol}{formatNumber(fund.plannedAnnualTarget)}/yr</strong>
+                              </span>
+                            ) : (
+                              <span>Open-Ended Reserve</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingFund(fund);
+                            setEditFundName(fund.name);
+                            setEditFundCategory(normalizeSavingCategoryGroup(fund.name, fund.category));
+                            setEditFundMergeTarget('');
+                            setEditFundMonthlyTarget(
+                              fund.plannedAnnualTarget ? String(Math.round(fund.plannedAnnualTarget / 12)) : '0'
+                            );
+                          }}
+                          className="px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Rename / Merge</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeletingFund(fund);
+                            const otherNamed = categoryFunds.find(
+                              (f) => f.id !== 'fund-general-unallocated' && f.id !== fund.id
+                            );
+                            setDeleteFundReassignTo(
+                              otherNamed ? otherNamed.name : 'General Reserves / Starting Capital'
+                            );
+                          }}
+                          className="px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsManageFundsModalOpen(false)}
+                className="px-5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold rounded-xl cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit / Rename / Merge Sinking Fund */}
+      {editingFund && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Edit or Merge Sinking Fund
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Rename &quot;{editingFund.name}&quot;, merge it into another fund, or update its target
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingFund(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const finalName = editFundMergeTarget ? editFundMergeTarget.trim() : editFundName.trim();
+                if (!finalName || !onRenameOrMergeFund) return;
+                const monthlyNum = parseFloat(editFundMonthlyTarget);
+                onRenameOrMergeFund(
+                  editingFund.name,
+                  finalName,
+                  !isNaN(monthlyNum) && monthlyNum >= 0 ? monthlyNum : undefined,
+                  editFundCategory
+                );
+                setEditingFund(null);
+              }}
+              className="mt-4 space-y-3.5"
+            >
+              <div>
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                  Merge Into Existing Fund (Optional — Fixes Redundant Funds)
+                </label>
+                <select
+                  value={editFundMergeTarget}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setEditFundMergeTarget(val);
+                    if (val) {
+                      setEditFundName(val);
+                      const targetFundObj = categoryFunds.find((f) => f.name === val);
+                      if (targetFundObj?.category) {
+                        setEditFundCategory(targetFundObj.category);
+                      }
+                      if (targetFundObj?.plannedAnnualTarget && (!editFundMonthlyTarget || editFundMonthlyTarget === '0')) {
+                        setEditFundMonthlyTarget(String(Math.round(targetFundObj.plannedAnnualTarget / 12)));
+                      }
+                    } else {
+                      setEditFundName(editingFund.name);
+                      setEditFundCategory(normalizeSavingCategoryGroup(editingFund.name, editingFund.category));
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                >
+                  <option value="">-- Keep Separate (Rename Only) --</option>
+                  {categoryFunds
+                    .filter((f) => f.id !== 'fund-general-unallocated' && f.id !== editingFund.id)
+                    .map((f) => (
+                      <option key={f.id} value={f.name}>
+                        Merge into &quot;{f.name}&quot; (Balance: {currencySymbol}{formatNumber(f.currentBalance)})
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Selecting an existing fund combines both funds&apos; balances, transactions, and planned targets into one card.
+                </p>
+              </div>
+
+              {!editFundMergeTarget && (
+                <div>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                    Fund Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editFundName}
+                    onChange={(e) => setEditFundName(e.target.value)}
+                    placeholder="e.g. General Savings, Emergency Fund"
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                  Saving Category (Subtitle Badge)
+                </label>
+                <select
+                  value={editFundCategory}
+                  onChange={(e) => setEditFundCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
+                >
+                  {Array.from(
+                    new Set([
+                      ...SAVING_CATEGORIES,
+                      ...(budget.customCategories?.saving || []),
+                      editFundCategory || 'Short-Term & General Savings',
+                    ])
+                  )
+                    .filter((cat) => cat && cat !== 'Savings / Envelope')
+                    .map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Matches your configured Saving Categories from Settings / Manage Categories.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                  Planned Monthly Savings Target ({currencySymbol}/month)
+                </label>
+                <input
+                  type="number"
+                  step="100"
+                  min="0"
+                  value={editFundMonthlyTarget}
+                  onChange={(e) => setEditFundMonthlyTarget(e.target.value)}
+                  placeholder="0 for Open-Ended Cushion Reserve"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Annual Target: <strong>{currencySymbol}{formatNumber((parseFloat(editFundMonthlyTarget) || 0) * 12)}/yr</strong> (set to 0 for an Open-Ended Cushion Reserve).
+                </p>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingFund(null)}
+                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                >
+                  {editFundMergeTarget ? `Merge into "${editFundMergeTarget}"` : 'Save Fund Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Delete / Remove Sinking Fund */}
+      {deletingFund && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-base">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <h3>Remove Sinking Fund</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletingFund(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <p className="text-slate-700 dark:text-slate-300">
+                Are you sure you want to remove the sinking fund <strong>&quot;{deletingFund.name}&quot;</strong>?
+              </p>
+
+              <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Current Fund Balance:</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white">
+                    {currencySymbol}{formatNumber(deletingFund.currentBalance)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Linked Entries:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {deletingFund.transactionCount} records
+                  </span>
+                </div>
+              </div>
+
+              {deletingFund.currentBalance > 0 || deletingFund.transactionCount > 0 ? (
+                <div>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                    Move Balance &amp; Entries To:
+                  </label>
+                  <select
+                    value={deleteFundReassignTo}
+                    onChange={(e) => setDeleteFundReassignTo(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  >
+                    <option value="General Reserves / Starting Capital">
+                      General Reserves / Starting Capital (Return to Unallocated Cash)
+                    </option>
+                    {categoryFunds
+                      .filter((f) => f.id !== 'fund-general-unallocated' && f.id !== deletingFund.id)
+                      .map((f) => (
+                        <option key={f.id} value={f.name}>
+                          {f.name} (Current: {currencySymbol}{formatNumber(f.currentBalance)})
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Your physical bank account balances will not be affected.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  This fund has a {currencySymbol}0 balance and 0 entries. Removing it will clean it up from your Sinking Funds list and Estimate Template.
+                </p>
+              )}
+
+              <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setDeletingFund(null)}
+                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onDeleteFund) {
+                      onDeleteFund(deletingFund.name, deleteFundReassignTo);
+                    }
+                    setDeletingFund(null);
+                  }}
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Remove Fund</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -121,17 +121,24 @@ export const INCOME_CATEGORIES = [
 ];
 
 export const SAVING_CATEGORIES = [
-  'Emergency Fund',
-  'General Savings',
-  'Digital Bank (High-Yield)',
-  'Pag-IBIG MP2',
-  'Traditional Bank Savings',
-  'Time Deposit',
-  'Investment / Stocks',
-  'Mutual Funds / UITF',
-  'Crypto & Digital Assets',
-  'Retirement Fund (PERA)',
+  'Emergency & Safety Net',
+  'Short-Term & General Savings',
+  'Home & Property Sinking Funds',
+  'Vehicle & Maintenance Sinking Funds',
+  'Family, Travel & Education Funds',
+  'Long-Term & Wealth Investments',
 ];
+
+export const DEFAULT_SINKING_FUNDS_BY_CATEGORY: Record<string, string[]> = {
+  'Emergency & Safety Net': ['Emergency Fund', 'Medical & Health Buffer'],
+  'Short-Term & General Savings': ['General Savings', 'Personal Buffer & Reserve'],
+  'Home & Property Sinking Funds': ['House Maintenance Fund', 'Home Improvement & Appliance Fund'],
+  'Vehicle & Maintenance Sinking Funds': ['Car Maintenance Fund', 'Vehicle Registration & Insurance'],
+  'Family, Travel & Education Funds': ['Travel & Vacation Fund', 'Education & Tuition Fund', 'Holiday & Gift Fund'],
+  'Long-Term & Wealth Investments': ['Pag-IBIG MP2', 'Retirement Fund (PERA)', 'Time Deposit & High-Yield', 'Stocks, UITF & Crypto'],
+};
+
+export const DEFAULT_SINKING_FUND_NAMES: string[] = Object.values(DEFAULT_SINKING_FUNDS_BY_CATEGORY).flat();
 
 /**
  * Default Starter Estimate Budget for new users who do not have an existing personalized template yet.
@@ -309,8 +316,8 @@ export const DEFAULT_ITEM_TEMPLATES: BudgetItemTemplate[] = [
   {
     id: 'tpl-default-emergency-fund',
     type: 'saving',
-    category: 'Emergency Fund',
-    item: 'Emergency Fund Allocation',
+    category: 'Emergency & Safety Net',
+    item: 'Emergency Fund',
     defaultEstimatedCost: 4000,
     frequency: 'monthly',
     biweeklyPeriod: 'both',
@@ -319,8 +326,8 @@ export const DEFAULT_ITEM_TEMPLATES: BudgetItemTemplate[] = [
   {
     id: 'tpl-default-general-savings',
     type: 'saving',
-    category: 'General Savings',
-    item: 'Long-Term Savings / Investment',
+    category: 'Short-Term & General Savings',
+    item: 'General Savings',
     defaultEstimatedCost: 4000,
     frequency: 'monthly',
     biweeklyPeriod: 'both',
@@ -762,8 +769,8 @@ export const MIGRATED_2026_ITEM_TEMPLATES: BudgetItemTemplate[] = [
   {
     id: 'tpl-2026-sav-savings',
     type: 'saving',
-    category: 'General Savings',
-    item: 'Savings',
+    category: 'Short-Term & General Savings',
+    item: 'General Savings',
     defaultEstimatedCost: 10000,
     frequency: 'monthly',
     biweeklyPeriod: 'both',
@@ -1237,4 +1244,241 @@ export function generateInitialSavingsLedger(_initial2026Budget?: YearBudgetData
     transactions: [],
   };
 }
+
+/**
+ * Computes Levenshtein edit distance between two lowercase strings for typo detection.
+ */
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[m][n];
+}
+
+const GENERIC_SAVING_ALIASES = new Set([
+  'saving',
+  'savings',
+  'general saving',
+  'general savings',
+  'savings fund',
+  'saving fund',
+  'fund',
+  'funds',
+  'monthly saving',
+  'monthly savings',
+]);
+
+/**
+ * Finds if a typed fund name is a close match (case-insensitive, singular/plural, or 1-2 char typo)
+ * to one of the known Sinking Funds.
+ */
+export function findClosestSinkingFundMatch(
+  inputName: string,
+  knownFunds: string[]
+): string | null {
+  const trimmed = (inputName || '').trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+
+  if (GENERIC_SAVING_ALIASES.has(lower)) {
+    const genMatch = knownFunds.find((f) => f.trim().toLowerCase() === 'general savings');
+    return genMatch || 'General Savings';
+  }
+
+  // 1. Exact case-insensitive or singular/plural match
+  const norm = (s: string) => s.trim().toLowerCase().replace(/s$/, '').replace(/[^a-z0-9]/g, '');
+  const inputNorm = norm(trimmed);
+
+  for (const candidate of knownFunds) {
+    if (!candidate) continue;
+    if (candidate.trim().toLowerCase() === lower) {
+      return candidate.trim();
+    }
+    if (inputNorm.length >= 4 && norm(candidate) === inputNorm) {
+      return candidate.trim();
+    }
+  }
+
+  // 2. Typo tolerance (Levenshtein distance <= 2 for strings >= 5 chars)
+  if (lower.length >= 5) {
+    let bestMatch: string | null = null;
+    let bestDist = 99;
+    for (const candidate of knownFunds) {
+      const candLower = (candidate || '').trim().toLowerCase();
+      if (candLower.length < 4) continue;
+      const dist = levenshteinDistance(lower, candLower);
+      const maxAllowed = Math.min(2, Math.floor(Math.min(lower.length, candLower.length) / 4) + 1);
+      if (dist <= maxAllowed && dist < bestDist) {
+        bestDist = dist;
+        bestMatch = candidate.trim();
+      }
+    }
+    if (bestMatch) return bestMatch;
+  }
+
+  return null;
+}
+
+/**
+ * Maps any Sinking Fund name or legacy saving category into one of the clean Fund Category Groups.
+ */
+export function normalizeSavingCategoryGroup(fundName?: string, rawCategory?: string): string {
+  const fLower = (fundName || '').trim().toLowerCase();
+  const cLower = (rawCategory || '').trim().toLowerCase();
+
+  // If rawCategory is already one of the canonical SAVING_CATEGORIES, check if fundName strongly belongs elsewhere first
+  const checkText = `${fLower} ${cLower}`;
+
+  if (
+    fLower === 'general reserves / starting capital' ||
+    cLower === 'unallocated cash pool'
+  ) {
+    return 'Unallocated Cash Pool';
+  }
+
+  if (
+    checkText.includes('emergency') ||
+    checkText.includes('safety') ||
+    checkText.includes('medical') ||
+    checkText.includes('health buffer')
+  ) {
+    return 'Emergency & Safety Net';
+  }
+
+  if (
+    checkText.includes('house') ||
+    checkText.includes('home') ||
+    checkText.includes('property') ||
+    checkText.includes('appliance') ||
+    checkText.includes('renovation')
+  ) {
+    return 'Home & Property Sinking Funds';
+  }
+
+  if (
+    checkText.includes('car ') ||
+    fLower === 'car' ||
+    checkText.includes('vehicle') ||
+    checkText.includes('vios') ||
+    checkText.includes('motorcycle') ||
+    checkText.includes('registration') ||
+    checkText.includes('auto ')
+  ) {
+    return 'Vehicle & Maintenance Sinking Funds';
+  }
+
+  if (
+    checkText.includes('travel') ||
+    checkText.includes('vacation') ||
+    checkText.includes('trip') ||
+    checkText.includes('education') ||
+    checkText.includes('tuition') ||
+    checkText.includes('kids') ||
+    checkText.includes('school') ||
+    checkText.includes('family') ||
+    checkText.includes('holiday') ||
+    checkText.includes('gift')
+  ) {
+    return 'Family, Travel & Education Funds';
+  }
+
+  if (
+    checkText.includes('mp2') ||
+    checkText.includes('pag-ibig') ||
+    checkText.includes('pagibig') ||
+    checkText.includes('retirement') ||
+    checkText.includes('pera') ||
+    checkText.includes('stock') ||
+    checkText.includes('invest') ||
+    checkText.includes('uitf') ||
+    checkText.includes('mutual') ||
+    checkText.includes('crypto') ||
+    checkText.includes('time deposit') ||
+    checkText.includes('dividend') ||
+    checkText.includes('yield')
+  ) {
+    return 'Long-Term & Wealth Investments';
+  }
+
+  const exactCanonicalCat = SAVING_CATEGORIES.find(
+    (cat) => cat.toLowerCase() === cLower
+  );
+  if (exactCanonicalCat) {
+    return exactCanonicalCat;
+  }
+
+  return 'Short-Term & General Savings';
+}
+
+/**
+ * Resolves a saving entry or transaction's item/category into a canonical Sinking Fund name,
+ * preventing duplicate funds caused by generic item names ("Saving") or minor typos.
+ */
+export function resolveCanonicalSinkingFundName(
+  rawItemName?: string,
+  rawCategory?: string,
+  knownFunds: string[] = [...DEFAULT_SINKING_FUND_NAMES]
+): string {
+  const itemClean = (rawItemName || '')
+    .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+    .trim();
+  const catClean = (rawCategory || '').trim();
+
+  const pool = Array.from(
+    new Set([
+      ...DEFAULT_SINKING_FUND_NAMES,
+      ...knownFunds.filter(
+        (f) =>
+          Boolean(f) &&
+          f !== 'Savings / Envelope' &&
+          !SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === f.trim().toLowerCase())
+      ),
+    ])
+  );
+
+  // If itemClean is empty, a generic alias ("Saving"/"Savings"), or accidentally set to a broad category name
+  if (
+    !itemClean ||
+    GENERIC_SAVING_ALIASES.has(itemClean.toLowerCase()) ||
+    itemClean.toLowerCase() === 'short-term & general savings'
+  ) {
+    if (
+      catClean &&
+      catClean !== 'Savings / Envelope' &&
+      !GENERIC_SAVING_ALIASES.has(catClean.toLowerCase()) &&
+      !SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === catClean.toLowerCase())
+    ) {
+      return findClosestSinkingFundMatch(catClean, pool) || catClean;
+    }
+    return 'General Savings';
+  }
+
+  if (itemClean.toLowerCase() === 'emergency & safety net') {
+    return 'Emergency Fund';
+  }
+
+  // Check if itemClean matches or is a slight typo of an existing known fund
+  const matchedFromPool = findClosestSinkingFundMatch(itemClean, pool);
+  if (matchedFromPool) {
+    return matchedFromPool;
+  }
+
+  return itemClean;
+}
+
+
 

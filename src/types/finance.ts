@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.7.1';
+export const APP_VERSION = '1.7.4';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
@@ -197,6 +197,7 @@ export interface DriveSyncStatus {
   userPhoto: string | null;
   lastSyncedAt: string | null;
   isSyncing: boolean;
+  syncMessage?: string | null;
   error: string | null;
   budgetFileId: string | null;
   savingsFileId: string | null;

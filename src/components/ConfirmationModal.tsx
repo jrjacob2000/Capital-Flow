@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, HardDrive, Trash2, CheckCircle2, X } from 'lucide-react';
+import { HardDrive, Trash2, X, RefreshCw } from 'lucide-react';
 
 interface ConfirmationModalProps {
   isOpen: boolean;
@@ -12,6 +12,7 @@ interface ConfirmationModalProps {
   onConfirm: () => void;
   onCancel: () => void;
   isLoading?: boolean;
+  loadingMessage?: string | null;
 }
 
 export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
@@ -25,6 +26,7 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
   onConfirm,
   onCancel,
   isLoading = false,
+  loadingMessage = null,
 }) => {
   if (!isOpen) return null;
 
@@ -64,7 +66,8 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
           <button
             type="button"
             onClick={onCancel}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors shrink-0 cursor-pointer"
+            disabled={isLoading}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors shrink-0 cursor-pointer disabled:opacity-40"
             aria-label="Close modal"
           >
             <X className="w-5 h-5" />
@@ -85,12 +88,18 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
               <ul className="text-xs font-mono text-slate-700 dark:text-slate-300 space-y-1.5 min-w-0">
                 {affectedItems.map((item, idx) => (
                   <li key={idx} className="flex items-start gap-2 min-w-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0 mt-1.5"></span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0 mt-1.5" />
                     <span className="break-all leading-relaxed min-w-0 flex-1">{item}</span>
                   </li>
                 ))}
               </ul>
             </div>
+          )}
+
+          {isLoading && (
+            <p className="mt-3 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+              {loadingMessage || 'Synchronizing with Google Drive...'}
+            </p>
           )}
         </div>
 
@@ -113,12 +122,10 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
               isDestructive
                 ? 'bg-rose-600 hover:bg-rose-700 focus:ring-4 focus:ring-rose-500/20'
                 : 'bg-emerald-600 hover:bg-emerald-700 focus:ring-4 focus:ring-emerald-500/20'
-            } disabled:opacity-50`}
+            } disabled:opacity-75`}
           >
-            {isLoading && (
-              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
-            )}
-            <span>{confirmLabel}</span>
+            {isLoading && <RefreshCw className="w-4 h-4 animate-spin shrink-0" />}
+            <span>{isLoading ? 'Syncing...' : confirmLabel}</span>
           </button>
         </div>
       </div>
