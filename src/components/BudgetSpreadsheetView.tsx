@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   Tag,
   Check,
+  Upload,
 } from 'lucide-react';
 import {
   BudgetEntry,
@@ -47,6 +48,7 @@ import {
 } from '../services/sampleData';
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
 import { CarryOverModal } from './CarryOverModal';
+import { ExcelImportModal } from './ExcelImportModal';
 
 export interface SheetRowItem {
   id: string;
@@ -77,7 +79,10 @@ interface BudgetSpreadsheetViewProps {
   frequency: EntryFrequency;
   onChangeFrequency: (freq: EntryFrequency) => void;
   onAddEntry: (entry: Omit<BudgetEntry, 'id' | 'createdAt'>) => void;
-  onAddMultipleEntries?: (entries: Omit<BudgetEntry, 'id' | 'createdAt'>[]) => void;
+  onAddMultipleEntries?: (
+    entries: Omit<BudgetEntry, 'id' | 'createdAt'>[],
+    options?: { replacePeriod?: string; customExpenseCategories?: string[] }
+  ) => void;
   onUpdateEntry: (id: string, updated: Partial<BudgetEntry>) => void;
   onDeleteEntry: (entryId: string) => void;
   onUpdateCategories: (
@@ -111,6 +116,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
   const [isCarryOverModalOpen, setIsCarryOverModalOpen] = useState(false);
+  const [isImportExcelOpen, setIsImportExcelOpen] = useState(false);
   const [modalPeriod, setModalPeriod] = useState<string>(selectedPeriod);
   const [modalType, setModalType] = useState<'income' | 'expense' | 'saving'>('expense');
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
@@ -1107,6 +1113,15 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             >
               <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden sm:inline">Estimates &amp; Categories</span>
+            </button>
+
+            <button
+              onClick={() => setIsImportExcelOpen(true)}
+              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors cursor-pointer"
+              title="Import actual data from any worksheet tab in your Excel (.xlsx) file"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Import Excel</span>
             </button>
 
             <button
@@ -2483,6 +2498,24 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         currencySymbol={currencySymbol}
       />
 
+      <ExcelImportModal
+        isOpen={isImportExcelOpen}
+        onClose={() => setIsImportExcelOpen(false)}
+        year={budget.year}
+        defaultPeriod={selectedPeriod}
+        currencySymbol={currencySymbol}
+        onImportActualEntries={(targetPeriod, entries, replaceExistingInPeriod, discoveredExpenseCats) => {
+          if (onAddMultipleEntries) {
+            onAddMultipleEntries(entries, {
+              replacePeriod: replaceExistingInPeriod ? targetPeriod : undefined,
+              customExpenseCategories: discoveredExpenseCats,
+            });
+          } else {
+            entries.forEach((entry) => onAddEntry(entry));
+          }
+          onSelectPeriod(targetPeriod);
+        }}
+      />
 
     </div>
   );

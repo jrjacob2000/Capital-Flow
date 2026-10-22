@@ -26,6 +26,10 @@ import {
   EXPENSE_CATEGORIES,
   INCOME_CATEGORIES,
   SAVING_CATEGORIES,
+  OCT_2026_MIGRATED_ACTUAL_ENTRIES,
+  OCT_2026_CUSTOM_EXPENSE_CATEGORIES,
+  MIGRATED_2026_ITEM_TEMPLATES,
+  normalizeCategoryWording,
   isDefaultStarterTemplateItem,
   stripDefaultStarterTemplates,
   deriveCategoryBudgetsFromTemplates,
@@ -36,6 +40,8 @@ const LOCAL_STORAGE_KEY_LEDGER = 'capitalflow_local_savings_ledger';
 const LOCAL_STORAGE_KEY_YEARS = 'capitalflow_known_years';
 const LOCAL_STORAGE_KEY_USER_TEMPLATE = 'capitalflow_user_template_profile';
 const LIVE_CLEAN_STORAGE_KEY = 'capitalflow_live_clean_v1';
+const OCT_2026_MIGRATION_KEY = 'capitalflow_oct_2026_migrated_v2';
+const OCT_2026_TEMPLATE_MIGRATION_KEY = 'capitalflow_oct_2026_template_migrated_v2';
 
 export interface UserTemplateProfile {
   version?: string;
@@ -59,14 +65,35 @@ export class FinanceStorageService {
       if (!raw) return null;
       const parsed = JSON.parse(raw) as UserTemplateProfile;
       if (parsed && Array.isArray(parsed.itemTemplates)) {
-        const cleanedTemplates = stripDefaultStarterTemplates(parsed.itemTemplates);
+        let didUpdateCategories = false;
+        const cleanedTemplates = stripDefaultStarterTemplates(parsed.itemTemplates).map((t) => {
+          const normCat = normalizeCategoryWording(t.category);
+          if (normCat !== t.category) didUpdateCategories = true;
+          return { ...t, category: normCat };
+        });
         const hadDefaultItems = cleanedTemplates.length !== parsed.itemTemplates.length;
+
+        const rawExpenseCats = parsed.customCategories?.expense || EXPENSE_CATEGORIES;
+        const normalizedExpenseCats: string[] = [];
+        rawExpenseCats.forEach((c) => {
+          const norm = normalizeCategoryWording(c);
+          if (norm !== c) didUpdateCategories = true;
+          if (norm && !normalizedExpenseCats.includes(norm)) {
+            normalizedExpenseCats.push(norm);
+          }
+        });
+
         const normalizedProfile: UserTemplateProfile = {
           ...parsed,
+          customCategories: {
+            expense: normalizedExpenseCats,
+            income: [...(parsed.customCategories?.income || INCOME_CATEGORIES)],
+            saving: [...(parsed.customCategories?.saving || SAVING_CATEGORIES)],
+          },
           itemTemplates: cleanedTemplates,
           isPersonalizedTemplate: Boolean(parsed.isPersonalizedTemplate && cleanedTemplates.length > 0),
         };
-        if (hadDefaultItems) {
+        if (hadDefaultItems || didUpdateCategories) {
           localStorage.setItem(LOCAL_STORAGE_KEY_USER_TEMPLATE, JSON.stringify(normalizedProfile));
         }
         return normalizedProfile;
@@ -81,13 +108,19 @@ export class FinanceStorageService {
    * Saves the user's personalized template profile to localStorage
    */
   static saveUserTemplateProfile(profile: UserTemplateProfile): BudgetTemplateData {
-    const cleanedTemplates = stripDefaultStarterTemplates(profile.itemTemplates).map((t) => ({ ...t }));
+    const cleanedTemplates = stripDefaultStarterTemplates(profile.itemTemplates).map((t) => ({
+      ...t,
+      category: normalizeCategoryWording(t.category),
+    }));
+    const normalizedExpenseCats = (profile.customCategories?.expense || EXPENSE_CATEGORIES)
+      .map(normalizeCategoryWording)
+      .filter((cat, idx, arr) => Boolean(cat) && arr.indexOf(cat) === idx);
     const fullData: BudgetTemplateData = {
       version: profile.version || '1.0.0',
       lastUpdated: profile.lastUpdated || new Date().toISOString(),
       isPersonalizedTemplate: Boolean(profile.isPersonalizedTemplate && cleanedTemplates.length > 0),
       customCategories: {
-        expense: [...(profile.customCategories?.expense || EXPENSE_CATEGORIES)],
+        expense: normalizedExpenseCats,
         income: [...(profile.customCategories?.income || INCOME_CATEGORIES)],
         saving: [...(profile.customCategories?.saving || SAVING_CATEGORIES)],
       },
@@ -273,6 +306,33 @@ export class FinanceStorageService {
       didMigrate = true;
     }
 
+    // Upgrade any legacy/misspelled category wordings across entries, templates, and customCategories
+    if (Array.isArray(budget.itemTemplates)) {
+      budget.itemTemplates = budget.itemTemplates.map((t) => {
+        const normCat = normalizeCategoryWording(t.category);
+        if (normCat !== t.category) didMigrate = true;
+        return { ...t, category: normCat };
+      });
+    }
+    if (Array.isArray(budget.entries)) {
+      budget.entries = budget.entries.map((e) => {
+        const normCat = normalizeCategoryWording(e.category);
+        if (normCat !== e.category) didMigrate = true;
+        return { ...e, category: normCat };
+      });
+    }
+    if (budget.customCategories && Array.isArray(budget.customCategories.expense)) {
+      const normalizedExpense: string[] = [];
+      budget.customCategories.expense.forEach((c) => {
+        const norm = normalizeCategoryWording(c);
+        if (norm !== c) didMigrate = true;
+        if (norm && !normalizedExpense.includes(norm)) {
+          normalizedExpense.push(norm);
+        }
+      });
+      budget.customCategories.expense = normalizedExpense;
+    }
+
     budget.budgets = deriveCategoryBudgetsFromTemplates(budget.itemTemplates || []);
     return { budget, didMigrate };
   }
@@ -335,7 +395,60 @@ export class FinanceStorageService {
       try {
         const parsed = JSON.parse(raw) as YearBudgetData;
         const { budget: normalized, didMigrate } = FinanceStorageService.normalizeBudgetTemplates(parsed);
-        if (didMigrate) {
+        let shouldSave = didMigrate;
+
+        if (year === 2026 && localStorage.getItem(OCT_2026_MIGRATION_KEY) !== 'true') {
+          const octEntryIds = new Set(OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => e.id));
+          const otherEntries = (normalized.entries || []).filter(
+            (e) => e.period !== 'Oct' && !octEntryIds.has(e.id)
+          );
+          normalized.entries = [
+            ...OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => ({ ...e })),
+            ...otherEntries,
+          ];
+          if (!normalized.customCategories) {
+            normalized.customCategories = {
+              expense: [...EXPENSE_CATEGORIES],
+              income: [...INCOME_CATEGORIES],
+              saving: [...SAVING_CATEGORIES],
+            };
+          }
+          OCT_2026_CUSTOM_EXPENSE_CATEGORIES.forEach((cat) => {
+            if (!normalized.customCategories!.expense.includes(cat)) {
+              normalized.customCategories!.expense.push(cat);
+            }
+          });
+          localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
+          shouldSave = true;
+        }
+
+        if (year === 2026 && localStorage.getItem(OCT_2026_TEMPLATE_MIGRATION_KEY) !== 'true') {
+          normalized.itemTemplates = MIGRATED_2026_ITEM_TEMPLATES.map((t) => ({ ...t }));
+          normalized.isPersonalizedTemplate = true;
+          normalized.budgets = deriveCategoryBudgetsFromTemplates(normalized.itemTemplates);
+          if (!normalized.customCategories) {
+            normalized.customCategories = {
+              expense: [...EXPENSE_CATEGORIES],
+              income: [...INCOME_CATEGORIES],
+              saving: [...SAVING_CATEGORIES],
+            };
+          }
+          OCT_2026_CUSTOM_EXPENSE_CATEGORIES.forEach((cat) => {
+            if (!normalized.customCategories!.expense.includes(cat)) {
+              normalized.customCategories!.expense.push(cat);
+            }
+          });
+          FinanceStorageService.saveUserTemplateProfile({
+            lastUpdated: new Date().toISOString(),
+            customCategories: normalized.customCategories,
+            itemTemplates: normalized.itemTemplates,
+            isPersonalizedTemplate: true,
+          });
+          localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
+          shouldSave = true;
+        }
+
+        if (shouldSave) {
           localStorage.setItem(`${LOCAL_STORAGE_KEY_PREFIX}${year}`, JSON.stringify(normalized));
         }
         return normalized;
@@ -346,6 +459,10 @@ export class FinanceStorageService {
 
     const savedProfile = FinanceStorageService.loadUserTemplateProfile();
     const cleanBudget = createEmptyYearBudget(year, savedProfile || undefined);
+    if (year === 2026) {
+      localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
+      localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
+    }
     FinanceStorageService.saveLocalBudget(cleanBudget);
     FinanceStorageService.registerKnownYear(year);
     return cleanBudget;

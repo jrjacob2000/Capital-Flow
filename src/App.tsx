@@ -1227,17 +1227,37 @@ export default function App() {
     );
   };
 
-  // Add multiple entries (e.g. pre-populate period from estimated budgets)
-  const handleAddMultipleBudgetEntries = (entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[]) => {
+  // Add multiple entries (e.g. pre-populate period from estimated budgets or Excel import)
+  const handleAddMultipleBudgetEntries = (
+    entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[],
+    options?: { replacePeriod?: string; customExpenseCategories?: string[] }
+  ) => {
     const newEntries: BudgetEntry[] = entriesData.map((e, idx) => ({
       ...e,
       id: `entry-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
       createdAt: new Date().toISOString(),
     }));
 
+    const baseEntries = options?.replacePeriod
+      ? budget.entries.filter((e) => e.period !== options.replacePeriod)
+      : budget.entries;
+
+    const currentCustomCats = budget.customCategories || {
+      expense: [],
+      income: [],
+      saving: [],
+    };
+    const mergedExpenseCats = options?.customExpenseCategories?.length
+      ? Array.from(new Set([...currentCustomCats.expense, ...options.customExpenseCategories]))
+      : currentCustomCats.expense;
+
     const updatedBudget: YearBudgetData = {
       ...budget,
-      entries: [...newEntries, ...budget.entries],
+      entries: [...newEntries, ...baseEntries],
+      customCategories: {
+        ...currentCustomCats,
+        expense: mergedExpenseCats,
+      },
       lastUpdated: new Date().toISOString(),
     };
 
@@ -1253,7 +1273,11 @@ export default function App() {
     });
     setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
-    showToast(`Added ${newEntries.length} items with estimated amounts to period`);
+    showToast(
+      options?.replacePeriod
+        ? `Migrated ${newEntries.length} actual entries into ${options.replacePeriod} (${budget.year})`
+        : `Added ${newEntries.length} items to period`
+    );
   };
 
   // Reset / delete all local data for live production

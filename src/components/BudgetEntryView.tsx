@@ -50,7 +50,10 @@ interface BudgetEntryViewProps {
   frequency: EntryFrequency;
   onChangeFrequency: (freq: EntryFrequency) => void;
   onAddEntry: (entry: Omit<BudgetEntry, 'id' | 'createdAt'>) => void;
-  onAddMultipleEntries?: (entries: Omit<BudgetEntry, 'id' | 'createdAt'>[]) => void;
+  onAddMultipleEntries?: (
+    entries: Omit<BudgetEntry, 'id' | 'createdAt'>[],
+    options?: { replacePeriod?: string; customExpenseCategories?: string[] }
+  ) => void;
   onUpdateEntry?: (entryId: string, updated: Partial<BudgetEntry>) => void;
   onDeleteEntry: (entryId: string) => void;
   onUpdateCategories: (
@@ -107,7 +110,10 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
       // ignore
     }
   };
-  const currentMonthName = MONTH_NAMES[new Date().getMonth()] || 'Jan';
+  const currentMonthName =
+    budget.entries?.some((e) => e.period === 'Oct')
+      ? 'Oct'
+      : MONTH_NAMES[new Date().getMonth()] || 'Oct';
   const currentBiWeeklyPeriod = `${currentMonthName}-${new Date().getDate() <= 15 ? 'P1' : 'P2'}`;
   const defaultPeriod = frequency === 'monthly' ? currentMonthName : currentBiWeeklyPeriod;
   const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<string>(defaultPeriod);
