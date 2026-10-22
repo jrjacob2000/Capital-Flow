@@ -148,9 +148,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
   // Form states - Deposit
   const [depositAmount, setDepositAmount] = useState('');
-  const [depositType, setDepositType] = useState<'interest_yield' | 'manual_deposit'>('interest_yield');
+  const [depositType, setDepositType] = useState<'interest_yield' | 'manual_deposit'>('manual_deposit');
   const [depositAccountId, setDepositAccountId] = useState(ledger.accounts[0]?.id || '');
   const [depositCategory, setDepositCategory] = useState<string>('');
+  const [depositCustomCategory, setDepositCustomCategory] = useState<string>('');
   const [depositNote, setDepositNote] = useState('');
   const [depositDate, setDepositDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -172,6 +173,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [isReallocateModalOpen, setIsReallocateModalOpen] = useState(false);
   const [reallocateFromCategory, setReallocateFromCategory] = useState<string>('General Reserves / Starting Capital');
   const [reallocateToCategory, setReallocateToCategory] = useState<string>('');
+  const [reallocateCustomCategory, setReallocateCustomCategory] = useState<string>('');
   const [reallocateAmount, setReallocateAmount] = useState('');
   const [reallocateAccountId, setReallocateAccountId] = useState<string>('');
   const [reallocateNote, setReallocateNote] = useState('');
@@ -206,6 +208,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [editTxDate, setEditTxDate] = useState('');
   const [editTxNote, setEditTxNote] = useState('');
   const [editTxAccountId, setEditTxAccountId] = useState('');
+  const [editTxCategory, setEditTxCategory] = useState('');
+  const [editTxCustomCategory, setEditTxCustomCategory] = useState('');
 
   const handleOpenEditTx = (tx: SavingsTransaction) => {
     setEditingTx(tx);
@@ -213,6 +217,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setEditTxDate(tx.date);
     setEditTxNote(tx.note);
     setEditTxAccountId(tx.accountId);
+    setEditTxCategory(tx.category || '');
+    setEditTxCustomCategory('');
   };
 
   const handleSaveEditTx = (e: React.FormEvent) => {
@@ -221,6 +227,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     const amt = parseFloat(editTxAmount);
     if (isNaN(amt) || amt <= 0) return;
     const targetAcc = ledger.accounts.find((a) => a.id === editTxAccountId) || ledger.accounts[0];
+    const resolvedCategory =
+      editTxCategory === '__custom__' ? editTxCustomCategory.trim() : editTxCategory.trim();
     const d = new Date(editTxDate);
     onUpdateTransaction(editingTx.id, {
       amount: amt,
@@ -228,6 +236,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       year: d.getFullYear(),
       period: d.toLocaleString('default', { month: 'short' }),
       note: editTxNote.trim() || editingTx.note,
+      category: resolvedCategory || undefined,
       accountId: targetAcc ? targetAcc.id : editingTx.accountId,
       accountName: targetAcc ? targetAcc.name : editingTx.accountName,
     });
@@ -407,9 +416,15 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       let fundName = '';
       let category = tx.category || 'Savings';
 
+      // If explicitly placed into General Reserves / Starting Capital (unallocated),
+      // skip creating a named category fund so it stays in the unallocated remainder pool.
+      if (tx.category && tx.category.trim().toLowerCase() === 'general reserves / starting capital') {
+        return;
+      }
+
       if (tx.source === 'interest_yield') {
-        fundName = 'Compounding Yields & Dividend';
-        category = 'Yield & Interest';
+        fundName = tx.category && tx.category.trim() ? tx.category.trim() : 'Compounding Yields & Dividend';
+        category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
         fundName = tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim() || 'General Withdrawal';
         category = tx.category || 'Withdrawal';
@@ -420,6 +435,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         if (linkedEntry) {
           fundName = linkedEntry.item || linkedEntry.description || linkedEntry.category || 'General Savings';
           category = linkedEntry.category || category;
+        } else if (tx.source === 'manual_deposit' && !tx.category) {
+          const cleanNote = tx.note
+            .replace(/^Budget Sync:\s*/i, '')
+            .replace(/^Manual Deposit:\s*/i, '')
+            .trim();
+          // Only match to a fund if the note matches a known fund name; otherwise keep in General Reserves
+          if (cleanNote && fundMap.has(cleanNote.toLowerCase())) {
+            fundName = cleanNote;
+          } else {
+            return;
+          }
         } else {
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
@@ -603,6 +629,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
     const acc = ledger.accounts.find((a) => a.id === depositAccountId) || ledger.accounts[0];
     const d = new Date(depositDate);
+    const chosenCategory =
+      depositCategory === '__custom__' ? depositCustomCategory.trim() : depositCategory.trim();
 
     onAddTransaction({
       date: depositDate,
@@ -612,15 +640,19 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       accountId: acc.id,
       accountName: acc.name,
       source: depositType,
-      category: depositCategory.trim() || undefined,
+      category: chosenCategory || undefined,
       note:
         depositNote.trim() ||
-        depositCategory.trim() ||
-        (depositType === 'interest_yield' ? 'Compound yield payout' : 'Capital injection'),
+        (chosenCategory && chosenCategory !== 'General Reserves / Starting Capital'
+          ? `${depositType === 'interest_yield' ? 'Yield' : 'Direct Deposit'}: ${chosenCategory}`
+          : depositType === 'interest_yield'
+            ? 'Compound yield payout'
+            : 'Direct capital injection'),
     });
 
     setDepositAmount('');
     setDepositCategory('');
+    setDepositCustomCategory('');
     setDepositNote('');
     setIsTransactionModalOpen(false);
   };
@@ -685,7 +717,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     e.preventDefault();
     const amountNum = parseFloat(reallocateAmount);
     if (isNaN(amountNum) || amountNum <= 0) return;
-    if (reallocateFromCategory === reallocateToCategory) return;
+    const targetCat =
+      reallocateToCategory === '__custom__'
+        ? reallocateCustomCategory.trim()
+        : reallocateToCategory.trim();
+    if (!targetCat || reallocateFromCategory === targetCat) return;
 
     const acc = ledger.accounts.find((a) => a.id === reallocateAccountId);
     const d = new Date(reallocateDate);
@@ -699,11 +735,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       accountName: acc ? acc.name : (ledger.accounts[0]?.name || 'General Account'),
       source: 'reallocation',
       category: reallocateFromCategory,
-      toCategory: reallocateToCategory,
-      note: reallocateNote.trim() || `Reallocated from ${reallocateFromCategory} to ${reallocateToCategory}`,
+      toCategory: targetCat,
+      note: reallocateNote.trim() || `Reallocated from ${reallocateFromCategory} to ${targetCat}`,
     });
 
     setReallocateAmount('');
+    setReallocateCustomCategory('');
     setReallocateNote('');
     setIsReallocateModalOpen(false);
   };
@@ -1120,7 +1157,15 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       )}
                     </td>
                     <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
-                      {tx.note}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span>{tx.note}</span>
+                        {tx.category && tx.source !== 'reallocation' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70">
+                            <Target className="w-2.5 h-2.5" />
+                            <span>{tx.category}</span>
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-right font-mono font-bold whitespace-nowrap">
                       {tx.source === 'withdrawal' ? (
@@ -1849,25 +1894,53 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
                 <div>
                   <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Target Category / Sinking Fund <span className="text-slate-400 font-normal">(Optional)</span>
+                    Which Fund to Put the Money In (Category / Sinking Fund)
                   </label>
                   <select
                     value={depositCategory}
                     onChange={(e) => setDepositCategory(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                   >
-                    <option value="">-- General Reserves / Use Memo Below --</option>
+                    {depositType === 'interest_yield' ? (
+                      <option value="">Compounding Yields &amp; Dividend (Default Yield Pool)</option>
+                    ) : (
+                      <option value="">General Reserves / Starting Capital (Unallocated)</option>
+                    )}
                     {Array.from(
                       new Set([
                         ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
                         ...(budget?.customCategories?.saving || []),
                       ])
-                    ).map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
+                    ).map((cat) => {
+                      const matchingFund = categoryFunds.find(
+                        (f) => f.name.toLowerCase() === cat.toLowerCase()
+                      );
+                      return (
+                        <option key={cat} value={cat}>
+                          {cat}
+                          {matchingFund
+                            ? ` — Current: ${currencySymbol}${formatNumber(matchingFund.currentBalance)}`
+                            : ''}
+                        </option>
+                      );
+                    })}
+                    <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
                   </select>
+                  {depositCategory === '__custom__' && (
+                    <div className="mt-2">
+                      <input
+                        type="text"
+                        required
+                        placeholder="Enter new fund name (e.g. Emergency Fund, MP2, Travel Fund)"
+                        value={depositCustomCategory}
+                        onChange={(e) => setDepositCustomCategory(e.target.value)}
+                        className="w-full px-3 py-2 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  )}
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Choose which earmarked fund receives this deposit, or leave as General Reserves to add to your unallocated balance.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2823,10 +2896,21 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   ))}
                   {budget?.customCategories?.saving?.map((cat) => (
                     <option key={`custom-${cat}`} value={cat}>
-                      {cat} (New / Custom Category)
+                      {cat} (Custom Budget Category)
                     </option>
                   ))}
+                  <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
                 </select>
+                {reallocateToCategory === '__custom__' && (
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter new fund name (e.g. House Downpayment, Car Fund)"
+                    value={reallocateCustomCategory}
+                    onChange={(e) => setReallocateCustomCategory(e.target.value)}
+                    className="mt-2 w-full px-3 py-2 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                  />
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -2903,7 +2987,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={!reallocateToCategory || !reallocateAmount}
+                  disabled={
+                    !reallocateToCategory ||
+                    (reallocateToCategory === '__custom__' && !reallocateCustomCategory.trim()) ||
+                    !reallocateAmount
+                  }
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                 >
                   Confirm Reallocation
@@ -2933,7 +3021,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <form onSubmit={handleSaveEditTx} className="mt-4 space-y-3.5">
               <div>
                 <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  Account
+                  Destination / Source Account
                 </label>
                 <select
                   value={editTxAccountId}
@@ -2947,6 +3035,42 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   ))}
                 </select>
               </div>
+              {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
+                    Category / Sinking Fund (Envelope)
+                  </label>
+                  <select
+                    value={editTxCategory}
+                    onChange={(e) => setEditTxCategory(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  >
+                    <option value="">General Reserves / Starting Capital (Unallocated)</option>
+                    {Array.from(
+                      new Set([
+                        ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
+                        ...(budget?.customCategories?.saving || []),
+                        ...(editingTx.category ? [editingTx.category] : []),
+                      ])
+                    ).map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                    <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
+                  </select>
+                  {editTxCategory === '__custom__' && (
+                    <input
+                      type="text"
+                      required
+                      placeholder="Enter new fund name..."
+                      value={editTxCustomCategory}
+                      onChange={(e) => setEditTxCustomCategory(e.target.value)}
+                      className="mt-2 w-full px-3 py-2 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                    />
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
