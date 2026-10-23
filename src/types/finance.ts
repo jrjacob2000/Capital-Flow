@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.7.4';
+export const APP_VERSION = '1.9.0';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
@@ -42,6 +42,8 @@ export interface BudgetEntry {
   // If saving entry:
   savingAccountId?: string;
   savingAccountName?: string;
+  // If linked to a loan record:
+  loanId?: string;
   createdAt: string;
 }
 
@@ -89,6 +91,50 @@ export interface BudgetItemTemplate {
   defaultPaymentMethod?: PaymentMethod;
   defaultSavingAccountId?: string;
   toBeWithdrawn?: boolean;
+  loanId?: string;
+}
+
+export type LoanDirection = 'borrowed' | 'lent';
+
+export type LoanStatus = 'active' | 'completed';
+
+export interface LoanPayment {
+  id: string;
+  loanId: string;
+  date: string;
+  year?: number;
+  period?: string;
+  amount: number;
+  source: 'budget_sync' | 'manual_payment';
+  budgetEntryId?: string;
+  accountId?: string;
+  accountName?: string;
+  ledgerTransactionId?: string;
+  note?: string;
+}
+
+export interface LoanRecord {
+  id: string;
+  name: string;
+  direction: LoanDirection; // 'borrowed' (I owe) | 'lent' (Owed to me)
+  category: string;
+  counterparty?: string; // Lender or Borrower name
+  principalAmount: number;
+  totalContractAmount: number; // Total fixed payable/receivable amount
+  installmentAmount: number; // Fixed periodic installment
+  totalInstallments: number; // Total number of fixed installments
+  frequency: 'monthly' | 'bi-weekly';
+  biweeklyPeriod?: 'P1' | 'P2' | 'both';
+  initialPaidAmount: number; // Amount already paid/collected prior to tracking
+  initialInstallmentsPaid: number; // Terms already paid prior to tracking
+  startDate: string;
+  dueDay?: string;
+  status: LoanStatus;
+  linkedTemplateId?: string;
+  payments: LoanPayment[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface YearBudgetData {
@@ -165,6 +211,7 @@ export interface SavingsLedgerData {
   initialCapital: number;
   accounts: SavingsAccount[];
   transactions: SavingsTransaction[];
+  loans?: LoanRecord[];
 }
 
 export interface BudgetTemplateData {
@@ -206,5 +253,6 @@ export interface DriveSyncStatus {
   folderName?: string;
   isSessionExpired?: boolean;
 }
+
 
 

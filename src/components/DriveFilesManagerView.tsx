@@ -315,17 +315,22 @@ export const DriveFilesManagerView: React.FC<DriveFilesManagerViewProps> = ({
 
           {driveStatus.isSignedIn && (
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {(!folderId || unorganizedFilesCount > 0) && onOrganizeDriveFolder && (
+              {onOrganizeDriveFolder && (
                 <button
                   onClick={onOrganizeDriveFolder}
                   disabled={driveStatus.isSyncing}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                  className={`px-3 py-1.5 font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                    !folderId || unorganizedFilesCount > 0
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                      : 'bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
+                  }`}
+                  title="Deduplicate folders and verify all CapitalFlow database files reside in one dedicated folder"
                 >
-                  <Folder className="w-3.5 h-3.5" />
+                  <Folder className="w-3.5 h-3.5 text-amber-500" />
                   <span>
-                    {folderId
+                    {unorganizedFilesCount > 0
                       ? `Move ${unorganizedFilesCount} File(s) to Folder`
-                      : 'Create Folder Now'}
+                      : 'Organize & Deduplicate'}
                   </span>
                 </button>
               )}

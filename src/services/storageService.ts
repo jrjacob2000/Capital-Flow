@@ -6,6 +6,8 @@ import {
   SavingsTransaction,
   DriveFileInfo,
   BudgetItemTemplate,
+  LoanRecord,
+  LoanPayment,
 } from '../types/finance';
 import {
   getBudgetFileName,
@@ -18,6 +20,7 @@ import {
   findCapitalFlowFolder,
   ensureCapitalFlowFolder,
   organizeCapitalFlowFilesInFolder,
+  clearDriveFolderCache,
 } from './driveService';
 import {
   generateInitial2026Budget,
@@ -638,6 +641,9 @@ export class FinanceStorageService {
       try {
         const parsed: SavingsLedgerData = JSON.parse(raw);
         let ledgerMigrated = false;
+        if (!Array.isArray(parsed.loans)) {
+          parsed.loans = [];
+        }
         if (Array.isArray(parsed.transactions)) {
           parsed.transactions = parsed.transactions.map((tx) => {
             const updated = { ...tx };
@@ -676,6 +682,7 @@ export class FinanceStorageService {
 
     const budget2026 = FinanceStorageService.loadLocalBudget(2026);
     const initialLedger = generateInitialSavingsLedger(budget2026);
+    initialLedger.loans = [];
     FinanceStorageService.saveLocalSavingsLedger(initialLedger);
     return initialLedger;
   }
@@ -702,6 +709,9 @@ export class FinanceStorageService {
 
   static saveLocalSavingsLedger(ledger: SavingsLedgerData): void {
     ledger.lastUpdated = new Date().toISOString();
+    if (!Array.isArray(ledger.loans)) {
+      ledger.loans = [];
+    }
     // Recompute running totals chronologically
     let running = ledger.initialCapital || 0;
     const sorted = [...ledger.transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -717,6 +727,109 @@ export class FinanceStorageService {
     });
     ledger.transactions = sorted;
     localStorage.setItem(LOCAL_STORAGE_KEY_LEDGER, JSON.stringify(ledger));
+  }
+
+  /**
+   * Syncs a budget entry (expense under Loans or linked via loanId/item name, or income for lent loan repayment)
+   * with the Loans list inside SavingsLedgerData.
+   */
+  static syncBudgetLoanPaymentToLedger(
+    entry: BudgetEntry,
+    isDelete: boolean = false
+  ): { ledger: SavingsLedgerData; matchedLoan: LoanRecord | null } {
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = ledger.loans || [];
+    if (loans.length === 0) {
+      return { ledger, matchedLoan: null };
+    }
+
+    const effectiveAmount = entry.actualCost ?? entry.amount ?? 0;
+    const isPaidOrRecorded = !isDelete && effectiveAmount > 0 && entry.status !== 'Pending';
+
+    // 1. Check if any loan already has a payment linked to this budgetEntryId
+    let existingLoan: LoanRecord | undefined = loans.find((ln) =>
+      (ln.payments || []).some((p) => p.budgetEntryId === entry.id)
+    );
+
+    // 2. Find target loan by explicit loanId or by matching name when category is Loans / matching direction
+    const itemNameLower = (entry.item || entry.description || '').trim().toLowerCase();
+    const catLower = (entry.category || '').trim().toLowerCase();
+
+    let targetLoan: LoanRecord | undefined = entry.loanId
+      ? loans.find((ln) => ln.id === entry.loanId)
+      : undefined;
+
+    if (!targetLoan && itemNameLower) {
+      if (entry.type === 'expense') {
+        targetLoan = loans.find(
+          (ln) =>
+            ln.direction === 'borrowed' &&
+            (ln.name.trim().toLowerCase() === itemNameLower ||
+              (catLower.includes('loan') &&
+                (itemNameLower.includes(ln.name.trim().toLowerCase()) ||
+                  ln.name.trim().toLowerCase().includes(itemNameLower))))
+        );
+      } else if (entry.type === 'income') {
+        targetLoan = loans.find(
+          (ln) =>
+            ln.direction === 'lent' &&
+            (ln.name.trim().toLowerCase() === itemNameLower ||
+              (catLower.includes('loan') || catLower.includes('receivable')) &&
+                (itemNameLower.includes(ln.name.trim().toLowerCase()) ||
+                  ln.name.trim().toLowerCase().includes(itemNameLower)))
+        );
+      }
+    }
+
+    const recalculateLoanStatus = (ln: LoanRecord) => {
+      const paidViaPayments = (ln.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+      const totalPaid = (ln.initialPaidAmount || 0) + paidViaPayments;
+      ln.status = ln.totalContractAmount > 0 && totalPaid >= ln.totalContractAmount ? 'completed' : 'active';
+      ln.updatedAt = new Date().toISOString();
+    };
+
+    let ledgerModified = false;
+
+    // If the entry was previously linked to a different loan, or is now deleted/pending/zero, remove from old loan
+    if (existingLoan && (!isPaidOrRecorded || (targetLoan && targetLoan.id !== existingLoan.id))) {
+      existingLoan.payments = (existingLoan.payments || []).filter((p) => p.budgetEntryId !== entry.id);
+      recalculateLoanStatus(existingLoan);
+      ledgerModified = true;
+    }
+
+    const activeLoan = isPaidOrRecorded ? (targetLoan || existingLoan) : null;
+
+    if (activeLoan && isPaidOrRecorded) {
+      if (!Array.isArray(activeLoan.payments)) {
+        activeLoan.payments = [];
+      }
+      const existingPaymentIdx = activeLoan.payments.findIndex((p) => p.budgetEntryId === entry.id);
+      const paymentPayload: LoanPayment = {
+        id: existingPaymentIdx >= 0 ? activeLoan.payments[existingPaymentIdx].id : `lpay-${entry.id}`,
+        loanId: activeLoan.id,
+        date: entry.date,
+        year: entry.year,
+        period: entry.period,
+        amount: effectiveAmount,
+        source: 'budget_sync',
+        budgetEntryId: entry.id,
+        note: `${entry.period} ${entry.year} Budget (${entry.item || entry.description || activeLoan.name})`,
+      };
+
+      if (existingPaymentIdx >= 0) {
+        activeLoan.payments[existingPaymentIdx] = paymentPayload;
+      } else {
+        activeLoan.payments.push(paymentPayload);
+      }
+      recalculateLoanStatus(activeLoan);
+      ledgerModified = true;
+    }
+
+    if (ledgerModified) {
+      FinanceStorageService.saveLocalSavingsLedger(ledger);
+    }
+
+    return { ledger, matchedLoan: activeLoan || existingLoan || null };
   }
 
   /**
@@ -1012,12 +1125,13 @@ export class FinanceStorageService {
   }
 
   /**
-   * Ensures the dedicated folder exists and moves any existing CapitalFlow JSON files into it
+   * Ensures the dedicated folder exists, cleans duplicate folders, and moves any existing CapitalFlow JSON files into it
    */
   static async organizeFilesIntoFolder(accessToken: string): Promise<{
     folder: DriveFileInfo;
     movedCount: number;
     files: DriveFileInfo[];
+    cleanedDuplicatesCount: number;
   }> {
     const res = await organizeCapitalFlowFilesInFolder(accessToken);
     res.files.forEach((file) => {
@@ -1027,6 +1141,13 @@ export class FinanceStorageService {
       }
     });
     return res;
+  }
+
+  /**
+   * Clears the in-memory and local storage Drive folder cache
+   */
+  static clearDriveFolderCache(): void {
+    clearDriveFolderCache();
   }
 }
 

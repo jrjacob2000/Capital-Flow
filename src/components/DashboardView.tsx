@@ -35,6 +35,7 @@ interface DashboardViewProps {
   frequency: EntryFrequency;
   onOpenAddEntry?: (type?: EntryType) => void;
   onNavigateToSavings: () => void;
+  onNavigateToLoans?: () => void;
   onNavigateToBudget: () => void;
   onNavigateToDrive: () => void;
   currencySymbol?: string;
@@ -45,6 +46,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   ledger,
   frequency,
   onNavigateToSavings,
+  onNavigateToLoans,
   onNavigateToBudget,
   onNavigateToDrive,
   currencySymbol = '$',
@@ -343,6 +345,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <PiggyBank className="w-4 h-4 text-emerald-300" />
               <span>Manage Funds &amp; Accounts</span>
             </button>
+            {onNavigateToLoans && (
+              <button
+                onClick={onNavigateToLoans}
+                className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-medium text-xs rounded-xl backdrop-blur-xs border border-white/15 transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <Receipt className="w-4 h-4 text-indigo-300" />
+                <span>Loans &amp; Receivables</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

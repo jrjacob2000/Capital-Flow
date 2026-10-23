@@ -3561,7 +3561,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   {Array.from(
                     new Set([
                       ...SAVING_CATEGORIES,
-                      ...(budget.customCategories?.saving || []),
+                      ...(budget?.customCategories?.saving || []),
                       editFundCategory || 'Short-Term & General Savings',
                     ])
                   )

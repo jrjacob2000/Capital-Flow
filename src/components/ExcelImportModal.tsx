@@ -150,14 +150,16 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
         const bankTransfer = parseCurrencyNumber(row[11]);
         const refText = String(row[14] ?? '').trim();
 
-        const methodPairs: { method: PaymentMethod; val: number }[] = [
-          { method: 'Cash', val: cash },
-          { method: 'Credit Card', val: creditCard },
-          { method: 'GCash Transfer', val: gcashTransfer },
-          { method: 'Kath Account', val: kathAccount },
-          { method: 'Checking Account', val: checkAccount },
-          { method: 'Bank Transfer', val: bankTransfer },
-        ].filter((m) => m.val > 0);
+        const methodPairs: { method: PaymentMethod; val: number }[] = (
+          [
+            { method: 'Cash', val: cash },
+            { method: 'Credit Card', val: creditCard },
+            { method: 'GCash Transfer', val: gcashTransfer },
+            { method: 'Kath Account', val: kathAccount },
+            { method: 'Checking Account', val: checkAccount },
+            { method: 'Bank Transfer', val: bankTransfer },
+          ] as { method: PaymentMethod; val: number }[]
+        ).filter((m) => m.val > 0);
 
         let primaryMethod: PaymentMethod = 'Bank Transfer';
         if (methodPairs.length > 0) {

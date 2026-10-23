@@ -16,10 +16,12 @@ import {
   BudgetItemTemplate,
   DriveSyncStatus,
   DriveFileInfo,
+  LoanRecord,
+  LoanPayment,
   APP_VERSION,
 } from './types/finance';
 import { FinanceStorageService } from './services/storageService';
-import { normalizeSavingCategoryGroup } from './services/sampleData';
+import { normalizeSavingCategoryGroup, MONTH_NAMES, BIWEEKLY_PERIODS } from './services/sampleData';
 import {
   initAuth,
   googleSignIn,
@@ -33,6 +35,7 @@ import { Header } from './components/Header';
 import { DashboardView } from './components/DashboardView';
 import { BudgetEntryView } from './components/BudgetEntryView';
 import { SavingsLedgerView } from './components/SavingsLedgerView';
+import { LoansView } from './components/LoansView';
 import { DriveFilesManagerView } from './components/DriveFilesManagerView';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { DriveConflictModal, DriveConflictDetail } from './components/DriveConflictModal';
@@ -51,7 +54,7 @@ export default function App() {
   const [currentYear, setCurrentYear] = useState<number>(2026);
   const [availableYears, setAvailableYears] = useState<number[]>([2026, 2025]);
   const [frequency, setFrequency] = useState<EntryFrequency>('monthly');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'budget' | 'savings' | 'drive'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'budget' | 'savings' | 'loans' | 'drive'>('dashboard');
 
   // Core Financial Data
   const [budget, setBudget] = useState<YearBudgetData>(() =>
@@ -187,10 +190,7 @@ export default function App() {
             isSyncing: true,
             syncMessage: `Checking /${CAPITALFLOW_DRIVE_FOLDER_NAME}/ folder in Google Drive...`,
           }));
-          const [folder, files] = await Promise.all([
-            FinanceStorageService.getOrCreateDriveFolder(token, false),
-            FinanceStorageService.fetchDriveFiles(token),
-          ]);
+          const { folder, files, cleanedDuplicatesCount } = await FinanceStorageService.organizeFilesIntoFolder(token);
           setDriveFiles(files);
           setDriveStatus((prev) => ({
             ...prev,
@@ -199,6 +199,9 @@ export default function App() {
             folderId: folder ? folder.id : prev.folderId,
             folderName: folder ? folder.name : prev.folderName,
           }));
+          if (cleanedDuplicatesCount > 0) {
+            showToast(`Consolidated ${cleanedDuplicatesCount} duplicate folder${cleanedDuplicatesCount > 1 ? 's' : ''} in Google Drive.`, 'info');
+          }
           const years = FinanceStorageService.getKnownYears();
           setAvailableYears(years);
         } catch (e: any) {
@@ -507,6 +510,7 @@ export default function App() {
 
           const isIdentical =
             JSON.stringify(currentLocalLedger.transactions) === JSON.stringify(driveLedgerRes.ledger.transactions) &&
+            JSON.stringify(currentLocalLedger.loans || []) === JSON.stringify(driveLedgerRes.ledger.loans || []) &&
             currentLocalLedger.accounts?.length === driveLedgerRes.ledger.accounts?.length &&
             currentLocalLedger.initialCapital === driveLedgerRes.ledger.initialCapital;
 
@@ -686,12 +690,14 @@ export default function App() {
 
   const handleSignOut = async () => {
     await logout();
+    FinanceStorageService.clearDriveFolderCache();
     setDriveStatus((prev) => ({
       ...prev,
       isSignedIn: false,
       userEmail: null,
       userName: null,
       userPhoto: null,
+      folderId: null,
     }));
     showToast('Signed out of Google Drive', 'info');
   };
@@ -840,7 +846,13 @@ export default function App() {
       setLedger(updatedLedger);
       showToast(`Savings accumulated: +₱${newEntry.amount} transferred to ${newEntry.savingAccountName || 'Savings Ledger'}`);
     } else {
-      showToast(`Recorded ${newEntry.type}: ₱${newEntry.amount}`);
+      const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(newEntry, false);
+      if (loanSync.matchedLoan) {
+        setLedger({ ...loanSync.ledger });
+        showToast(`Recorded ${newEntry.type}: ₱${newEntry.amount} (Synced to loan "${loanSync.matchedLoan.name}")`);
+      } else {
+        showToast(`Recorded ${newEntry.type}: ₱${newEntry.amount}`);
+      }
     }
   };
 
@@ -876,6 +888,13 @@ export default function App() {
     } else if (target?.type === 'saving') {
       const updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(target, false);
       setLedger(updatedLedger);
+    }
+
+    if (target) {
+      const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(target, false);
+      if (loanSync.matchedLoan) {
+        setLedger({ ...loanSync.ledger });
+      }
     }
 
     showToast(`Updated entry: ${target?.item || target?.description || 'Item'}`);
@@ -920,7 +939,13 @@ export default function App() {
           setLedger(updatedLedger);
           showToast(`Removed Funds entry and updated Funds ledger`);
         } else {
-          showToast(`Deleted ${entry.type} entry`);
+          const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(entry, true);
+          if (loanSync.matchedLoan) {
+            setLedger({ ...loanSync.ledger });
+            showToast(`Deleted entry and rolled back loan payment on "${loanSync.matchedLoan.name}"`);
+          } else {
+            showToast(`Deleted ${entry.type} entry`);
+          }
         }
         setConfirmationModal((m) => ({ ...m, isOpen: false }));
       },
@@ -1546,10 +1571,11 @@ export default function App() {
       createdAt: new Date().toISOString(),
     }));
 
-    // If replacing an existing period, roll back any previous saving entries from that period in the ledger first
-    const removedPeriodSavings = options?.replacePeriod
-      ? budget.entries.filter((e) => e.period === options.replacePeriod && e.type === 'saving')
+    // If replacing an existing period, roll back any previous saving & loan entries from that period in the ledger first
+    const removedPeriodEntries = options?.replacePeriod
+      ? budget.entries.filter((e) => e.period === options.replacePeriod)
       : [];
+    const removedPeriodSavings = removedPeriodEntries.filter((e) => e.type === 'saving');
 
     const baseEntries = options?.replacePeriod
       ? budget.entries.filter((e) => e.period !== options.replacePeriod)
@@ -1577,14 +1603,23 @@ export default function App() {
     setBudget(updatedBudget);
     FinanceStorageService.saveLocalBudget(updatedBudget);
 
-    // Sync any saving entries to ledger (rolling back replaced period savings first)
+    // Sync any saving & loan entries to ledger (rolling back replaced period entries first)
     let updatedLedger = ledger;
     removedPeriodSavings.forEach((oldSaving) => {
       updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldSaving, true);
     });
+    removedPeriodEntries.forEach((oldEntry) => {
+      if (oldEntry.type !== 'saving') {
+        const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(oldEntry, true);
+        updatedLedger = res.ledger;
+      }
+    });
     newEntries.forEach((entry) => {
       if (entry.type === 'saving' && (entry.actualCost ?? entry.amount ?? 0) > 0) {
         updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, false);
+      } else if (entry.type !== 'saving') {
+        const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(entry, false);
+        updatedLedger = res.ledger;
       }
     });
     setLedger({ ...updatedLedger });
@@ -1594,6 +1629,281 @@ export default function App() {
         ? `Migrated ${newEntries.length} actual entries into ${options.replacePeriod} (${budget.year})`
         : `Added ${newEntries.length} items to period`
     );
+  };
+
+  // --- LOANS & RECEIVABLES HANDLERS ---
+
+  const syncLoanToBudgetTemplateHelper = (
+    loan: LoanRecord,
+    currentBudget: YearBudgetData
+  ): { updatedBudget: YearBudgetData; templateId: string } => {
+    const templates = [...(currentBudget.itemTemplates || [])];
+    const targetType: EntryType = loan.direction === 'borrowed' ? 'expense' : 'income';
+    const targetCat = loan.direction === 'borrowed' ? 'Loans' : 'Other Income';
+
+    const existingIdx = templates.findIndex(
+      (t) =>
+        (loan.linkedTemplateId && t.id === loan.linkedTemplateId) ||
+        (t.loanId && t.loanId === loan.id) ||
+        (t.type === targetType && t.item.trim().toLowerCase() === loan.name.trim().toLowerCase())
+    );
+
+    const templateId = existingIdx >= 0 ? templates[existingIdx].id : `tpl-loan-${loan.id}`;
+    const tplPayload: BudgetItemTemplate = {
+      id: templateId,
+      type: targetType,
+      category: existingIdx >= 0 ? templates[existingIdx].category : targetCat,
+      item: loan.name,
+      defaultEstimatedCost: loan.installmentAmount,
+      frequency: loan.frequency,
+      biweeklyPeriod: loan.biweeklyPeriod || 'both',
+      defaultPaymentMethod: existingIdx >= 0 ? templates[existingIdx].defaultPaymentMethod : 'Bank Transfer',
+      loanId: loan.id,
+    };
+
+    if (existingIdx >= 0) {
+      templates[existingIdx] = tplPayload;
+    } else {
+      templates.push(tplPayload);
+    }
+
+    const customCats = currentBudget.customCategories
+      ? {
+          expense: [...currentBudget.customCategories.expense],
+          income: [...currentBudget.customCategories.income],
+          saving: [...currentBudget.customCategories.saving],
+        }
+      : { expense: ['Loans'], income: ['Other Income'], saving: [] };
+
+    if (targetType === 'expense' && !customCats.expense.includes('Loans')) {
+      customCats.expense.push('Loans');
+    }
+
+    const updatedBudget: YearBudgetData = {
+      ...currentBudget,
+      itemTemplates: templates,
+      customCategories: customCats,
+      isPersonalizedTemplate: templates.length > 0,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    return { updatedBudget, templateId };
+  };
+
+  const handleSaveLoan = (loan: LoanRecord, options?: { syncToTemplate?: boolean }) => {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = [...(currentLedger.loans || [])];
+    const existingIdx = loans.findIndex((l) => l.id === loan.id);
+
+    let updatedLoan = { ...loan };
+
+    if (options?.syncToTemplate || updatedLoan.linkedTemplateId) {
+      const { updatedBudget, templateId } = syncLoanToBudgetTemplateHelper(updatedLoan, budget);
+      updatedLoan.linkedTemplateId = templateId;
+      setBudget(updatedBudget);
+      setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
+    }
+
+    if (existingIdx >= 0) {
+      loans[existingIdx] = updatedLoan;
+    } else {
+      loans.unshift(updatedLoan);
+    }
+
+    currentLedger.loans = loans;
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    setLedger({ ...currentLedger });
+    setHasUnsavedChanges(true);
+    showToast(
+      existingIdx >= 0
+        ? `Updated loan "${updatedLoan.name}"`
+        : `Added ${updatedLoan.direction === 'borrowed' ? 'borrowed loan' : 'receivable'} "${updatedLoan.name}"`
+    );
+  };
+
+  const handleDeleteLoan = (loanId: string) => {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const target = (currentLedger.loans || []).find((l) => l.id === loanId);
+    if (!target) return;
+
+    const currSym = currentLedger.currency || '₱';
+
+    setConfirmationModal({
+      isOpen: true,
+      title: `Delete ${target.direction === 'borrowed' ? 'Loan' : 'Receivable'} Contract?`,
+      description: `Are you sure you want to remove "${target.name}" from your Loans ledger? Existing Budget Sheet entries will remain untouched.`,
+      affectedItems: [
+        `${target.name} (${target.category}) — ${currSym}${target.totalContractAmount.toLocaleString()}`,
+      ],
+      confirmLabel: 'Yes, Delete Loan',
+      isDestructive: true,
+      onConfirm: async () => {
+        const latestLedger = FinanceStorageService.loadLocalSavingsLedger();
+        latestLedger.loans = (latestLedger.loans || []).filter((l) => l.id !== loanId);
+        FinanceStorageService.saveLocalSavingsLedger(latestLedger);
+        setLedger({ ...latestLedger });
+        setHasUnsavedChanges(true);
+        showToast(`Removed loan "${target.name}"`);
+        setConfirmationModal((m) => ({ ...m, isOpen: false }));
+      },
+    });
+  };
+
+  const handleRecordLoanPayment = (
+    loanId: string,
+    paymentData: {
+      amount: number;
+      date: string;
+      note: string;
+      recordInBudget?: boolean;
+      depositToAccountId?: string;
+    }
+  ) => {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = [...(currentLedger.loans || [])];
+    const loanIdx = loans.findIndex((l) => l.id === loanId);
+    if (loanIdx === -1) return;
+
+    const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
+    const payDateObj = new Date(paymentData.date);
+    const monthIdx = isNaN(payDateObj.getMonth()) ? new Date().getMonth() : payDateObj.getMonth();
+    const dayOfMonth = isNaN(payDateObj.getDate()) ? 15 : payDateObj.getDate();
+    const monthName = MONTH_NAMES[monthIdx] || 'Oct';
+    const resolvedPeriod =
+      frequency === 'bi-weekly'
+        ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
+        : monthName;
+    const resolvedPeriodIdx =
+      frequency === 'bi-weekly'
+        ? Math.max(0, BIWEEKLY_PERIODS.findIndex((p) => p.id === resolvedPeriod))
+        : monthIdx;
+
+    let linkedBudgetEntryId: string | undefined;
+
+    if (paymentData.recordInBudget) {
+      const entryId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      linkedBudgetEntryId = entryId;
+      const newBudgetEntry: BudgetEntry = {
+        id: entryId,
+        year: budget.year,
+        period: resolvedPeriod,
+        periodIndex: resolvedPeriodIdx,
+        date: paymentData.date,
+        type: loan.direction === 'borrowed' ? 'expense' : 'income',
+        category: loan.direction === 'borrowed' ? 'Loans' : 'Other Income',
+        item: loan.name,
+        description: paymentData.note || loan.name,
+        amount: paymentData.amount,
+        estimatedCost: loan.installmentAmount || paymentData.amount,
+        actualCost: paymentData.amount,
+        status: 'Paid',
+        paymentMethod: 'Bank Transfer',
+        loanId: loan.id,
+        createdAt: new Date().toISOString(),
+      };
+
+      const updatedBudget: YearBudgetData = {
+        ...budget,
+        entries: [newBudgetEntry, ...budget.entries],
+        lastUpdated: new Date().toISOString(),
+      };
+      setBudget(updatedBudget);
+      FinanceStorageService.saveLocalBudget(updatedBudget);
+    }
+
+    let linkedLedgerTxId: string | undefined;
+    if (paymentData.depositToAccountId) {
+      const targetAcc = currentLedger.accounts.find((a) => a.id === paymentData.depositToAccountId);
+      if (targetAcc) {
+        linkedLedgerTxId = `tx-loan-${Date.now()}`;
+        targetAcc.balance += paymentData.amount;
+        currentLedger.transactions.push({
+          id: linkedLedgerTxId,
+          date: paymentData.date,
+          year: budget.year,
+          period: resolvedPeriod,
+          amount: paymentData.amount,
+          accountId: targetAcc.id,
+          accountName: targetAcc.name,
+          source: 'manual_deposit',
+          category: 'General Reserves / Starting Capital',
+          note: `Loan Repayment Collected: ${loan.name}`,
+        });
+      }
+    }
+
+    const newPayment: LoanPayment = {
+      id: `lpay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      loanId: loan.id,
+      date: paymentData.date,
+      year: budget.year,
+      period: resolvedPeriod,
+      amount: paymentData.amount,
+      source: linkedBudgetEntryId ? 'budget_sync' : 'manual_payment',
+      budgetEntryId: linkedBudgetEntryId,
+      accountId: paymentData.depositToAccountId,
+      ledgerTransactionId: linkedLedgerTxId,
+      note: paymentData.note,
+    };
+
+    loan.payments.push(newPayment);
+    const totalPaid =
+      (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
+    loan.status =
+      loan.totalContractAmount > 0 && totalPaid >= loan.totalContractAmount ? 'completed' : 'active';
+    loan.updatedAt = new Date().toISOString();
+
+    loans[loanIdx] = loan;
+    currentLedger.loans = loans;
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    setLedger({ ...currentLedger });
+    setHasUnsavedChanges(true);
+    showToast(
+      `Recorded ₱${paymentData.amount.toLocaleString()} for "${loan.name}"${
+        linkedBudgetEntryId ? ` & logged in ${resolvedPeriod} Budget Sheet` : ''
+      }`
+    );
+  };
+
+  const handleDeleteLoanPayment = (loanId: string, paymentId: string) => {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = [...(currentLedger.loans || [])];
+    const loanIdx = loans.findIndex((l) => l.id === loanId);
+    if (loanIdx === -1) return;
+
+    const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
+    const targetPay = loan.payments.find((p) => p.id === paymentId);
+    if (!targetPay) return;
+
+    loan.payments = loan.payments.filter((p) => p.id !== paymentId);
+    const totalPaid =
+      (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
+    loan.status =
+      loan.totalContractAmount > 0 && totalPaid >= loan.totalContractAmount ? 'completed' : 'active';
+    loan.updatedAt = new Date().toISOString();
+
+    loans[loanIdx] = loan;
+    currentLedger.loans = loans;
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    setLedger({ ...currentLedger });
+    setHasUnsavedChanges(true);
+    showToast(`Removed payment of ₱${targetPay.amount.toLocaleString()} from "${loan.name}"`);
+  };
+
+  const handleLinkLoanToTemplate = (loan: LoanRecord) => {
+    const { updatedBudget, templateId } = syncLoanToBudgetTemplateHelper(loan, budget);
+    setBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
+
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    currentLedger.loans = (currentLedger.loans || []).map((l) =>
+      l.id === loan.id ? { ...l, linkedTemplateId: templateId } : l
+    );
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    setLedger({ ...currentLedger });
+    setHasUnsavedChanges(true);
+    showToast(`Linked "${loan.name}" to your Estimate Budget Templates!`);
   };
 
   // Reset / delete all local data for live production
@@ -1915,21 +2225,22 @@ export default function App() {
 
     setConfirmationModal({
       isOpen: true,
-      title: 'Organize Files in Dedicated Google Drive Folder',
-      description: `Create or verify the dedicated "${CAPITALFLOW_DRIVE_FOLDER_NAME}" folder in your Google Drive and move all existing CapitalFlow JSON files inside it?`,
+      title: 'Organize & Deduplicate Google Drive Folder',
+      description: `Verify the dedicated "${CAPITALFLOW_DRIVE_FOLDER_NAME}" folder, merge and clean any duplicate folders, and ensure all CapitalFlow database JSON files reside in one single folder?`,
       affectedItems: [
         `Folder: /${CAPITALFLOW_DRIVE_FOLDER_NAME}/`,
+        'Duplicate folder cleanup & file consolidation',
         ...(driveFiles.length > 0 ? driveFiles.map((f) => f.name) : ['All future CapitalFlow JSON files']),
       ],
-      confirmLabel: 'Organize Folder Now',
+      confirmLabel: 'Organize & Clean Now',
       onConfirm: async () => {
         try {
           setDriveStatus((p) => ({
             ...p,
             isSyncing: true,
-            syncMessage: `Organizing files inside /${CAPITALFLOW_DRIVE_FOLDER_NAME}/...`,
+            syncMessage: `Organizing and deduplicating /${CAPITALFLOW_DRIVE_FOLDER_NAME}/...`,
           }));
-          const { folder, movedCount, files } = await FinanceStorageService.organizeFilesIntoFolder(token);
+          const { folder, movedCount, files, cleanedDuplicatesCount } = await FinanceStorageService.organizeFilesIntoFolder(token);
           setDriveFiles(files);
           setDriveStatus((p) => ({
             ...p,
@@ -1938,11 +2249,17 @@ export default function App() {
             folderId: folder.id,
             folderName: folder.name,
           }));
-          showToast(
-            movedCount > 0
-              ? `Moved ${movedCount} file(s) into "${folder.name}" folder in Google Drive!`
-              : `Dedicated folder "${folder.name}" is ready in Google Drive!`
-          );
+
+          const messages: string[] = [];
+          if (cleanedDuplicatesCount > 0) {
+            messages.push(`Consolidated & cleaned up ${cleanedDuplicatesCount} duplicate folder(s)`);
+          }
+          if (movedCount > 0) {
+            messages.push(`Moved ${movedCount} file(s) into "${folder.name}"`);
+          } else {
+            messages.push(`Dedicated folder "${folder.name}" is verified`);
+          }
+          showToast(messages.join('. ') + ' in Google Drive!', 'success');
         } catch (err: any) {
           if (isSessionExpiredError(err)) {
             handleSessionExpired('Google Drive session expired while organizing folder. Please sign in again.');
@@ -2193,6 +2510,7 @@ export default function App() {
             ledger={ledger}
             frequency={frequency}
             onNavigateToSavings={() => setActiveTab('savings')}
+            onNavigateToLoans={() => setActiveTab('loans')}
             onNavigateToBudget={() => setActiveTab('budget')}
             onNavigateToDrive={() => setActiveTab('drive')}
             currencySymbol="₱"
@@ -2227,6 +2545,19 @@ export default function App() {
             onDeleteAccount={handleDeleteSavingsAccount}
             onRenameOrMergeFund={handleRenameOrMergeFund}
             onDeleteFund={handleDeleteFund}
+            currencySymbol="₱"
+          />
+        )}
+
+        {activeTab === 'loans' && (
+          <LoansView
+            ledger={ledger}
+            budget={budget}
+            onSaveLoan={handleSaveLoan}
+            onDeleteLoan={handleDeleteLoan}
+            onRecordLoanPayment={handleRecordLoanPayment}
+            onDeleteLoanPayment={handleDeleteLoanPayment}
+            onLinkLoanToTemplate={handleLinkLoanToTemplate}
             currencySymbol="₱"
           />
         )}

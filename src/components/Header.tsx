@@ -22,8 +22,8 @@ interface HeaderProps {
   onAddNewYear: () => void;
   frequency: EntryFrequency;
   onChangeFrequency: (freq: EntryFrequency) => void;
-  activeTab: 'dashboard' | 'budget' | 'savings' | 'drive';
-  onSelectTab: (tab: 'dashboard' | 'budget' | 'savings' | 'drive') => void;
+  activeTab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive';
+  onSelectTab: (tab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive') => void;
   driveStatus: DriveSyncStatus;
   onSignInWithGoogle: () => void;
   onSignOut: () => void;
@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:block">
-                Budget, Funds &amp; Capital Growth Ledger
+                Budget, Funds, Loans &amp; Capital Ledger
               </p>
             </div>
           </div>
@@ -83,7 +83,7 @@ export const Header: React.FC<HeaderProps> = ({
           <nav className="hidden md:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-xs font-medium">
             <button
               onClick={() => onSelectTab('dashboard')}
-              className={`px-3.5 py-1.5 rounded-lg transition-all ${
+              className={`px-3.5 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 activeTab === 'dashboard'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -93,7 +93,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <button
               onClick={() => onSelectTab('budget')}
-              className={`px-3.5 py-1.5 rounded-lg transition-all ${
+              className={`px-3.5 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 activeTab === 'budget'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -103,18 +103,27 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <button
               onClick={() => onSelectTab('savings')}
-              className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
                 activeTab === 'savings'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
               <span>Funds</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            </button>
+            <button
+              onClick={() => onSelectTab('loans')}
+              className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'loans'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <span>Loans</span>
             </button>
             <button
               onClick={() => onSelectTab('drive')}
-              className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
                 activeTab === 'drive'
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -393,7 +402,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex md:hidden items-center justify-around py-2 border-t border-slate-100 dark:border-slate-800 text-xs">
           <button
             onClick={() => onSelectTab('dashboard')}
-            className={`px-3 py-1 rounded-lg ${
+            className={`px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0 ${
               activeTab === 'dashboard'
                 ? 'font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40'
                 : 'text-slate-600 dark:text-slate-400'
@@ -403,17 +412,17 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSelectTab('budget')}
-            className={`px-3 py-1 rounded-lg ${
+            className={`px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0 ${
               activeTab === 'budget'
                 ? 'font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40'
                 : 'text-slate-600 dark:text-slate-400'
             }`}
           >
-            Budget &amp; Entries
+            Budget
           </button>
           <button
             onClick={() => onSelectTab('savings')}
-            className={`px-3 py-1 rounded-lg ${
+            className={`px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0 ${
               activeTab === 'savings'
                 ? 'font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40'
                 : 'text-slate-600 dark:text-slate-400'
@@ -422,8 +431,18 @@ export const Header: React.FC<HeaderProps> = ({
             Funds
           </button>
           <button
+            onClick={() => onSelectTab('loans')}
+            className={`px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0 ${
+              activeTab === 'loans'
+                ? 'font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40'
+                : 'text-slate-600 dark:text-slate-400'
+            }`}
+          >
+            Loans
+          </button>
+          <button
             onClick={() => onSelectTab('drive')}
-            className={`px-3 py-1 rounded-lg ${
+            className={`px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0 ${
               activeTab === 'drive'
                 ? 'font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40'
                 : 'text-slate-600 dark:text-slate-400'
