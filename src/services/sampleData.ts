@@ -369,7 +369,11 @@ export function deriveCategoryBudgetsFromTemplates(templates: BudgetItemTemplate
   stripDefaultStarterTemplates(templates).forEach((tpl) => {
     const key = `${tpl.type}:${tpl.category}`;
     const existing = map.get(key);
-    const amount = tpl.defaultEstimatedCost || 0;
+    const rawAmount = tpl.defaultEstimatedCost || 0;
+    const amount =
+      tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both')
+        ? rawAmount * 2
+        : rawAmount;
     if (existing) {
       existing.plannedAmount += amount;
     } else if (amount > 0) {

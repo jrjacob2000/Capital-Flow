@@ -41,8 +41,8 @@ import {
   normalizeSavingCategoryGroup,
   SAVING_CATEGORIES,
   DEFAULT_SINKING_FUND_NAMES,
+  MONTH_NAMES,
 } from '../services/sampleData';
-import { CapitalGrowthChart } from './charts/CapitalGrowthChart';
 
 const ACCOUNT_COLORS = [
   '#10b981', // Emerald
@@ -244,6 +244,16 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setEditTxCustomCategory('');
   };
 
+  const parseDateYearAndPeriod = (dateStr: string): { year: number; period: string } => {
+    const parts = (dateStr || '').split('-').map((n) => parseInt(n, 10));
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      const mIdx = Math.max(0, Math.min(11, parts[1] - 1));
+      return { year: parts[0], period: MONTH_NAMES[mIdx] || 'Jan' };
+    }
+    const now = new Date();
+    return { year: now.getFullYear(), period: MONTH_NAMES[now.getMonth()] || 'Jan' };
+  };
+
   const handleSaveEditTx = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTx || !onUpdateTransaction) return;
@@ -252,12 +262,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     const targetAcc = ledger.accounts.find((a) => a.id === editTxAccountId) || ledger.accounts[0];
     const resolvedCategory =
       editTxCategory === '__custom__' ? editTxCustomCategory.trim() : editTxCategory.trim();
-    const d = new Date(editTxDate);
+    const { year, period } = parseDateYearAndPeriod(editTxDate);
     onUpdateTransaction(editingTx.id, {
       amount: amt,
       date: editTxDate,
-      year: d.getFullYear(),
-      period: d.toLocaleString('default', { month: 'short' }),
+      year,
+      period,
       note: editTxNote.trim() || editingTx.note,
       category: resolvedCategory || undefined,
       accountId: targetAcc ? targetAcc.id : editingTx.accountId,
@@ -384,7 +394,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         .filter((t) => t.type === 'saving')
         .forEach((tpl, idx) => {
           const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
-          fund.plannedAnnualTarget = Math.max(fund.plannedAnnualTarget || 0, (tpl.defaultEstimatedCost || 0) * 12);
+          const annualMultiplier =
+            tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both') ? 24 : 12;
+          fund.plannedAnnualTarget = Math.max(
+            fund.plannedAnnualTarget || 0,
+            (tpl.defaultEstimatedCost || 0) * annualMultiplier
+          );
         });
     }
 
@@ -691,14 +706,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     if (isNaN(amountNum) || amountNum <= 0) return;
 
     const acc = ledger.accounts.find((a) => a.id === depositAccountId) || ledger.accounts[0];
-    const d = new Date(depositDate);
+    const { year, period } = parseDateYearAndPeriod(depositDate);
     const chosenCategory =
       depositCategory === '__custom__' ? depositCustomCategory.trim() : depositCategory.trim();
 
     onAddTransaction({
       date: depositDate,
-      year: d.getFullYear(),
-      period: d.toLocaleString('default', { month: 'short' }),
+      year,
+      period,
       amount: amountNum,
       accountId: acc.id,
       accountName: acc.name,
@@ -726,12 +741,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     if (isNaN(amountNum) || amountNum <= 0) return;
 
     const acc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
-    const d = new Date(withdrawDate);
+    const { year, period } = parseDateYearAndPeriod(withdrawDate);
 
     onAddTransaction({
       date: withdrawDate,
-      year: d.getFullYear(),
-      period: d.toLocaleString('default', { month: 'short' }),
+      year,
+      period,
       amount: amountNum,
       accountId: acc.id,
       accountName: acc.name,
@@ -756,12 +771,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       ledger.accounts.find((a) => a.id === transferToAccountId) ||
       ledger.accounts.find((a) => a.id !== fromAcc.id) ||
       ledger.accounts[0];
-    const d = new Date(transferDate);
+    const { year, period } = parseDateYearAndPeriod(transferDate);
 
     onAddTransaction({
       date: transferDate,
-      year: d.getFullYear(),
-      period: d.toLocaleString('default', { month: 'short' }),
+      year,
+      period,
       amount: amountNum,
       accountId: fromAcc.id,
       accountName: fromAcc.name,
@@ -787,12 +802,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     if (!targetCat || reallocateFromCategory === targetCat) return;
 
     const acc = ledger.accounts.find((a) => a.id === reallocateAccountId);
-    const d = new Date(reallocateDate);
+    const { year, period } = parseDateYearAndPeriod(reallocateDate);
 
     onAddTransaction({
       date: reallocateDate,
-      year: d.getFullYear(),
-      period: d.toLocaleString('default', { month: 'short' }),
+      year,
+      period,
       amount: amountNum,
       accountId: acc ? acc.id : (ledger.accounts[0]?.id || ''),
       accountName: acc ? acc.name : (ledger.accounts[0]?.name || 'General Account'),
@@ -1038,9 +1053,6 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           </p>
         </div>
       </div>
-
-      {/* Capital Growth Curve */}
-      <CapitalGrowthChart ledger={ledger} currencySymbol={currencySymbol} />
 
       {/* Navigation Sub-Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 text-xs font-semibold overflow-x-auto scrollbar-none">

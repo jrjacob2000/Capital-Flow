@@ -511,7 +511,7 @@ export default function App() {
           const isIdentical =
             JSON.stringify(currentLocalLedger.transactions) === JSON.stringify(driveLedgerRes.ledger.transactions) &&
             JSON.stringify(currentLocalLedger.loans || []) === JSON.stringify(driveLedgerRes.ledger.loans || []) &&
-            currentLocalLedger.accounts?.length === driveLedgerRes.ledger.accounts?.length &&
+            JSON.stringify(currentLocalLedger.accounts || []) === JSON.stringify(driveLedgerRes.ledger.accounts || []) &&
             currentLocalLedger.initialCapital === driveLedgerRes.ledger.initialCapital;
 
           if (!isIdentical) {
@@ -525,11 +525,11 @@ export default function App() {
               localStats: {
                 count: currentLocalLedger.transactions.length,
                 countLabel: 'transactions',
-                detail: `${currentLocalLedger.accounts.length} accounts`,
+                detail: `${currentLocalLedger.accounts.length} accounts · ${(currentLocalLedger.loans || []).length} loans`,
               },
               driveStats: {
                 count: driveLedgerRes.ledger.transactions.length,
-                countLabel: 'transactions',
+                countLabel: `transactions · ${(driveLedgerRes.ledger.loans || []).length} loans`,
                 fileSize: driveLedgerRes.file.size ? `${Math.round(parseInt(driveLedgerRes.file.size, 10) / 1024)} KB` : undefined,
               },
               onKeepLocal: () => {
@@ -1076,6 +1076,30 @@ export default function App() {
     applyTxBalanceEffect(currentLedger.accounts, newTx, false);
     recalculateLedgerRunningCapital(currentLedger);
 
+    // If this transaction is linked to a Budget Sheet saving entry, keep the budget entry synchronized
+    if (newTx.budgetEntryId) {
+      const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
+      let budgetChanged = false;
+      currentBudget.entries = currentBudget.entries.map((e) => {
+        if (e.id === newTx.budgetEntryId) {
+          budgetChanged = true;
+          return {
+            ...e,
+            amount: newTx.amount,
+            actualCost: newTx.amount,
+            date: newTx.date,
+            savingAccountId: newTx.accountId,
+            savingAccountName: newTx.accountName,
+          };
+        }
+        return e;
+      });
+      if (budgetChanged) {
+        FinanceStorageService.saveLocalBudget(currentBudget);
+        setBudget({ ...currentBudget });
+      }
+    }
+
     FinanceStorageService.saveLocalSavingsLedger(currentLedger);
     setLedger({ ...currentLedger });
     setHasUnsavedChanges(true);
@@ -1106,6 +1130,33 @@ export default function App() {
         if (targetTx) {
           applyTxBalanceEffect(latestLedger.accounts, targetTx, true);
           latestLedger.transactions = latestLedger.transactions.filter((t) => t.id !== txId);
+
+          // Unlink any loan payment that referenced this ledger transaction
+          if (Array.isArray(latestLedger.loans)) {
+            latestLedger.loans.forEach((ln) => {
+              (ln.payments || []).forEach((p) => {
+                if (p.ledgerTransactionId === txId) {
+                  delete p.ledgerTransactionId;
+                  delete p.accountId;
+                }
+              });
+            });
+          }
+
+          // If linked to a budget saving entry, remove that saving entry from the budget sheet as well
+          if (targetTx.budgetEntryId) {
+            const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
+            const filteredEntries = currentBudget.entries.filter((e) => e.id !== targetTx.budgetEntryId);
+            if (filteredEntries.length !== currentBudget.entries.length) {
+              const updatedBudget: YearBudgetData = {
+                ...currentBudget,
+                entries: filteredEntries,
+              };
+              FinanceStorageService.saveLocalBudget(updatedBudget);
+              setBudget(updatedBudget);
+            }
+          }
+
           recalculateLedgerRunningCapital(latestLedger);
           FinanceStorageService.saveLocalSavingsLedger(latestLedger);
           setLedger({ ...latestLedger });
@@ -1766,10 +1817,13 @@ export default function App() {
     if (loanIdx === -1) return;
 
     const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
-    const payDateObj = new Date(paymentData.date);
-    const monthIdx = isNaN(payDateObj.getMonth()) ? new Date().getMonth() : payDateObj.getMonth();
-    const dayOfMonth = isNaN(payDateObj.getDate()) ? 15 : payDateObj.getDate();
-    const monthName = MONTH_NAMES[monthIdx] || 'Oct';
+    // Parse YYYY-MM-DD in local time without UTC-midnight shift
+    const dateParts = (paymentData.date || '').split('-').map((n) => parseInt(n, 10));
+    const parsedMonthIdx =
+      dateParts.length === 3 && !isNaN(dateParts[1]) ? Math.max(0, Math.min(11, dateParts[1] - 1)) : new Date().getMonth();
+    const dayOfMonth =
+      dateParts.length === 3 && !isNaN(dateParts[2]) ? dateParts[2] : new Date().getDate();
+    const monthName = MONTH_NAMES[parsedMonthIdx] || 'Oct';
     const resolvedPeriod =
       frequency === 'bi-weekly'
         ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
@@ -1777,7 +1831,7 @@ export default function App() {
     const resolvedPeriodIdx =
       frequency === 'bi-weekly'
         ? Math.max(0, BIWEEKLY_PERIODS.findIndex((p) => p.id === resolvedPeriod))
-        : monthIdx;
+        : parsedMonthIdx;
 
     let linkedBudgetEntryId: string | undefined;
 
@@ -1851,11 +1905,12 @@ export default function App() {
     const totalPaid =
       (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
     loan.status =
-      loan.totalContractAmount > 0 && totalPaid >= loan.totalContractAmount ? 'completed' : 'active';
+      loan.totalContractAmount > 0 && totalPaid + 0.005 >= loan.totalContractAmount ? 'completed' : 'active';
     loan.updatedAt = new Date().toISOString();
 
     loans[loanIdx] = loan;
     currentLedger.loans = loans;
+    recalculateLedgerRunningCapital(currentLedger);
     FinanceStorageService.saveLocalSavingsLedger(currentLedger);
     setLedger({ ...currentLedger });
     setHasUnsavedChanges(true);
@@ -1876,15 +1931,49 @@ export default function App() {
     const targetPay = loan.payments.find((p) => p.id === paymentId);
     if (!targetPay) return;
 
+    // 1. If this payment deposited money into a savings account, reverse the account balance and remove its ledger transaction
+    if (targetPay.ledgerTransactionId) {
+      const linkedTx = currentLedger.transactions.find((t) => t.id === targetPay.ledgerTransactionId);
+      if (linkedTx) {
+        applyTxBalanceEffect(currentLedger.accounts, linkedTx, true);
+        currentLedger.transactions = currentLedger.transactions.filter((t) => t.id !== targetPay.ledgerTransactionId);
+      } else if (targetPay.accountId) {
+        const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
+        if (acc) {
+          acc.balance = Math.max(0, acc.balance - targetPay.amount);
+        }
+      }
+    } else if (targetPay.accountId) {
+      const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
+      if (acc) {
+        acc.balance = Math.max(0, acc.balance - targetPay.amount);
+      }
+    }
+
+    // 2. If this payment was synced with a Budget Sheet entry, remove that Budget Sheet entry as well
+    if (targetPay.budgetEntryId) {
+      const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
+      const updatedEntries = currentBudget.entries.filter((e) => e.id !== targetPay.budgetEntryId);
+      if (updatedEntries.length !== currentBudget.entries.length) {
+        const updatedBudget: YearBudgetData = {
+          ...currentBudget,
+          entries: updatedEntries,
+        };
+        FinanceStorageService.saveLocalBudget(updatedBudget);
+        setBudget(updatedBudget);
+      }
+    }
+
     loan.payments = loan.payments.filter((p) => p.id !== paymentId);
     const totalPaid =
       (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
     loan.status =
-      loan.totalContractAmount > 0 && totalPaid >= loan.totalContractAmount ? 'completed' : 'active';
+      loan.totalContractAmount > 0 && totalPaid + 0.005 >= loan.totalContractAmount ? 'completed' : 'active';
     loan.updatedAt = new Date().toISOString();
 
     loans[loanIdx] = loan;
     currentLedger.loans = loans;
+    recalculateLedgerRunningCapital(currentLedger);
     FinanceStorageService.saveLocalSavingsLedger(currentLedger);
     setLedger({ ...currentLedger });
     setHasUnsavedChanges(true);
@@ -2683,7 +2772,11 @@ export default function App() {
                   currentLocalLedger.lastUpdated,
                   driveRes.ledger.lastUpdated || driveRes.file.modifiedTime
                 );
-                const localIsNewer = status === 'local_newer' && currentLocalLedger.transactions.length > 0;
+                const localHasData =
+                  currentLocalLedger.transactions.length > 0 ||
+                  (currentLocalLedger.loans || []).length > 0 ||
+                  currentLocalLedger.accounts.some((a) => (a.balance || 0) > 0);
+                const localIsNewer = status === 'local_newer' && localHasData;
 
                 setConfirmationModal({
                   isOpen: true,

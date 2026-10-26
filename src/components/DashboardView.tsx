@@ -18,8 +18,10 @@ import {
   Layers,
   ArrowLeftRight,
   CheckCircle2,
+  Scale,
+  HandCoins,
 } from 'lucide-react';
-import { YearBudgetData, SavingsLedgerData, EntryFrequency, EntryType } from '../types/finance';
+import { YearBudgetData, SavingsLedgerData, EntryFrequency, EntryType, LoanRecord } from '../types/finance';
 import {
   resolveCanonicalSinkingFundName,
   normalizeSavingCategoryGroup,
@@ -72,11 +74,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     .filter((e) => e.type === 'saving')
     .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
 
-  const activeIncomePeriods = Math.max(
-    1,
-    new Set(activeEntries.filter((e) => e.type === 'income' && (e.actualCost ?? e.amount ?? 0) > 0).map((e) => e.period)).size
-  );
-
   const savingsRate = totalIncome > 0 ? (totalSavings / totalIncome) * 100 : 0;
 
   // Average monthly living expense (normalized by calendar month even in bi-weekly mode)
@@ -91,7 +88,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const avgMonthlyExpense = totalExpenses > 0
     ? totalExpenses / activeExpenseMonths
     : budget.itemTemplates
-    ? budget.itemTemplates.filter((t) => t.type === 'expense').reduce((sum, t) => sum + (t.defaultEstimatedCost || 0), 0)
+    ? budget.itemTemplates
+        .filter((t) => t.type === 'expense')
+        .reduce(
+          (sum, t) =>
+            sum +
+            (t.frequency === 'bi-weekly' && (!t.biweeklyPeriod || t.biweeklyPeriod === 'both')
+              ? (t.defaultEstimatedCost || 0) * 2
+              : t.defaultEstimatedCost || 0),
+          0
+        )
     : 0;
 
   // Latest capital from ledger (prioritize actual sum of physical accounts)
@@ -188,7 +194,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         .filter((t) => t.type === 'saving')
         .forEach((tpl, idx) => {
           const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
-          fund.plannedAnnualTarget = Math.max(fund.plannedAnnualTarget || 0, (tpl.defaultEstimatedCost || 0) * 12);
+          const annualMultiplier =
+            tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both') ? 24 : 12;
+          fund.plannedAnnualTarget = Math.max(
+            fund.plannedAnnualTarget || 0,
+            (tpl.defaultEstimatedCost || 0) * annualMultiplier
+          );
         });
     }
 
@@ -304,6 +315,119 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const totalAllocatedCategoryReserves = categoryFunds.reduce((sum, f) => sum + f.currentBalance, 0);
   const unallocatedCashReserve = Math.max(0, currentTotalCapital - totalAllocatedCategoryReserves);
+  const unallocatedBudgetSurplus = totalIncome - totalExpenses - totalSavings;
+
+  // Compute Loans & Receivables Summary for Dashboard
+  const loanSummary = useMemo(() => {
+    const loans: LoanRecord[] = ledger.loans || [];
+    let borrowedRemaining = 0;
+    let borrowedPaid = 0;
+    let borrowedContract = 0;
+    let borrowedMonthlyCommitment = 0;
+    let activeBorrowedCount = 0;
+
+    let lentRemaining = 0;
+    let lentCollected = 0;
+    let lentContract = 0;
+    let lentMonthlyExpected = 0;
+    let activeLentCount = 0;
+
+    const activeLoanItems: {
+      loan: LoanRecord;
+      totalPaid: number;
+      totalContract: number;
+      remainingBalance: number;
+      progressPct: number;
+      termsPaid: number;
+      totalTerms: number;
+      remainingTerms: number;
+      monthlyCommitment: number;
+    }[] = [];
+
+    loans.forEach((ln) => {
+      const paymentsSum = (ln.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+      const totalPaid = (ln.initialPaidAmount || 0) + paymentsSum;
+      const totalContract = ln.totalContractAmount || 0;
+      const remainingBalance = Math.max(0, totalContract - totalPaid);
+      const progressPct = totalContract > 0 ? Math.min(100, (totalPaid / totalContract) * 100) : 0;
+
+      const recordedPaymentsCount = (ln.payments || []).length;
+      const initialTerms = ln.initialInstallmentsPaid || 0;
+      const estimatedTermsPaid =
+        ln.installmentAmount > 0
+          ? Math.min(ln.totalInstallments || 0, Math.floor((totalPaid + 0.01) / ln.installmentAmount))
+          : initialTerms + recordedPaymentsCount;
+      const termsPaid = Math.max(initialTerms + recordedPaymentsCount, estimatedTermsPaid);
+      const totalTerms = ln.totalInstallments || 0;
+      const remainingTerms = totalTerms > 0 ? Math.max(0, totalTerms - termsPaid) : 0;
+      const isCompleted = ln.status === 'completed' || (totalContract > 0 && remainingBalance <= 0.005);
+
+      const monthlyCommitment = isCompleted
+        ? 0
+        : ln.frequency === 'bi-weekly'
+        ? ln.biweeklyPeriod === 'both'
+          ? (ln.installmentAmount || 0) * 2
+          : ln.installmentAmount || 0
+        : ln.installmentAmount || 0;
+
+      if (ln.direction === 'borrowed') {
+        borrowedPaid += totalPaid;
+        borrowedContract += totalContract;
+        if (!isCompleted) {
+          borrowedRemaining += remainingBalance;
+          borrowedMonthlyCommitment += monthlyCommitment;
+          activeBorrowedCount += 1;
+        }
+      } else {
+        lentCollected += totalPaid;
+        lentContract += totalContract;
+        if (!isCompleted) {
+          lentRemaining += remainingBalance;
+          lentMonthlyExpected += monthlyCommitment;
+          activeLentCount += 1;
+        }
+      }
+
+      if (!isCompleted) {
+        activeLoanItems.push({
+          loan: ln,
+          totalPaid,
+          totalContract,
+          remainingBalance,
+          progressPct,
+          termsPaid,
+          totalTerms,
+          remainingTerms,
+          monthlyCommitment,
+        });
+      }
+    });
+
+    activeLoanItems.sort((a, b) => b.remainingBalance - a.remainingBalance);
+
+    const netLoanPosition = lentRemaining - borrowedRemaining;
+    const trueNetWorth = currentTotalCapital + netLoanPosition;
+    const borrowedProgressPct =
+      borrowedContract > 0 ? Math.min(100, (borrowedPaid / borrowedContract) * 100) : 0;
+
+    return {
+      totalLoansCount: loans.length,
+      borrowedRemaining,
+      borrowedPaid,
+      borrowedContract,
+      borrowedMonthlyCommitment,
+      borrowedProgressPct,
+      activeBorrowedCount,
+      lentRemaining,
+      lentCollected,
+      lentContract,
+      lentMonthlyExpected,
+      activeLentCount,
+      netLoanPosition,
+      trueNetWorth,
+      activeLoanItems,
+    };
+  }, [ledger.loans, currentTotalCapital]);
 
   const formatNumber = (num: number) =>
     new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
@@ -326,7 +450,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Annual Financial Performance
             </h1>
             <p className="mt-1 text-sm text-indigo-200 max-w-xl">
-              Track your liquid physical accounts, open-ended cushion reserves, and automated accumulation into your Google Drive capital growth ledger.
+              Track your liquid physical accounts, open-ended cushion reserves, loan obligations, and automated accumulation into your Google Drive capital growth ledger.
             </p>
           </div>
 
@@ -352,14 +476,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 <Receipt className="w-4 h-4 text-indigo-300" />
                 <span>Loans &amp; Receivables</span>
+                {(loanSummary.activeBorrowedCount + loanSummary.activeLentCount) > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold rounded-md bg-indigo-500/40 text-white">
+                    {loanSummary.activeBorrowedCount + loanSummary.activeLentCount}
+                  </span>
+                )}
               </button>
             )}
           </div>
         </div>
       </div>
 
-      {/* KPI Cards Row (5 Recommended Metrics) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* KPI Cards Row (6 Core Financial Metrics) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         
         {/* 1. Total Assets / Capital */}
         <div
@@ -375,13 +504,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
               {currencySymbol}{formatNumber(currentTotalCapital)}
             </span>
           </div>
           <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-            <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>+{currencySymbol}{formatNumber(capitalGrowth)} ({capitalGrowthPct.toFixed(1)}%)</span>
+            <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              {capitalGrowth >= 0 ? '+' : ''}{currencySymbol}{formatNumber(capitalGrowth)} ({capitalGrowthPct.toFixed(1)}%)
+            </span>
           </div>
         </div>
 
@@ -400,7 +531,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
               {runwayMonths > 0 ? runwayMonths.toFixed(1) : '—'}
             </span>
             <span className="text-xs font-semibold text-slate-500">months</span>
@@ -428,7 +559,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
               {currencySymbol}{formatNumber(totalAllocatedCategoryReserves)}
             </span>
           </div>
@@ -437,10 +568,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* 4. Unallocated Cash Reserve */}
+        {/* 4. Unallocated Cash Reserve (General Reserve) */}
         <div
           onClick={onNavigateToSavings}
           className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-300 dark:hover:border-amber-700 transition-all cursor-pointer group"
+          title="Physical bank & brokerage balances not currently locked inside a virtual category envelope"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -451,30 +583,89 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
               {currencySymbol}{formatNumber(unallocatedCashReserve)}
             </span>
           </div>
           <div className="mt-2 text-xs text-amber-600 dark:text-amber-400 font-medium">
-            <span>Ready to assign to goals</span>
+            <span>General Reserve (Free Pool)</span>
           </div>
         </div>
 
-        {/* 5. Savings Rate */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
+        {/* 5. Loans & Debt Position */}
+        <div
+          onClick={onNavigateToLoans}
+          className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs hover:border-rose-300 dark:hover:border-rose-700 transition-all cursor-pointer group"
+          title={`True Net Worth: ${currencySymbol}${formatNumber(loanSummary.trueNetWorth)} (Capital + Receivables - Debt)`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {loanSummary.borrowedRemaining > 0.005
+                ? 'Remaining Debt (I Owe)'
+                : loanSummary.lentRemaining > 0.005
+                ? 'Active Receivables'
+                : 'Loans & Debt Balance'}
+            </span>
+            <div
+              className={`w-8 h-8 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform ${
+                loanSummary.borrowedRemaining > 0.005
+                  ? 'bg-rose-50 dark:bg-rose-950 text-rose-600 dark:text-rose-400'
+                  : 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400'
+              }`}
+            >
+              <Scale className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span
+              className={`text-2xl font-bold font-mono tabular-nums ${
+                loanSummary.borrowedRemaining > 0.005
+                  ? 'text-rose-600 dark:text-rose-400'
+                  : loanSummary.lentRemaining > 0.005
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-slate-900 dark:text-white'
+              }`}
+            >
+              {loanSummary.borrowedRemaining > 0.005
+                ? `${currencySymbol}${formatNumber(loanSummary.borrowedRemaining)}`
+                : loanSummary.lentRemaining > 0.005
+                ? `+${currencySymbol}${formatNumber(loanSummary.lentRemaining)}`
+                : `${currencySymbol}0`}
+            </span>
+          </div>
+          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 font-medium truncate">
+            {loanSummary.borrowedMonthlyCommitment > 0 ? (
+              <span className="text-rose-600 dark:text-rose-400">
+                {currencySymbol}{formatNumber(loanSummary.borrowedMonthlyCommitment)}/mo commitment
+              </span>
+            ) : loanSummary.activeLentCount > 0 ? (
+              <span className="text-emerald-600 dark:text-emerald-400">
+                {loanSummary.activeLentCount} active receivable{loanSummary.activeLentCount > 1 ? 's' : ''}
+              </span>
+            ) : (
+              <span>Debt-free • Net Worth {currencySymbol}{formatNumber(loanSummary.trueNetWorth)}</span>
+            )}
+          </div>
+        </div>
+
+        {/* 6. Savings Rate */}
+        <div
+          onClick={onNavigateToBudget}
+          className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-all cursor-pointer group"
+        >
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
               {budget.year} Savings Rate
             </span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center group-hover:scale-110 transition-transform">
               <Percent className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+            <span className="text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
               {savingsRate.toFixed(1)}%
             </span>
-            <span className="text-xs font-mono text-slate-500">
+            <span className="text-xs font-mono tabular-nums text-slate-500 truncate">
               ({currencySymbol}{formatNumber(totalSavings)})
             </span>
           </div>
@@ -483,6 +674,119 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
+      </div>
+
+      {/* Annual Budget Cashflow & Salary Surplus Flow Strip */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+              {budget.year} Budget Cashflow &amp; Salary Surplus Allocation ({frequency === 'bi-weekly' ? 'Bi-Weekly Mode' : 'Monthly Mode'})
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onNavigateToBudget}
+            className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer self-start sm:self-auto"
+          >
+            Open Budget Sheet &rarr;
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Total Budget Income */}
+          <div className="p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/50">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>1. Total Budget Income</span>
+              <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase">Inflow</span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+              {currencySymbol}{formatNumber(totalIncome)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Salary &amp; collections recorded in {budget.year}
+            </div>
+          </div>
+
+          {/* Living Expenses */}
+          <div className="p-3.5 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/50">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>2. Living Expenses &amp; Bills</span>
+              <span className="text-[10px] font-semibold text-rose-600 dark:text-rose-400 uppercase">Outflow</span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-rose-700 dark:text-rose-300">
+              {currencySymbol}{formatNumber(totalExpenses)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Avg {currencySymbol}{formatNumber(avgMonthlyExpense)}/mo spent
+            </div>
+          </div>
+
+          {/* Assigned Savings & Sinking Funds */}
+          <div className="p-3.5 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/60 dark:border-indigo-900/50">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>3. Assigned to Funds</span>
+              <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase">Auto-Synced</span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-indigo-700 dark:text-indigo-300">
+              {currencySymbol}{formatNumber(totalSavings)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Deposited into Ledger &amp; Envelopes
+            </div>
+          </div>
+
+          {/* Remaining Unallocated Budget Surplus */}
+          <div
+            onClick={onNavigateToBudget}
+            className={`p-3.5 rounded-xl border transition-colors cursor-pointer ${
+              unallocatedBudgetSurplus > 0.005
+                ? 'bg-amber-50/60 dark:bg-amber-950/25 border-amber-200/80 dark:border-amber-800/60 hover:border-amber-400'
+                : unallocatedBudgetSurplus < -0.005
+                ? 'bg-rose-50/60 dark:bg-rose-950/25 border-rose-200/80 dark:border-rose-800/60'
+                : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/60 dark:border-slate-800'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>4. Unassigned Salary Surplus</span>
+              <span
+                className={`text-[10px] font-semibold uppercase ${
+                  unallocatedBudgetSurplus > 0.005
+                    ? 'text-amber-700 dark:text-amber-300'
+                    : unallocatedBudgetSurplus < -0.005
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {unallocatedBudgetSurplus > 0.005
+                  ? 'Ready to Assign'
+                  : unallocatedBudgetSurplus < -0.005
+                  ? 'Over-Allocated'
+                  : '100% Assigned'}
+              </span>
+            </div>
+            <div
+              className={`mt-1 text-lg font-bold font-mono tabular-nums ${
+                unallocatedBudgetSurplus > 0.005
+                  ? 'text-amber-700 dark:text-amber-300'
+                  : unallocatedBudgetSurplus < -0.005
+                  ? 'text-rose-600 dark:text-rose-400'
+                  : 'text-slate-900 dark:text-white'
+              }`}
+            >
+              {unallocatedBudgetSurplus >= 0 ? '' : '-'}
+              {currencySymbol}{formatNumber(Math.abs(unallocatedBudgetSurplus))}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              {unallocatedBudgetSurplus > 0.005
+                ? 'Add a Saving row in Budget to sync to bank'
+                : unallocatedBudgetSurplus < -0.005
+                ? 'Expenses + Savings exceed recorded Income'
+                : 'All income is assigned to expenses or funds'}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Physical Bank Accounts At-A-Glance Bar */}
@@ -521,7 +825,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     {acc.name}
                   </span>
                 </div>
-                <div className="text-base font-bold font-mono text-slate-900 dark:text-white">
+                <div className="text-base font-bold font-mono tabular-nums text-slate-900 dark:text-white">
                   {currencySymbol}{formatNumber(acc.balance)}
                 </div>
                 <div className="text-[10px] text-slate-400 mt-0.5 flex items-center justify-between">
@@ -601,7 +905,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </div>
 
                   <div className="flex items-baseline justify-between">
-                    <span className="text-lg font-bold font-mono text-slate-900 dark:text-white">
+                    <span className="text-lg font-bold font-mono tabular-nums text-slate-900 dark:text-white">
                       {currencySymbol}{formatNumber(fund.currentBalance)}
                     </span>
                     <span className="text-[10px] text-slate-400 font-medium">
@@ -615,6 +919,191 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         ) : (
           <div className="p-6 text-center text-xs text-slate-400 italic bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800">
             No active category funds created yet. Add savings items in your budget sheet or record deposits in the Funds tab.
+          </div>
+        )}
+      </div>
+
+      {/* Loans & Receivables Snapshot Widget */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <HandCoins className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Loans &amp; Receivables Overview (Debt Payoff &amp; True Net Worth)
+              </h3>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Monitor borrowed installment obligations (I Owe), personal receivables (Owed to Me), and net balance sheet impact.
+            </p>
+          </div>
+
+          {onNavigateToLoans && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onNavigateToLoans}
+                className="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                <span>Manage Loans &amp; Payments &rarr;</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 4-Column Balance Sheet & Loan Summary Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* True Net Worth */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-800">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>True Net Worth</span>
+              <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase">Balance Sheet</span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {currencySymbol}{formatNumber(loanSummary.trueNetWorth)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Capital + Receivables − Borrowed Debt
+            </div>
+          </div>
+
+          {/* Remaining Debt (I Owe) */}
+          <div className="p-3.5 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/50">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>Remaining Debt (I Owe)</span>
+              <span className="text-[10px] font-semibold text-rose-600 dark:text-rose-400 uppercase">
+                {loanSummary.activeBorrowedCount} Active
+              </span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400">
+              {currencySymbol}{formatNumber(loanSummary.borrowedRemaining)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Paid {currencySymbol}{formatNumber(loanSummary.borrowedPaid)} ({loanSummary.borrowedProgressPct.toFixed(0)}% paid off)
+            </div>
+          </div>
+
+          {/* Receivables (Owed to Me) */}
+          <div className="p-3.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/50">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>Receivables (Owed to Me)</span>
+              <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase">
+                {loanSummary.activeLentCount} Active
+              </span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+              {currencySymbol}{formatNumber(loanSummary.lentRemaining)}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Collected {currencySymbol}{formatNumber(loanSummary.lentCollected)} so far
+            </div>
+          </div>
+
+          {/* Monthly Installment Commitment */}
+          <div className="p-3.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/50">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>Monthly Debt Service</span>
+              <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 uppercase">Commitment</span>
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {currencySymbol}{formatNumber(loanSummary.borrowedMonthlyCommitment)}
+              <span className="text-xs font-normal text-slate-500">/mo</span>
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              {loanSummary.lentMonthlyExpected > 0
+                ? `+${currencySymbol}${formatNumber(loanSummary.lentMonthlyExpected)}/mo expected inflow`
+                : 'Scheduled monthly loan amortization'}
+            </div>
+          </div>
+        </div>
+
+        {/* Active Loans & Receivables Cards */}
+        {loanSummary.activeLoanItems.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+            {loanSummary.activeLoanItems.slice(0, 6).map((item) => {
+              const { loan, remainingBalance, progressPct, termsPaid, totalTerms, remainingTerms } = item;
+              const isBorrowed = loan.direction === 'borrowed';
+              return (
+                <div
+                  key={loan.id}
+                  onClick={onNavigateToLoans}
+                  className="p-3.5 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/80 dark:border-slate-800 hover:border-indigo-500/50 transition-all cursor-pointer flex flex-col justify-between space-y-2.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide shrink-0 ${
+                            isBorrowed
+                              ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300'
+                              : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
+                          }`}
+                        >
+                          {isBorrowed ? 'I Owe' : 'Owed to Me'}
+                        </span>
+                        <span className="font-bold text-xs text-slate-900 dark:text-white truncate" title={loan.name}>
+                          {loan.name}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {loan.counterparty} • {loan.category}
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                      {progressPct.toFixed(0)}%
+                    </span>
+                  </div>
+
+                  {/* Progress Bar */}
+                  <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        isBorrowed ? 'bg-rose-500 dark:bg-rose-400' : 'bg-emerald-500 dark:bg-emerald-400'
+                      }`}
+                      style={{ width: `${Math.max(2, progressPct)}%` }}
+                    />
+                  </div>
+
+                  <div className="flex items-baseline justify-between text-xs">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Remaining Balance</span>
+                      <span
+                        className={`text-sm font-bold font-mono tabular-nums ${
+                          isBorrowed ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                        }`}
+                      >
+                        {currencySymbol}{formatNumber(remainingBalance)}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block">
+                        {totalTerms > 0 ? `${termsPaid}/${totalTerms} terms (${remainingTerms} left)` : 'Open Schedule'}
+                      </span>
+                      <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                        {currencySymbol}{formatNumber(loan.installmentAmount || 0)}/
+                        {loan.frequency === 'bi-weekly' ? 'cutoff' : 'mo'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="p-5 text-center text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <span>
+              No active loans or receivables tracked yet. Track SSS/Pag-IBIG loans, credit card installments, mortgages, or personal receivables in the Loans tab.
+            </span>
+            {onNavigateToLoans && (
+              <button
+                type="button"
+                onClick={onNavigateToLoans}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors shrink-0 cursor-pointer"
+              >
+                + Add Loan / Receivable
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -698,7 +1187,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Google Drive Cloud Database (/CapitalFlow Financial Database/)
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed break-words">
-              Data is organized in 3 separate JSON files: <code className="font-mono text-indigo-600 dark:text-indigo-400">capitalflow_budget_{budget.year}.json</code> (annual budget), <code className="font-mono text-amber-600 dark:text-amber-400">capitalflow_budget_template.json</code> (personalized estimate template), and <code className="font-mono text-emerald-600 dark:text-emerald-400">capitalflow_savings_ledger.json</code> (multi-year funds).
+              Data is organized in 3 separate JSON files: <code className="font-mono text-indigo-600 dark:text-indigo-400">capitalflow_budget_{budget.year}.json</code> (annual budget), <code className="font-mono text-amber-600 dark:text-amber-400">capitalflow_budget_template.json</code> (personalized estimate template), and <code className="font-mono text-emerald-600 dark:text-emerald-400">capitalflow_savings_ledger.json</code> (physical accounts, multi-year funds &amp; loans).
             </p>
           </div>
         </div>

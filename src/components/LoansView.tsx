@@ -140,7 +140,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
     const termsPaid = Math.max(initialTerms + recordedPaymentsCount, estimatedTermsPaid);
     const totalTerms = loan.totalInstallments || 0;
     const remainingTerms = totalTerms > 0 ? Math.max(0, totalTerms - termsPaid) : 0;
-    const isCompleted = loan.status === 'completed' || (totalContract > 0 && remainingBalance <= 0);
+    const isCompleted = loan.status === 'completed' || (totalContract > 0 && remainingBalance <= 0.005);
 
     // Monthly commitment normalization
     const monthlyCommitment =
@@ -153,12 +153,13 @@ export const LoansView: React.FC<LoansViewProps> = ({
         : loan.installmentAmount || 0;
 
     // Check if linked to an active template
+    const targetTplType = loan.direction === 'borrowed' ? 'expense' : 'income';
     const hasLinkedTemplate = Boolean(
       (budget.itemTemplates || []).some(
         (t) =>
           (loan.linkedTemplateId && t.id === loan.linkedTemplateId) ||
           (t.loanId && t.loanId === loan.id) ||
-          t.item.trim().toLowerCase() === loan.name.trim().toLowerCase()
+          (t.type === targetTplType && t.item.trim().toLowerCase() === loan.name.trim().toLowerCase())
       )
     );
 
@@ -352,7 +353,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
 
     const existingPayments = editingLoan ? editingLoan.payments || [] : [];
     const paymentsSum = existingPayments.reduce((s, p) => s + (p.amount || 0), 0);
-    const isCompleted = totalContract > 0 && initialPaid + paymentsSum >= totalContract;
+    const isCompleted = totalContract > 0 && initialPaid + paymentsSum + 0.005 >= totalContract;
 
     const nowIso = new Date().toISOString();
     const savedLoan: LoanRecord = {

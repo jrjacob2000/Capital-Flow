@@ -784,7 +784,7 @@ export class FinanceStorageService {
     const recalculateLoanStatus = (ln: LoanRecord) => {
       const paidViaPayments = (ln.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
       const totalPaid = (ln.initialPaidAmount || 0) + paidViaPayments;
-      ln.status = ln.totalContractAmount > 0 && totalPaid >= ln.totalContractAmount ? 'completed' : 'active';
+      ln.status = ln.totalContractAmount > 0 && totalPaid + 0.005 >= ln.totalContractAmount ? 'completed' : 'active';
       ln.updatedAt = new Date().toISOString();
     };
 
