@@ -976,7 +976,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           <div className="space-y-2 min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
               <PiggyBank className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>Total Accumulated Capital</span>
+              <span>Total Bank &amp; Wallet Savings</span>
               <span>&middot;</span>
               <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
                 {ledger.accounts.length} {ledger.accounts.length === 1 ? 'account' : 'accounts'}
@@ -1040,19 +1040,19 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         {/* Compact 4-Metric Strip */}
         <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Earmarked in Funds</span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Assigned to Goal Funds</span>
             <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-slate-900 dark:text-white">
               {currencySymbol}{formatNumber(earmarkedTotal)}
             </span>
           </div>
           <div>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Budget Sync Inflow</span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Added from Budget</span>
             <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
               +{currencySymbol}{formatNumber(budgetSyncAdditions)}
             </span>
           </div>
           <div>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Yield &amp; Interest</span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Interest Earned</span>
             <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-indigo-600 dark:text-indigo-400">
               +{currencySymbol}{formatNumber(yieldAdditions)}
             </span>
@@ -1156,10 +1156,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           {/* Compact Section Toolbar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800">
             <div className="text-xs text-slate-600 dark:text-slate-300">
-              <span className="font-semibold text-slate-900 dark:text-white">Sinking Funds &amp; Envelopes</span>
+              <span className="font-semibold text-slate-900 dark:text-white">Savings Goals &amp; Funds</span>
               <span className="mx-1.5 text-slate-300 dark:text-slate-700">&middot;</span>
               <span>
-                Track goal balances and which physical bank accounts store each reserve
+                Track how much is set aside for each goal and which bank account holds it
               </span>
             </div>
             <div className="flex items-center gap-2 shrink-0">

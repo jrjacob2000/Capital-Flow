@@ -426,7 +426,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div>
               <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium">
                 <Wallet className="w-3.5 h-3.5 shrink-0" />
-                <span>Total Capital Across {ledger.accounts.length} Accounts</span>
+                <span>Total Savings Across {ledger.accounts.length} Accounts</span>
               </div>
               <div className="mt-1 flex flex-wrap items-baseline gap-2.5">
                 <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums tracking-tight">
@@ -502,14 +502,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="p-3 sm:p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
           >
             <div className="flex items-center justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              <span>Earmarked in Funds</span>
+              <span>Assigned to Goal Funds</span>
               <PiggyBank className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
             </div>
             <div className="mt-1 text-sm sm:text-base font-bold font-mono tabular-nums text-indigo-600 dark:text-indigo-400 truncate">
               {currencySymbol}{formatNumber(totalAllocatedCategoryReserves)}
             </div>
             <div className="text-[10px] text-slate-400 truncate">
-              {categoryFunds.filter((f) => f.currentBalance > 0).length} active envelopes
+              {categoryFunds.filter((f) => f.currentBalance > 0).length} active goal funds
             </div>
           </div>
 
@@ -518,14 +518,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="p-3 sm:p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
           >
             <div className="flex items-center justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              <span>Free General Pool</span>
+              <span>Unassigned Cash</span>
               <Landmark className="w-3.5 h-3.5 text-amber-500 shrink-0" />
             </div>
             <div className="mt-1 text-sm sm:text-base font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400 truncate">
               {currencySymbol}{formatNumber(unallocatedCashReserve)}
             </div>
             <div className="text-[10px] text-slate-400 truncate">
-              Unassigned bank capital
+              Available to assign to goals
             </div>
           </div>
 
@@ -596,7 +596,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center gap-1.5">
             <TrendingUp className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
             <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-              {budget.year} Cashflow Summary ({frequency === 'bi-weekly' ? 'Bi-Weekly' : 'Monthly'})
+              {budget.year} Full-Year Cashflow ({frequency === 'bi-weekly' ? 'Bi-Weekly Budget' : 'Monthly Budget'})
             </h3>
           </div>
           <button
@@ -611,14 +611,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
           <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
-            <div className="text-[11px] text-slate-500 dark:text-slate-400">Total Income</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400">Year-to-Date Income</div>
             <div className="mt-0.5 text-sm sm:text-base font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
               {currencySymbol}{formatNumber(totalIncome)}
             </div>
           </div>
 
           <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
-            <div className="text-[11px] text-slate-500 dark:text-slate-400">Living Expenses</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400">Paid Expenses</div>
             <div className="mt-0.5 text-sm sm:text-base font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400 truncate">
               {currencySymbol}{formatNumber(totalExpenses)}
             </div>
@@ -626,7 +626,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
             <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-              <span>Saved to Funds</span>
+              <span>Moved to Savings</span>
               <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                 {savingsRate.toFixed(0)}%
               </span>
@@ -641,7 +641,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
           >
             <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-              <span>Net Surplus</span>
+              <span>Remaining Cash</span>
               <span
                 className={`text-[10px] font-semibold ${
                   unallocatedBudgetSurplus > 0.005
@@ -652,9 +652,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 }`}
               >
                 {unallocatedBudgetSurplus > 0.005
-                  ? 'Unassigned'
+                  ? 'Leftover'
                   : unallocatedBudgetSurplus < -0.005
-                  ? 'Deficit'
+                  ? 'Over Budget'
                   : 'Balanced'}
               </span>
             </div>
