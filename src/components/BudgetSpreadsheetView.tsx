@@ -20,6 +20,9 @@ import {
   Upload,
   Search,
   LayoutList,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import {
   BudgetEntry,
@@ -126,6 +129,40 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [expenseSearchQuery, setExpenseSearchQuery] = useState<string>('');
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [expandedIncomeRowId, setExpandedIncomeRowId] = useState<string | null>(null);
+
+  // Sorting states for Expense & Income grids
+  type ExpenseSortField = 'default' | 'item' | 'category' | 'estimated' | 'actual' | 'variance' | 'status' | 'mode';
+  type IncomeSortField = 'default' | 'item' | 'status' | 'estimated' | 'actual' | 'variance' | 'reference';
+  const [expenseSortField, setExpenseSortField] = useState<ExpenseSortField>('default');
+  const [expenseSortDir, setExpenseSortDir] = useState<'asc' | 'desc'>('asc');
+  const [incomeSortField, setIncomeSortField] = useState<IncomeSortField>('default');
+  const [incomeSortDir, setIncomeSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const handleToggleExpenseSort = (field: ExpenseSortField) => {
+    if (expenseSortField !== field) {
+      setExpenseSortField(field);
+      // Default numeric columns to descending (highest amount first), text columns to ascending
+      setExpenseSortDir(field === 'estimated' || field === 'actual' || field === 'variance' ? 'desc' : 'asc');
+    } else if (expenseSortDir === 'asc') {
+      setExpenseSortDir('desc');
+    } else {
+      // Third click resets to default order
+      setExpenseSortField('default');
+      setExpenseSortDir('asc');
+    }
+  };
+
+  const handleToggleIncomeSort = (field: IncomeSortField) => {
+    if (incomeSortField !== field) {
+      setIncomeSortField(field);
+      setIncomeSortDir(field === 'estimated' || field === 'actual' || field === 'variance' ? 'desc' : 'asc');
+    } else if (incomeSortDir === 'asc') {
+      setIncomeSortDir('desc');
+    } else {
+      setIncomeSortField('default');
+      setIncomeSortDir('asc');
+    }
+  };
 
   // Active Categories & Templates (from budget or defaults)
   const expenseCategories = budget.customCategories?.expense || [...EXPENSE_CATEGORIES];
@@ -266,9 +303,38 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
   const [autoFillMessage, setAutoFillMessage] = useState<string | null>(null);
 
+  // Helper: Only regular Salary should be pre-displayed on the Income Sources grid by default.
+  // Irregular income sources (Extra Income, Apartment Rent, Car Rental, 13th Month, Bonuses, etc.)
+  // are only displayed in a period when actual income (> 0) has been received for them.
+  const isRegularSalaryIncome = (itemName?: string, categoryName?: string): boolean => {
+    const itemLower = (itemName || '').toLowerCase().trim();
+    const catLower = (categoryName || '').toLowerCase().trim();
+    if (
+      itemLower.includes('extra income') ||
+      itemLower.includes('13th month') ||
+      itemLower.includes('bonus') ||
+      itemLower.includes('rental') ||
+      itemLower.includes('apartment') ||
+      itemLower.includes('freelance') ||
+      itemLower.includes('side hustle') ||
+      itemLower.includes('side income')
+    ) {
+      return false;
+    }
+    return (
+      itemLower === 'salary' ||
+      itemLower.includes('salary') ||
+      itemLower.includes('paycheck') ||
+      catLower === 'salary' ||
+      catLower === 'salary & wages'
+    );
+  };
+
   const handleAutoFillPeriodFromTemplates = () => {
-    const validTemplates = itemTemplates.filter((t) =>
-      isTemplateValidForPeriod(t, frequency, selectedPeriod)
+    const validTemplates = itemTemplates.filter(
+      (t) =>
+        isTemplateValidForPeriod(t, frequency, selectedPeriod) &&
+        (t.type !== 'income' || isRegularSalaryIncome(t.item, t.category))
     );
 
     if (validTemplates.length === 0) {
@@ -361,7 +427,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const periodList =
     frequency === 'monthly' ? MONTH_NAMES : BIWEEKLY_PERIODS.map((p) => p.id);
 
-  // UNIFIED SHEET ROWS: THE SHEET IS ALREADY PRE-POPULATED WITH ALL ESTIMATES!
+  // UNIFIED SHEET ROWS: THE SHEET IS PRE-POPULATED WITH ESTIMATES (FOR INCOME, ONLY REGULAR SALARY IS PRE-POPULATED)
   const { unifiedIncomeRows, unifiedExpenseRows } = useMemo(() => {
     const recordedEntries = budget.entries.filter((e) => e.period === selectedPeriod);
     const usedEntryIds = new Set<string>();
@@ -369,17 +435,20 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     const incomeRows: SheetRowItem[] = [];
     const expenseRows: SheetRowItem[] = [];
 
-    // 1. Every template matching the current frequency mode is guaranteed to appear on the sheet PRE-POPULATED with its estimate!
+    // 1. Populate from templates matching the current frequency mode
     itemTemplates
       .filter((tpl) => isTemplateValidForPeriod(tpl, frequency, selectedPeriod))
       .forEach((tpl) => {
       const tplItemLower = tpl.item.toLowerCase().trim();
-      const matchedEntry = recordedEntries.find(
+      const matchingCandidates = recordedEntries.filter(
         (e) =>
           !usedEntryIds.has(e.id) &&
           e.type === tpl.type &&
           (e.item || e.description || '').toLowerCase().trim() === tplItemLower
       );
+      const matchedEntry =
+        matchingCandidates.find((e) => (e.actualCost !== undefined ? e.actualCost : e.amount) > 0) ||
+        matchingCandidates[0];
 
       if (matchedEntry) {
         usedEntryIds.add(matchedEntry.id);
@@ -412,12 +481,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         };
 
         if (tpl.type === 'income') {
-          incomeRows.push(row);
+          // Non-salary irregular income sources are only displayed if income was actually received (> 0)
+          if (isRegularSalaryIncome(row.item, row.category) || act > 0) {
+            incomeRows.push(row);
+          }
         } else {
           expenseRows.push(row);
         }
       } else {
-        // Not yet recorded: Sheet is initialized with the estimate
+        // Not yet recorded: For income, ONLY pre-populate regular Salary; irregular income sources only appear when received
+        if (tpl.type === 'income' && !isRegularSalaryIncome(tpl.item, tpl.category)) {
+          return;
+        }
+
         const est = tpl.defaultEstimatedCost || 0;
         const repDate = new Date().toISOString().split('T')[0].replace(/^\d{4}/, String(budget.year));
         const tplTargetAcc = tpl.defaultSavingAccountId
@@ -480,7 +556,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         };
 
         if (entry.type === 'income') {
-          incomeRows.push(row);
+          if (isRegularSalaryIncome(row.item, row.category) || act > 0) {
+            incomeRows.push(row);
+          }
         } else {
           expenseRows.push(row);
         }
@@ -609,8 +687,44 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     return channels;
   };
 
+  const sortedIncomeRows = useMemo(() => {
+    if (incomeSortField === 'default') return unifiedIncomeRows;
+    const rows = [...unifiedIncomeRows];
+    const mult = incomeSortDir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      switch (incomeSortField) {
+        case 'item': {
+          const cmp = a.item.localeCompare(b.item, undefined, { sensitivity: 'base' });
+          return cmp !== 0 ? cmp * mult : a.category.localeCompare(b.category) * mult;
+        }
+        case 'status': {
+          const rank = (r: SheetRowItem) => (r.status === 'Paid' ? 2 : r.status === 'Scheduled' ? 1 : 0);
+          const diff = rank(a) - rank(b);
+          return diff !== 0 ? diff * mult : a.item.localeCompare(b.item) * mult;
+        }
+        case 'estimated':
+          return (a.estimatedCost - b.estimatedCost) * mult;
+        case 'actual': {
+          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -1;
+          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -1;
+          return (actA - actB) * mult;
+        }
+        case 'variance': {
+          const varA = a.hasActualCost && a.status === 'Paid' ? a.actualCost - a.estimatedCost : -999999999;
+          const varB = b.hasActualCost && b.status === 'Paid' ? b.actualCost - b.estimatedCost : -999999999;
+          return (varA - varB) * mult;
+        }
+        case 'reference':
+          return (a.reference || '').localeCompare(b.reference || '', undefined, { sensitivity: 'base' }) * mult;
+        default:
+          return 0;
+      }
+    });
+    return rows;
+  }, [unifiedIncomeRows, incomeSortField, incomeSortDir]);
+
   const filteredExpenseRows = useMemo(() => {
-    return unifiedExpenseRows.filter((exp) => {
+    const filtered = unifiedExpenseRows.filter((exp) => {
       if (mobileExpenseFilter === 'pending' && exp.status === 'Paid') return false;
       if (mobileExpenseFilter === 'paid' && exp.status !== 'Paid') return false;
       if (
@@ -635,7 +749,55 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       }
       return true;
     });
-  }, [unifiedExpenseRows, mobileExpenseFilter, paymentMethodFilter, expenseSearchQuery]);
+
+    if (expenseSortField === 'default') return filtered;
+
+    const sorted = [...filtered];
+    const mult = expenseSortDir === 'asc' ? 1 : -1;
+    sorted.sort((a, b) => {
+      switch (expenseSortField) {
+        case 'item': {
+          const cmp = a.item.localeCompare(b.item, undefined, { sensitivity: 'base' });
+          return cmp !== 0 ? cmp * mult : a.category.localeCompare(b.category) * mult;
+        }
+        case 'category': {
+          const cmp = a.category.localeCompare(b.category, undefined, { sensitivity: 'base' });
+          return cmp !== 0 ? cmp * mult : a.item.localeCompare(b.item) * mult;
+        }
+        case 'estimated': {
+          const diff = a.estimatedCost - b.estimatedCost;
+          return diff !== 0 ? diff * mult : a.item.localeCompare(b.item);
+        }
+        case 'actual': {
+          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -1;
+          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -1;
+          const diff = actA - actB;
+          return diff !== 0 ? diff * mult : (a.estimatedCost - b.estimatedCost) * mult;
+        }
+        case 'variance': {
+          const varA = a.hasActualCost && a.status === 'Paid' ? a.estimatedCost - a.actualCost : -999999999;
+          const varB = b.hasActualCost && b.status === 'Paid' ? b.estimatedCost - b.actualCost : -999999999;
+          const diff = varA - varB;
+          return diff !== 0 ? diff * mult : (b.estimatedCost - a.estimatedCost);
+        }
+        case 'status': {
+          const paidA = a.status === 'Paid' && a.hasActualCost ? 1 : 0;
+          const paidB = b.status === 'Paid' && b.hasActualCost ? 1 : 0;
+          if (paidA !== paidB) return (paidA - paidB) * mult;
+          return (b.estimatedCost - a.estimatedCost);
+        }
+        case 'mode': {
+          const chA = getActivePaymentChannels(a).map((c) => c.label).join(', ') || a.paymentMethod || '';
+          const chB = getActivePaymentChannels(b).map((c) => c.label).join(', ') || b.paymentMethod || '';
+          const cmp = chA.localeCompare(chB, undefined, { sensitivity: 'base' });
+          return cmp !== 0 ? cmp * mult : a.item.localeCompare(b.item);
+        }
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [unifiedExpenseRows, mobileExpenseFilter, paymentMethodFilter, expenseSearchQuery, expenseSortField, expenseSortDir]);
 
   const isExpenseFiltered =
     mobileExpenseFilter !== 'all' ||
@@ -902,10 +1064,29 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     e.preventDefault();
     const estNum = parseFloat(formEstimated) || 0;
     // 0 is explicitly accepted as actual value!
-    const actNum =
+    let actNum =
       formActual.trim() !== '' && !isNaN(parseFloat(formActual))
         ? parseFloat(formActual)
         : 0;
+
+    const resolvedFundOrItem =
+      modalType === 'saving'
+        ? isCreatingNewSinkingFund
+          ? formItem.trim() || formCategory
+          : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
+        : formItem.trim() || formCategory;
+
+    // For irregular (non-salary) income items, only received income (actual > 0) is displayed.
+    // If the user selected a template and typed the amount into Estimated while leaving Actual blank/0, use Estimated as Actual.
+    if (
+      modalType === 'income' &&
+      !isRegularSalaryIncome(resolvedFundOrItem, formCategory) &&
+      actNum <= 0 &&
+      estNum > 0
+    ) {
+      actNum = estNum;
+    }
+
     const diff = modalType === 'income' ? actNum - estNum : estNum - actNum;
 
     let periodIndex = 0;
@@ -929,13 +1110,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             bankTransfer: parseFloat(formPaymentBreakdown.bankTransfer) || 0,
           }
         : undefined;
-
-    const resolvedFundOrItem =
-      modalType === 'saving'
-        ? isCreatingNewSinkingFund
-          ? formItem.trim() || formCategory
-          : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
-        : formItem.trim() || formCategory;
 
     const isCashExplicit = formPaymentMethod === 'Cash';
     const isCashInSplit = Boolean(parsedBreakdown && (parsedBreakdown.cash || 0) > 0);
@@ -963,9 +1137,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       savingAccountName: modalType === 'saving' ? selectedAcc?.name : undefined,
     };
 
-    // Auto-save or update personalized Estimate Budget Template if requested or if virtual template estimate changed
+    // Auto-save or update personalized Estimate Budget Template if requested or if virtual row estimate was edited directly
     const trimmedItem = formItem.trim() || formCategory;
-    if (trimmedItem && (saveToTemplate || (selectedTemplateId && estNum > 0))) {
+    if (trimmedItem && (saveToTemplate || (isRowAction && selectedTemplateId && estNum > 0))) {
       const existingById = selectedTemplateId
         ? itemTemplates.find((t) => t.id === selectedTemplateId)
         : undefined;
@@ -1012,7 +1186,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     if (editingEntryId) {
       onUpdateEntry(editingEntryId, entryPayload);
     } else {
-      onAddEntry(entryPayload);
+      // If a zero-amount placeholder entry already exists for this item in the same period, update it instead of creating a duplicate
+      const existingZeroEntry = budget.entries.find(
+        (en) =>
+          en.period === modalPeriod &&
+          en.type === modalType &&
+          (en.item || en.description || '').toLowerCase().trim() === resolvedFundOrItem.toLowerCase().trim() &&
+          (en.actualCost !== undefined ? en.actualCost : en.amount) === 0
+      );
+      if (existingZeroEntry) {
+        onUpdateEntry(existingZeroEntry.id, entryPayload);
+      } else {
+        onAddEntry(entryPayload);
+      }
     }
 
     setIsAddModalOpen(false);
@@ -1111,8 +1297,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
           {/* Period Utility Actions (Creation buttons live contextually in each section below) */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* View Mode Switcher: Cards vs Table (Available on Mobile & PC) */}
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs mr-1">
+            {/* View Mode Switcher: Cards vs Table (Mobile Only — Desktop automatically uses full Table View) */}
+            <div className="flex md:hidden items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs mr-1">
               <button
                 type="button"
                 onClick={() => setMobileShowFullTable(false)}
@@ -1430,16 +1616,15 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
             {!isIncomeCollapsed && (
               <>
-            {/* INCOME CLEAN CARDS VIEW (Responsive: Compact List on Mobile, Multi-Column Card Grid on PC) */}
-            {!mobileShowFullTable ? (
-              <div>
-                {unifiedIncomeRows.length === 0 ? (
-                  <div className="p-6 md:p-8 text-center text-xs md:text-sm text-slate-400">
+            {/* INCOME CLEAN CARDS VIEW (Mobile Only when Cards selected) */}
+            <div className={mobileShowFullTable ? 'hidden' : 'md:hidden'}>
+                {sortedIncomeRows.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-400">
                     No income sources recorded for {selectedPeriod} yet.
                   </div>
                 ) : (
-                <div className="divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-3 md:p-4 md:bg-slate-50/40 dark:md:bg-slate-950/30">
-                  {unifiedIncomeRows.map((inc) => {
+                <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {sortedIncomeRows.map((inc) => {
                     const est = inc.estimatedCost;
                     const act = inc.actualCost;
                     const diff = inc.hasActualCost ? act - est : 0;
@@ -1449,27 +1634,27 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     return (
                       <div
                         key={inc.id}
-                        className="bg-white dark:bg-slate-900 md:rounded-xl md:border md:border-slate-200/90 dark:md:border-slate-800 md:shadow-2xs md:hover:border-emerald-300 dark:md:hover:border-emerald-800/70 md:hover:shadow-xs transition-all overflow-hidden flex flex-col justify-between"
+                        className="bg-white dark:bg-slate-900 transition-all overflow-hidden flex flex-col justify-between"
                       >
                         <div
                           onClick={() => setExpandedIncomeRowId(isExpanded ? null : inc.id)}
-                          className="px-3.5 py-2.5 md:px-4 md:py-3 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                          className="px-3.5 py-2.5 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer flex items-center justify-between gap-3"
                         >
                           {/* Left: Clean Item Title + Unboxed Subtitle */}
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
                               {isReceived ? (
-                                <CheckCircle2 className="w-3.5 h-3.5 md:w-4 md:h-4 text-emerald-500 shrink-0" />
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                               ) : isExpanded ? (
-                                <ChevronDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-emerald-600 shrink-0" />
+                                <ChevronDown className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                               ) : (
-                                <ChevronRight className="w-3.5 h-3.5 md:w-4 md:h-4 text-slate-400 shrink-0" />
+                                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                               )}
-                              <span className="font-semibold text-xs md:text-sm text-slate-900 dark:text-white truncate">
+                              <span className="font-semibold text-xs text-slate-900 dark:text-white truncate">
                                 {inc.item}
                               </span>
                             </div>
-                            <div className="pl-5 md:pl-5.5 mt-0.5 flex items-center gap-1.5 text-[11px] md:text-xs text-slate-500 dark:text-slate-400 truncate">
+                            <div className="pl-5 mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
                               <span className="truncate">{inc.category}</span>
                               {inc.reference && (
                                 <>
@@ -1481,34 +1666,23 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           </div>
 
                           {/* Right: Clean Amount + Single Primary Action */}
-                          <div className="flex items-center gap-2 md:gap-2.5 shrink-0">
+                          <div className="flex items-center gap-2 shrink-0">
                             <div className="text-right font-mono leading-tight">
                               {isReceived ? (
                                 <>
-                                  <div className="text-xs md:text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                                  <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
                                     {currencySymbol}{formatNumber(act)}
                                   </div>
-                                  {est > 0 && est !== act ? (
-                                    <div className="text-[10px] md:text-[11px] text-slate-400">
+                                  {est > 0 && est !== act && (
+                                    <div className="text-[10px] text-slate-400">
                                       Est {currencySymbol}{formatNumber(est)}
-                                    </div>
-                                  ) : est > 0 ? (
-                                    <div className="hidden md:block text-[11px] text-slate-400">
-                                      On target
-                                    </div>
-                                  ) : null}
-                                </>
-                              ) : (
-                                <>
-                                  <div className="text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400">
-                                    {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
-                                  </div>
-                                  {est > 0 && (
-                                    <div className="hidden md:block text-[11px] text-slate-400">
-                                      Estimated
                                     </div>
                                   )}
                                 </>
+                              ) : (
+                                <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                                  {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
+                                </div>
                               )}
                             </div>
 
@@ -1516,10 +1690,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               {canQuickConfirm && (
                                 <button
                                   onClick={() => handleQuickConfirmEstimate(inc)}
-                                  className="px-2.5 py-1 md:px-3 md:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] md:text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
                                   title={`Confirm ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Received`}
                                 >
-                                  <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                  <Check className="w-3 h-3" />
                                   <span>Receive</span>
                                 </button>
                               )}
@@ -1528,14 +1702,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                                 title="Edit Income"
                               >
-                                <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                                <Edit2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </div>
                         </div>
 
                         {isExpanded && (
-                          <div className="px-3.5 md:px-4 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800/80 text-[11px] md:text-xs flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-150">
+                          <div className="px-3.5 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800/80 text-[11px] flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-150">
                             <div className="flex flex-wrap items-center gap-2 font-mono text-slate-500 dark:text-slate-400">
                               <span>Est: <strong className="text-slate-700 dark:text-slate-200">{currencySymbol}{formatNumber(est)}</strong></span>
                               <span aria-hidden="true">·</span>
@@ -1554,7 +1728,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleOpenRow(inc)}
-                                className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold flex items-center gap-1"
                               >
                                 <Edit2 className="w-3 h-3" />
                                 <span>Edit</span>
@@ -1563,7 +1737,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => onDeleteEntry(inc.id)}
-                                  className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                  className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] font-semibold flex items-center gap-1"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                   <span>Reset</span>
@@ -1577,31 +1751,127 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   })}
                 </div>
                 )}
-                <div className="px-3.5 py-2.5 md:px-5 md:py-3 bg-emerald-50/80 dark:bg-emerald-950/40 flex items-center justify-between text-xs md:text-sm font-bold border-t border-emerald-200 dark:border-emerald-800">
+                <div className="px-3.5 py-2.5 bg-emerald-50/80 dark:bg-emerald-950/40 flex items-center justify-between text-xs font-bold border-t border-emerald-200 dark:border-emerald-800">
                   <span className="text-slate-800 dark:text-slate-200">Total Income</span>
-                  <div className="font-mono flex items-center gap-3 md:gap-4">
-                    <span className="text-slate-500 font-normal text-[10px] md:text-xs">Est {currencySymbol}{formatNumber(totalIncomeEstimated)}</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 text-xs md:text-sm">{currencySymbol}{formatNumber(totalIncomeActual)}</span>
+                  <div className="font-mono flex items-center gap-3">
+                    <span className="text-slate-500 font-normal text-[10px]">Est {currencySymbol}{formatNumber(totalIncomeEstimated)}</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 text-xs">{currencySymbol}{formatNumber(totalIncomeActual)}</span>
                   </div>
                 </div>
-              </div>
-            ) : (
-            /* #1: SIMPLIFIED INCOME TABLE (Compact on Mobile, Well-Proportioned on PC) */
-            <div className="overflow-x-auto scrollbar-thin">
+            </div>
+
+            {/* #1: INCOME SPREADSHEET TABLE (Always shown on Desktop md+, or on Mobile when Table selected) */}
+            <div className={`${mobileShowFullTable ? 'block' : 'hidden md:block'} overflow-x-auto scrollbar-thin`}>
               <table className="w-full text-left text-xs md:text-[13px] font-mono border-separate border-spacing-0 whitespace-nowrap">
                 <thead className="bg-slate-50/90 dark:bg-slate-800/60 text-[11px] md:text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 font-sans font-semibold">
                   <tr>
-                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none border-b border-r border-slate-200/80 dark:border-slate-800 truncate">
-                      Item
+                    <th
+                      onClick={() => handleToggleIncomeSort('item')}
+                      className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none border-b border-r border-slate-200/80 dark:border-slate-800 truncate cursor-pointer select-none transition-colors"
+                      title="Sort by Income Item"
+                    >
+                      <div className="inline-flex items-center gap-1">
+                        <span>Item</span>
+                        {incomeSortField === 'item' ? (
+                          incomeSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
-                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
-                      Estimated
+                    <th
+                      onClick={() => handleToggleIncomeSort('status')}
+                      className="hidden md:table-cell py-2.5 px-3 text-center border-b border-slate-200/80 dark:border-slate-800 w-[100px] hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Status"
+                    >
+                      <div className="inline-flex items-center justify-center gap-1">
+                        <span>Status</span>
+                        {incomeSortField === 'status' ? (
+                          incomeSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
-                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
-                      Actual
+                    <th
+                      onClick={() => handleToggleIncomeSort('estimated')}
+                      className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Estimated Income"
+                    >
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <span>Estimated</span>
+                        {incomeSortField === 'estimated' ? (
+                          incomeSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
-                    <th className="hidden md:table-cell py-2.5 px-4 md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] text-left border-b border-slate-200/80 dark:border-slate-800 truncate">
-                      Reference
+                    <th
+                      onClick={() => handleToggleIncomeSort('actual')}
+                      className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Actual Income"
+                    >
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <span>Actual</span>
+                        {incomeSortField === 'actual' ? (
+                          incomeSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      onClick={() => handleToggleIncomeSort('variance')}
+                      className="hidden md:table-cell py-2.5 px-4 text-right border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Income Variance (Actual vs Estimated)"
+                    >
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <span>Variance</span>
+                        {incomeSortField === 'variance' ? (
+                          incomeSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      onClick={() => handleToggleIncomeSort('reference')}
+                      className="hidden md:table-cell py-2.5 px-4 md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] text-left border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 truncate cursor-pointer select-none transition-colors"
+                      title="Sort by Reference"
+                    >
+                      <div className="inline-flex items-center gap-1">
+                        <span>Reference</span>
+                        {incomeSortField === 'reference' ? (
+                          incomeSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
                     <th className="md:sticky md:right-0 md:z-20 w-[64px] md:w-[88px] bg-slate-50 dark:bg-slate-800 py-2 px-2 md:py-2.5 md:px-3.5 text-right border-b border-l border-slate-200/80 dark:border-slate-800">
                       Action
@@ -1609,13 +1879,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                  {unifiedIncomeRows.length === 0 ? (
+                  {sortedIncomeRows.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-6 text-center font-sans text-xs md:text-sm text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
+                      <td colSpan={7} className="py-6 text-center font-sans text-xs md:text-sm text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
                         No income sources recorded for {selectedPeriod} yet.
                       </td>
                     </tr>
-                  ) : unifiedIncomeRows.map((inc) => {
+                  ) : sortedIncomeRows.map((inc) => {
                     const est = inc.estimatedCost;
                     const act = inc.actualCost;
                     const diff = inc.hasActualCost ? act - est : 0;
@@ -1628,9 +1898,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         onClick={() => handleOpenRow(inc)}
                         className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group"
                       >
-                        {/* Item + Category (Sticky Left, Reduced Width on Mobile, Default Width on PC) */}
+                        {/* Item + Category */}
                         <td
-                          className="sticky left-0 z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800/60 py-1.5 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans border-b border-r border-slate-100 dark:border-slate-800/80"
+                          className="sticky left-0 z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800/60 py-1.5 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none font-sans border-b border-r border-slate-100 dark:border-slate-800/80"
                           title={`${inc.item} (${inc.category})`}
                         >
                           <div className="flex items-center gap-1 md:gap-1.5 min-w-0">
@@ -1646,12 +1916,29 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           </div>
                         </td>
 
+                        {/* Status (Desktop Only) */}
+                        <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans border-b border-slate-100 dark:border-slate-800/80">
+                          {isReceived ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70">
+                              Received
+                            </span>
+                          ) : inc.status === 'Scheduled' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/70 dark:border-blue-800/70">
+                              Scheduled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                              Pending
+                            </span>
+                          )}
+                        </td>
+
                         {/* Estimated */}
                         <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
                           {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
                         </td>
 
-                        {/* Actual (Shows quick Receive button when pending, or Actual + subtle variance when received) */}
+                        {/* Actual */}
                         <td className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
                           {isReceived ? (
                             <div className="leading-tight">
@@ -1660,7 +1947,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               </div>
                               {est > 0 && diff !== 0 && (
                                 <div
-                                  className={`text-[10px] md:text-[11px] ${
+                                  className={`md:hidden text-[10px] ${
                                     diff < 0 ? 'text-rose-500' : 'text-emerald-600'
                                   }`}
                                 >
@@ -1688,8 +1975,29 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           )}
                         </td>
 
-                        {/* Reference (Visible on Larger Screens to balance table columns) */}
-                        <td className="hidden md:table-cell py-2.5 px-4 md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-xs text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80 truncate">
+                        {/* Variance (Desktop Only) */}
+                        <td className="hidden md:table-cell py-2.5 px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
+                          {!isReceived || est <= 0 ? (
+                            <span className="text-slate-300 dark:text-slate-600">—</span>
+                          ) : diff === 0 ? (
+                            <span className="font-sans text-xs text-slate-400 dark:text-slate-500">On target</span>
+                          ) : (
+                            <span
+                              className={`font-semibold ${
+                                diff > 0
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {diff > 0
+                                ? `+${currencySymbol}${formatNumber(diff)}`
+                                : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Reference (Visible on Larger Screens) */}
+                        <td className="hidden md:table-cell py-2.5 px-4 md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-xs text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80 truncate">
                           {inc.reference ? (
                             <span title={inc.reference} className="truncate block">
                               {inc.reference}
@@ -1729,14 +2037,28 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                   {/* Income Total Row */}
                   <tr className="bg-emerald-50/70 dark:bg-emerald-950/30 font-bold text-slate-900 dark:text-white">
-                    <td className="sticky left-0 z-10 bg-emerald-50 dark:bg-emerald-950 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm border-r border-emerald-200/70 dark:border-emerald-800/70 truncate">
+                    <td className="sticky left-0 z-10 bg-emerald-50 dark:bg-emerald-950 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none font-sans text-xs md:text-sm border-r border-emerald-200/70 dark:border-emerald-800/70 truncate">
                       Total Income
+                    </td>
+                    <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans text-xs font-normal text-emerald-800/70 dark:text-emerald-300/70">
+                      {receivedIncomeCount}/{unifiedIncomeRows.length}
                     </td>
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-slate-600 dark:text-slate-300 font-mono text-xs md:text-sm">
                       {currencySymbol}{formatNumber(totalIncomeEstimated)}
                     </td>
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-emerald-600 dark:text-emerald-400 font-mono text-xs md:text-sm">
                       {currencySymbol}{formatNumber(totalIncomeActual)}
+                    </td>
+                    <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm">
+                      {hasAnyIncomeRecorded && incomeDifference !== 0 ? (
+                        <span className={incomeDifference > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                          {incomeDifference > 0
+                            ? `+${currencySymbol}${formatNumber(incomeDifference)}`
+                            : `-${currencySymbol}${formatNumber(Math.abs(incomeDifference))}`}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-normal">—</span>
+                      )}
                     </td>
                     <td className="hidden md:table-cell py-2.5 px-4 font-sans text-xs font-normal text-emerald-800/70 dark:text-emerald-300/70">
                       {unifiedIncomeRows.length} {unifiedIncomeRows.length === 1 ? 'source' : 'sources'}
@@ -1746,7 +2068,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                 </tbody>
               </table>
             </div>
-            )}
               </>
             )}
           </div>
@@ -1809,9 +2130,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                 </div>
               </div>
 
-              {/* Right: Quick Search Input + Cards/Table Switcher */}
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1 lg:w-60">
+              {/* Right: Quick Search Input + Sort Control + Cards/Table Switcher */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[150px] lg:w-56">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="text"
@@ -1831,7 +2152,60 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] shrink-0">
+                {/* Sort Selector & Direction Toggle (Works in both Cards and Table Views) */}
+                <div className="flex items-center gap-1 bg-slate-100/90 dark:bg-slate-800 px-2 py-1 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] shrink-0">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  <select
+                    value={expenseSortField}
+                    onChange={(e) => {
+                      const nextField = e.target.value as ExpenseSortField;
+                      setExpenseSortField(nextField);
+                      if (nextField === 'estimated' || nextField === 'actual' || nextField === 'variance') {
+                        setExpenseSortDir('desc');
+                      } else {
+                        setExpenseSortDir('asc');
+                      }
+                    }}
+                    aria-label="Sort budget items by"
+                    className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none cursor-pointer pr-1"
+                  >
+                    <option value="default" className="bg-white dark:bg-slate-900">Sort: Default</option>
+                    <option value="item" className="bg-white dark:bg-slate-900">Sort: Item Name</option>
+                    <option value="category" className="bg-white dark:bg-slate-900">Sort: Category</option>
+                    <option value="status" className="bg-white dark:bg-slate-900">Sort: Status</option>
+                    <option value="estimated" className="bg-white dark:bg-slate-900">Sort: Estimated Cost</option>
+                    <option value="actual" className="bg-white dark:bg-slate-900">Sort: Actual Paid</option>
+                    <option value="variance" className="bg-white dark:bg-slate-900">Sort: Variance (Saved/Over)</option>
+                    <option value="mode" className="bg-white dark:bg-slate-900">Sort: Payment Mode</option>
+                  </select>
+                  {expenseSortField !== 'default' && (
+                    <button
+                      type="button"
+                      onClick={() => setExpenseSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                      className="px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold border border-slate-200/80 dark:border-slate-700 flex items-center gap-0.5 hover:bg-indigo-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                      title={
+                        expenseSortDir === 'asc'
+                          ? 'Ascending order (Click to switch to Descending)'
+                          : 'Descending order (Click to switch to Ascending)'
+                      }
+                    >
+                      {expenseSortDir === 'asc' ? (
+                        <>
+                          <ArrowUp className="w-3 h-3" />
+                          <span>{expenseSortField === 'estimated' || expenseSortField === 'actual' || expenseSortField === 'variance' ? 'Low→High' : 'A→Z'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <ArrowDown className="w-3 h-3" />
+                          <span>{expenseSortField === 'estimated' || expenseSortField === 'actual' || expenseSortField === 'variance' ? 'High→Low' : 'Z→A'}</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Mobile-only Cards vs Table Switcher (Desktop automatically renders Table View) */}
+                <div className="flex md:hidden items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] shrink-0">
                   <button
                     type="button"
                     onClick={() => setMobileShowFullTable(false)}
@@ -1964,11 +2338,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
               </div>
             </div>
 
-            {/* #3: CLEAN & SIMPLE CARDS VIEW (Responsive: Compact List on Mobile, Multi-Column Card Grid on PC) */}
-            {!mobileShowFullTable ? (
-              <div>
+            {/* #3: CLEAN & SIMPLE CARDS VIEW (Mobile Only when Cards selected; Desktop automatically uses Table View) */}
+            <div className={mobileShowFullTable ? 'hidden' : 'md:hidden'}>
                 {filteredExpenseRows.length === 0 ? (
-                  <div className="p-8 md:p-12 text-center text-xs md:text-sm text-slate-400 space-y-2">
+                  <div className="p-8 text-center text-xs text-slate-400 space-y-2">
                     <div>No matching budget items found for this filter.</div>
                     {isExpenseFiltered && (
                       <button
@@ -1986,7 +2359,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-3 md:p-4 md:bg-slate-50/40 dark:md:bg-slate-950/30">
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800">
                     {filteredExpenseRows.map((exp) => {
                       const est = exp.estimatedCost;
                       const act = exp.actualCost;
@@ -2006,29 +2379,29 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       return (
                         <div
                           key={exp.id}
-                          className={`md:rounded-xl md:border md:shadow-2xs md:hover:shadow-xs transition-all overflow-hidden flex flex-col justify-between ${
+                          className={`transition-all overflow-hidden flex flex-col justify-between ${
                             isSaving
-                              ? 'bg-indigo-50/20 dark:bg-indigo-950/15 md:border-indigo-200/80 dark:md:border-indigo-900/60 md:hover:border-indigo-300 dark:md:hover:border-indigo-700'
-                              : 'bg-white dark:bg-slate-900 md:border-slate-200/90 dark:md:border-slate-800 md:hover:border-indigo-300 dark:md:hover:border-indigo-800/70'
+                              ? 'bg-indigo-50/20 dark:bg-indigo-950/15'
+                              : 'bg-white dark:bg-slate-900'
                           }`}
                         >
                           {/* Clean 2-line Card Row: Left (Item / Category · Method), Right (Amount + Single Action) */}
                           <div
                             onClick={() => setExpandedRowId(isExpanded ? null : exp.id)}
-                            className="px-3.5 py-2.5 md:px-4 md:py-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                            className="px-3.5 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer flex items-center justify-between gap-3"
                           >
                             <div className="min-w-0 flex-1">
                               {/* Line 1: Subtle Settled Icon or Chevron + Full Item Title */}
                               <div className="flex items-center gap-1.5">
                                 {isPaid ? (
-                                  <CheckCircle2 className="w-3.5 h-3.5 md:w-4 md:h-4 text-emerald-500 shrink-0" />
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                                 ) : isExpanded ? (
-                                  <ChevronDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-indigo-600 shrink-0" />
+                                  <ChevronDown className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                                 ) : (
-                                  <ChevronRight className="w-3.5 h-3.5 md:w-4 md:h-4 text-slate-400 shrink-0" />
+                                  <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                 )}
                                 <span
-                                  className={`text-xs md:text-sm truncate ${
+                                  className={`text-xs truncate ${
                                     isPaid
                                       ? 'font-semibold text-slate-900 dark:text-white'
                                       : 'font-bold text-slate-900 dark:text-white'
@@ -2039,7 +2412,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               </div>
 
                               {/* Line 2: Clean Unboxed Category · Channel / Fund Account */}
-                              <div className="pl-5 md:pl-5.5 mt-0.5 flex items-center gap-1.5 text-[11px] md:text-xs text-slate-500 dark:text-slate-400 truncate">
+                              <div className="pl-5 mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
                                 <span
                                   className={`truncate ${
                                     isSaving
@@ -2069,12 +2442,12 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             </div>
 
                             {/* Right Side: Clean Amount + Pay (if pending) + Edit */}
-                            <div className="flex items-center gap-2 md:gap-2.5 shrink-0">
+                            <div className="flex items-center gap-2 shrink-0">
                               <div className="text-right font-mono leading-tight">
                                 {isPaid ? (
                                   <>
                                     <div
-                                      className={`text-xs md:text-sm font-bold ${
+                                      className={`text-xs font-bold ${
                                         isSaving
                                           ? 'text-indigo-600 dark:text-indigo-400'
                                           : 'text-slate-900 dark:text-white'
@@ -2082,31 +2455,20 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                     >
                                       {currencySymbol}{formatNumber(act)}
                                     </div>
-                                    {est > 0 && est !== act ? (
-                                      <div className="text-[10px] md:text-[11px] text-slate-400">
+                                    {est > 0 && est !== act && (
+                                      <div className="text-[10px] text-slate-400">
                                         Est {currencySymbol}{formatNumber(est)}
-                                      </div>
-                                    ) : est > 0 ? (
-                                      <div className="hidden md:block text-[11px] text-slate-400">
-                                        On budget
-                                      </div>
-                                    ) : null}
-                                  </>
-                                ) : (
-                                  <>
-                                    <div className="text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400">
-                                      {act > 0
-                                        ? `${currencySymbol}${formatNumber(act)}`
-                                        : est > 0
-                                        ? `${currencySymbol}${formatNumber(est)}`
-                                        : '—'}
-                                    </div>
-                                    {est > 0 && (
-                                      <div className="hidden md:block text-[11px] text-slate-400">
-                                        Estimated
                                       </div>
                                     )}
                                   </>
+                                ) : (
+                                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                                    {act > 0
+                                      ? `${currencySymbol}${formatNumber(act)}`
+                                      : est > 0
+                                      ? `${currencySymbol}${formatNumber(est)}`
+                                      : '—'}
+                                  </div>
                                 )}
                               </div>
 
@@ -2114,10 +2476,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 {canQuickPay && (
                                   <button
                                     onClick={() => handleQuickConfirmEstimate(exp)}
-                                    className="px-2.5 py-1 md:px-3 md:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] md:text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
                                     title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Paid`}
                                   >
-                                    <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                    <Check className="w-3 h-3" />
                                     <span>Pay</span>
                                   </button>
                                 )}
@@ -2126,7 +2488,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                                   title="Edit Item"
                                 >
-                                  <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                                  <Edit2 className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             </div>
@@ -2134,7 +2496,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                           {/* Compact Expandable Details Bar */}
                           {isExpanded && (
-                            <div className="px-3.5 md:px-4 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800 text-[11px] md:text-xs space-y-1.5 animate-in fade-in duration-150">
+                            <div className="px-3.5 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800 text-[11px] space-y-1.5 animate-in fade-in duration-150">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-2 font-mono text-slate-500 dark:text-slate-400">
                                   <span>
@@ -2160,7 +2522,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleOpenRow(exp)}
-                                    className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                    className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold flex items-center gap-1"
                                   >
                                     <Edit2 className="w-3 h-3" />
                                     <span>Edit</span>
@@ -2169,7 +2531,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                     <button
                                       type="button"
                                       onClick={() => onDeleteEntry(exp.id)}
-                                      className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                      className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] font-semibold flex items-center gap-1"
                                     >
                                       <Trash2 className="w-3 h-3" />
                                       <span>Reset</span>
@@ -2179,7 +2541,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               </div>
 
                               {(activeChannels.length > 1 || exp.reference) && (
-                                <div className="flex flex-wrap items-center gap-2 text-[10px] md:text-[11px] text-slate-500 dark:text-slate-400">
+                                <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400">
                                   {activeChannels.length > 1 && (
                                     <span>
                                       Split: {activeChannels.map((c) => `${c.label} (${currencySymbol}${formatNumber(c.amount)})`).join(', ')}
@@ -2200,78 +2562,197 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   </div>
                 )}
 
-                {/* Cards View Summary Footer (Stacked on Mobile, Side-by-Side on Larger Screens) */}
+                {/* Cards View Summary Footer (Mobile) */}
                 {isExpenseFiltered && filteredExpenseRows.length > 0 && (
-                  <div className="px-3.5 py-2 md:px-5 md:py-2.5 bg-indigo-50/70 dark:bg-indigo-950/30 border-t border-indigo-200/70 dark:border-indigo-900/60 flex items-center justify-between text-xs md:text-sm font-bold">
+                  <div className="px-3.5 py-2 bg-indigo-50/70 dark:bg-indigo-950/30 border-t border-indigo-200/70 dark:border-indigo-900/60 flex items-center justify-between text-xs font-bold">
                     <span className="text-indigo-900 dark:text-indigo-200">
                       Filtered Selection ({filteredExpenseRows.length} of {unifiedExpenseRows.length})
                     </span>
-                    <div className="font-mono flex items-center gap-3 md:gap-4">
-                      <span className="text-indigo-700/80 dark:text-indigo-300/80 font-normal text-[10px] md:text-xs">
+                    <div className="font-mono flex items-center gap-3">
+                      <span className="text-indigo-700/80 dark:text-indigo-300/80 font-normal text-[10px]">
                         Est {currencySymbol}{formatNumber(filteredExpenseEstimated)}
                       </span>
-                      <span className="text-indigo-700 dark:text-indigo-300 text-xs md:text-sm">
+                      <span className="text-indigo-700 dark:text-indigo-300 text-xs">
                         Paid {currencySymbol}{formatNumber(filteredExpenseActual)}
                       </span>
                     </div>
                   </div>
                 )}
-                <div className="border-t border-slate-200 dark:border-slate-800 divide-y divide-slate-200/70 dark:divide-slate-800 md:divide-y-0 md:grid md:grid-cols-2 md:divide-x md:divide-slate-200 dark:md:divide-slate-800">
-                  <div className="px-3.5 py-2.5 md:px-5 md:py-3 bg-slate-50 dark:bg-slate-800/80 flex items-center justify-between text-xs md:text-sm font-bold">
+                <div className="border-t border-slate-200 dark:border-slate-800 divide-y divide-slate-200/70 dark:divide-slate-800">
+                  <div className="px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 flex items-center justify-between text-xs font-bold">
                     <span className="text-slate-800 dark:text-slate-200">
                       Total Outflows ({unifiedExpenseRows.length})
                     </span>
-                    <div className="font-mono flex items-center gap-3 md:gap-4">
-                      <span className="text-slate-500 font-normal text-[10px] md:text-xs">
+                    <div className="font-mono flex items-center gap-3">
+                      <span className="text-slate-500 font-normal text-[10px]">
                         Est {currencySymbol}{formatNumber(totalExpenseEstimated)}
                       </span>
-                      <span className="text-rose-600 dark:text-rose-400 text-xs md:text-sm">
+                      <span className="text-rose-600 dark:text-rose-400 text-xs">
                         {currencySymbol}{formatNumber(totalExpenseActual)}
                       </span>
                     </div>
                   </div>
-                  <div className="px-3.5 py-2.5 md:px-5 md:py-3 bg-emerald-50/70 dark:bg-emerald-950/30 flex items-center justify-between text-xs md:text-sm font-bold">
+                  <div className="px-3.5 py-2.5 bg-emerald-50/70 dark:bg-emerald-950/30 flex items-center justify-between text-xs font-bold">
                     <span className="text-emerald-900 dark:text-emerald-200">
                       Net Remaining (Income − Outflows)
                     </span>
-                    <div className="font-mono flex items-center gap-3 md:gap-4">
-                      <span className="text-emerald-700/80 dark:text-emerald-300/80 font-normal text-[10px] md:text-xs">
+                    <div className="font-mono flex items-center gap-3">
+                      <span className="text-emerald-700/80 dark:text-emerald-300/80 font-normal text-[10px]">
                         Est {currencySymbol}{formatNumber(remainingExtraEstimated)}
                       </span>
-                      <span className="text-emerald-700 dark:text-emerald-300 text-xs md:text-sm">
+                      <span className="text-emerald-700 dark:text-emerald-300 text-xs">
                         {currencySymbol}{formatNumber(remainingExtra)}
                       </span>
                     </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-            /* #1 & #2: SIMPLIFIED EXPENSES & OUTFLOWS TABLE (Compact on Mobile, Well-Proportioned on PC) */
-            <div className="overflow-x-auto scrollbar-thin">
+            </div>
+
+            {/* #1 & #2: EXPENSES & OUTFLOWS SPREADSHEET TABLE (Always shown on Desktop md+ with Enhanced Status & Variance Columns, or on Mobile when Table selected) */}
+            <div className={`${mobileShowFullTable ? 'block' : 'hidden md:block'} overflow-x-auto scrollbar-thin`}>
               <table className="w-full text-left text-xs md:text-[13px] font-mono border-separate border-spacing-0 whitespace-nowrap">
                 <thead className="bg-slate-50/90 dark:bg-slate-800/60 text-[11px] md:text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 font-sans font-semibold">
                   <tr>
-                    {/* Column 1: Item & Category (Frozen Left, Reduced Width on Mobile, Default Width on PC) */}
-                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none border-b border-r border-slate-200/80 dark:border-slate-800 truncate">
-                      Item
+                    {/* Column 1: Item & Category (Frozen Left, Sortable by Item or Category) */}
+                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none border-b border-r border-slate-200/80 dark:border-slate-800 truncate select-none">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleExpenseSort('item')}
+                          className="inline-flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer uppercase font-semibold"
+                          title="Sort by Item Name"
+                        >
+                          <span>Item</span>
+                          {expenseSortField === 'item' ? (
+                            expenseSortDir === 'asc' ? (
+                              <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            ) : (
+                              <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            )
+                          ) : (
+                            <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                          )}
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-600">/</span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleExpenseSort('category')}
+                          className="inline-flex items-center gap-0.5 text-[10px] md:text-[11px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer uppercase font-semibold"
+                          title="Sort by Category"
+                        >
+                          <span>Cat</span>
+                          {expenseSortField === 'category' && (
+                            expenseSortDir === 'asc' ? (
+                              <ArrowUp className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            ) : (
+                              <ArrowDown className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            )
+                          )}
+                        </button>
+                      </div>
                     </th>
 
-                    {/* Column 2: Estimated */}
-                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
-                      Estimated
+                    {/* Column 2 (Desktop Only): Status Badge (Sortable) */}
+                    <th
+                      onClick={() => handleToggleExpenseSort('status')}
+                      className="hidden md:table-cell py-2.5 px-3 text-center border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 w-[100px] cursor-pointer select-none transition-colors"
+                      title="Sort by Status (Pending / Paid)"
+                    >
+                      <div className="inline-flex items-center justify-center gap-1">
+                        <span>Status</span>
+                        {expenseSortField === 'status' ? (
+                          expenseSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
 
-                    {/* Column 3: Actual */}
-                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
-                      Actual
+                    {/* Column 3: Estimated (Sortable) */}
+                    <th
+                      onClick={() => handleToggleExpenseSort('estimated')}
+                      className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Estimated Cost"
+                    >
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <span>Estimated</span>
+                        {expenseSortField === 'estimated' ? (
+                          expenseSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
 
-                    {/* Column 4: Payment Mode (Reduced Width with Ellipsis on Mobile, Expanded Width on PC) */}
-                    <th className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] text-left border-b border-slate-200/80 dark:border-slate-800 truncate">
-                      Mode
+                    {/* Column 4: Actual (Sortable) */}
+                    <th
+                      onClick={() => handleToggleExpenseSort('actual')}
+                      className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Actual Paid Amount"
+                    >
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <span>Actual</span>
+                        {expenseSortField === 'actual' ? (
+                          expenseSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
                     </th>
 
-                    {/* Column 5: Action (Frozen Right on Desktop) */}
+                    {/* Column 5 (Desktop Only): Variance / Saved vs Over (Sortable) */}
+                    <th
+                      onClick={() => handleToggleExpenseSort('variance')}
+                      className="hidden md:table-cell py-2.5 px-4 text-right border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer select-none transition-colors"
+                      title="Sort by Variance (Saved vs Over Budget)"
+                    >
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <span>Variance</span>
+                        {expenseSortField === 'variance' ? (
+                          expenseSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
+                    </th>
+
+                    {/* Column 6: Payment Mode (Sortable) */}
+                    <th
+                      onClick={() => handleToggleExpenseSort('mode')}
+                      className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] text-left border-b border-slate-200/80 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 truncate cursor-pointer select-none transition-colors"
+                      title="Sort by Payment Mode"
+                    >
+                      <div className="inline-flex items-center gap-1">
+                        <span>Mode</span>
+                        {expenseSortField === 'mode' ? (
+                          expenseSortDir === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 shrink-0" />
+                        )}
+                      </div>
+                    </th>
+
+                    {/* Column 7: Action (Frozen Right on Desktop) */}
                     <th className="md:sticky md:right-0 md:z-20 w-[64px] md:w-[88px] bg-slate-50 dark:bg-slate-800 py-2 px-2 md:py-2.5 md:px-3.5 text-right border-b border-l border-slate-200/80 dark:border-slate-800">
                       Action
                     </th>
@@ -2281,7 +2762,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
                   {filteredExpenseRows.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center font-sans text-xs md:text-sm text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
+                      <td colSpan={7} className="py-8 text-center font-sans text-xs md:text-sm text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
                         <div className="space-y-2">
                           <div>No matching budget items found for this filter.</div>
                           {isExpenseFiltered && (
@@ -2322,9 +2803,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           isSaving ? 'bg-indigo-50/15 dark:bg-indigo-950/15' : ''
                         }`}
                       >
-                        {/* Column 1: Item + Category (Frozen Left, Reduced Width on Mobile, Default Width on PC) */}
+                        {/* Column 1: Item + Category (Frozen Left) */}
                         <td
-                          className={`sticky left-0 z-10 py-1.5 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans border-b border-r border-slate-100 dark:border-slate-800/80 ${
+                          className={`sticky left-0 z-10 py-1.5 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none font-sans border-b border-r border-slate-100 dark:border-slate-800/80 ${
                             isSaving
                               ? 'bg-indigo-50 dark:bg-slate-900'
                               : 'bg-white dark:bg-slate-900'
@@ -2356,12 +2837,35 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           </div>
                         </td>
 
-                        {/* Column 2: Estimated */}
+                        {/* Column 2 (Desktop Only): Status Badge */}
+                        <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans border-b border-slate-100 dark:border-slate-800/80">
+                          {isPaid ? (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold ${
+                                isSaving
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/70'
+                                  : 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70'
+                              }`}
+                            >
+                              {isSaving ? 'Allocated' : 'Paid'}
+                            </span>
+                          ) : exp.status === 'Scheduled' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60">
+                              Scheduled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-amber-50/80 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">
+                              Pending
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Column 3: Estimated */}
                         <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
                           {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
                         </td>
 
-                        {/* Column 3: Actual (Shows quick Pay button when pending, or Actual + subtle variance when paid) */}
+                        {/* Column 4: Actual (Shows quick Pay button when pending, or Actual + mobile-only variance when paid) */}
                         <td className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
                           {isPaid ? (
                             <div className="leading-tight">
@@ -2376,7 +2880,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               </div>
                               {est > 0 && diff !== 0 && (
                                 <div
-                                  className={`text-[10px] md:text-[11px] ${
+                                  className={`md:hidden text-[10px] ${
                                     diff < 0 ? 'text-rose-500' : 'text-emerald-600'
                                   }`}
                                 >
@@ -2404,8 +2908,29 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           )}
                         </td>
 
-                        {/* Column 4: Payment Mode (Reduced Width + Ellipsis on Mobile, Full Readable Width on PC) */}
-                        <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800/80 truncate">
+                        {/* Column 5 (Desktop Only): Dedicated Variance Column */}
+                        <td className="hidden md:table-cell py-2.5 px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
+                          {!isPaid || est <= 0 ? (
+                            <span className="text-slate-300 dark:text-slate-600">—</span>
+                          ) : diff === 0 ? (
+                            <span className="font-sans text-xs text-slate-400 dark:text-slate-500">On budget</span>
+                          ) : (
+                            <span
+                              className={`font-semibold ${
+                                diff > 0
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {diff > 0
+                                ? `Saved ${currencySymbol}${formatNumber(diff)}`
+                                : `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Column 6: Payment Mode */}
+                        <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-[11px] md:text-xs text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800/80 truncate">
                           {!isPaid || activeChannels.length === 0 ? (
                             <span className="text-slate-300 dark:text-slate-600 font-mono">—</span>
                           ) : activeChannels.length === 1 ? (
@@ -2432,7 +2957,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           )}
                         </td>
 
-                        {/* Column 5: Action (Frozen Right on Desktop) */}
+                        {/* Column 7: Action (Frozen Right on Desktop) */}
                         <td
                           className={`md:sticky md:right-0 md:z-10 py-1.5 px-2 md:py-2.5 md:px-3.5 text-right font-sans whitespace-nowrap border-b border-l border-slate-100 dark:border-slate-800/80 ${
                             isSaving
@@ -2467,11 +2992,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   {/* FILTERED SUBTOTAL ROW (Shown when a filter or search is active) */}
                   {isExpenseFiltered && filteredExpenseRows.length > 0 && (
                     <tr className="bg-indigo-50/70 dark:bg-indigo-950/30 font-bold text-indigo-900 dark:text-indigo-200 border-t border-indigo-200/70 dark:border-indigo-900/60">
-                      <td className="sticky left-0 z-10 bg-indigo-50 dark:bg-slate-900 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm border-b border-r border-indigo-200/70 dark:border-indigo-900/60 truncate">
+                      <td className="sticky left-0 z-10 bg-indigo-50 dark:bg-slate-900 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none font-sans text-xs md:text-sm border-b border-r border-indigo-200/70 dark:border-indigo-900/60 truncate">
                         <div className="truncate">Filtered Subtotal</div>
                         <div className="text-[10px] md:text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 truncate">
                           {filteredExpenseRows.length} of {unifiedExpenseRows.length} items
                         </div>
+                      </td>
+                      <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 border-b border-indigo-200/70 dark:border-indigo-900/60">
+                        Filtered
                       </td>
                       <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-800 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
                         {currencySymbol}{formatNumber(filteredExpenseEstimated)}
@@ -2479,8 +3007,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-700 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
                         {currencySymbol}{formatNumber(filteredExpenseActual)}
                       </td>
-                      <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 border-b border-indigo-200/70 dark:border-indigo-900/60 truncate">
-                        Filtered
+                      <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm border-b border-indigo-200/70 dark:border-indigo-900/60">
+                        {filteredExpenseEstimated - filteredExpenseActual >= 0 ? (
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            Saved {currencySymbol}{formatNumber(filteredExpenseEstimated - filteredExpenseActual)}
+                          </span>
+                        ) : (
+                          <span className="text-rose-600 dark:text-rose-400">
+                            Over {currencySymbol}{formatNumber(Math.abs(filteredExpenseEstimated - filteredExpenseActual))}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-[11px] md:text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 border-b border-indigo-200/70 dark:border-indigo-900/60 truncate">
+                        —
                       </td>
                       <td className="md:sticky md:right-0 md:z-10 bg-indigo-50 dark:bg-slate-900 border-b border-l border-indigo-200/70 dark:border-indigo-900/60"></td>
                     </tr>
@@ -2488,11 +3027,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                   {/* SUMMARY TOTALS ROW */}
                   <tr className="bg-slate-50 dark:bg-slate-800/80 font-bold text-slate-900 dark:text-white border-t border-slate-200 dark:border-slate-700">
-                    <td className="sticky left-0 z-10 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm border-b border-r border-slate-200/80 dark:border-slate-700 truncate">
+                    <td className="sticky left-0 z-10 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none font-sans text-xs md:text-sm border-b border-r border-slate-200/80 dark:border-slate-700 truncate">
                       <div className="truncate">Total Outflows</div>
                       <div className="text-[10px] md:text-xs font-normal text-slate-500 dark:text-slate-400 truncate">
                         {unifiedExpenseRows.length} items
                       </div>
+                    </td>
+                    <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans text-xs font-normal text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-700">
+                      {unifiedExpenseRows.filter((r) => r.status === 'Paid').length}/{unifiedExpenseRows.length} paid
                     </td>
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-slate-600 dark:text-slate-300 border-b border-slate-200/80 dark:border-slate-700">
                       {currencySymbol}{formatNumber(totalExpenseEstimated)}
@@ -2500,7 +3042,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-rose-600 dark:text-rose-400 text-xs md:text-sm font-mono border-b border-slate-200/80 dark:border-slate-700">
                       {currencySymbol}{formatNumber(totalExpenseActual)}
                     </td>
-                    <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs font-normal text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-700 truncate">
+                    <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm border-b border-slate-200/80 dark:border-slate-700">
+                      {hasAnyExpenseRecorded && expenseDifference !== 0 ? (
+                        <span className={expenseDifference > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                          {expenseDifference > 0
+                            ? `Saved ${currencySymbol}${formatNumber(expenseDifference)}`
+                            : `Over ${currencySymbol}${formatNumber(Math.abs(expenseDifference))}`}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-normal">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-[11px] md:text-xs font-normal text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-700 truncate">
                       —
                     </td>
                     <td className="md:sticky md:right-0 md:z-10 bg-slate-50 dark:bg-slate-800 border-b border-l border-slate-200/80 dark:border-slate-700"></td>
@@ -2508,11 +3061,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                   {/* REMAINING EXTRA SALARY ROW */}
                   <tr className="bg-emerald-50/60 dark:bg-emerald-950/30 font-bold text-slate-900 dark:text-white">
-                    <td className="sticky left-0 z-10 bg-emerald-50 dark:bg-emerald-950 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm text-emerald-900 dark:text-emerald-200 border-r border-emerald-200/70 dark:border-emerald-800/70 truncate">
+                    <td className="sticky left-0 z-10 bg-emerald-50 dark:bg-emerald-950 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[240px] lg:w-[280px] md:max-w-none font-sans text-xs md:text-sm text-emerald-900 dark:text-emerald-200 border-r border-emerald-200/70 dark:border-emerald-800/70 truncate">
                       <div className="truncate">Net Remaining</div>
                       <div className="text-[10px] md:text-xs font-normal text-emerald-700 dark:text-emerald-300 truncate">
                         Income − Outflows
                       </div>
+                    </td>
+                    <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                      {currentRemainingPaid >= 0 ? 'Surplus' : 'Deficit'}
                     </td>
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-emerald-800 dark:text-emerald-300">
                       {currencySymbol}{formatNumber(remainingExtraEstimated)}
@@ -2520,15 +3076,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-emerald-700 dark:text-emerald-300">
                       {currencySymbol}{formatNumber(remainingExtra)}
                     </td>
-                    <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs font-normal text-emerald-800 dark:text-emerald-300 truncate">
-                      {currentRemainingPaid >= 0 ? 'Surplus' : 'Deficit'}
+                    <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm text-emerald-700 dark:text-emerald-300">
+                      —
+                    </td>
+                    <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-[11px] md:text-xs font-normal text-emerald-800 dark:text-emerald-300 truncate">
+                      {currentRemainingPaid >= 0 ? 'Safe Surplus' : 'Deficit'}
                     </td>
                     <td className="md:sticky md:right-0 md:z-10 bg-emerald-50 dark:bg-emerald-950 border-l border-emerald-200/70 dark:border-emerald-800/70"></td>
                   </tr>
                 </tbody>
               </table>
             </div>
-            )}
           </div>
 
         </div>

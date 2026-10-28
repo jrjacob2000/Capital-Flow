@@ -310,7 +310,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
     setFormStartDate(loan.startDate || new Date().toISOString().split('T')[0]);
     setFormDueDay(loan.dueDay || '');
     setFormNotes(loan.notes || '');
-    setFormSyncTemplate(false);
+    setFormSyncTemplate(getLoanMetrics(loan).hasLinkedTemplate);
     setIsLoanModalOpen(true);
   };
 

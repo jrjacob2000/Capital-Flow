@@ -1176,20 +1176,85 @@ export const OCT_2026_MIGRATED_ACTUAL_ENTRIES: BudgetEntry[] = [
   },
 ];
 
+export const DEFAULT_STARTER_EPOCH = '1970-01-01T00:00:00.000Z';
+
+const OCT_STARTER_ENTRY_IDS = new Set(OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => e.id));
+const MIGRATED_STARTER_TEMPLATE_IDS = new Set(MIGRATED_2026_ITEM_TEMPLATES.map((t) => t.id));
+
+/**
+ * Detects whether a YearBudgetData object is untouched default starter sample data.
+ * Prevents sample data from ever being treated as "newer" than a user's Google Drive cloud backup.
+ */
+export function isDefaultStarterBudget(budget?: YearBudgetData | null): boolean {
+  if (!budget) return true;
+  if (budget.isDefaultStarterData === true) return true;
+  if (budget.isDefaultStarterData === false) return false;
+
+  const entries = budget.entries || [];
+  const templates = budget.itemTemplates || [];
+
+  const allEntriesAreStarter =
+    entries.length === 0 ||
+    (entries.length === OCT_2026_MIGRATED_ACTUAL_ENTRIES.length &&
+      entries.every((e) => OCT_STARTER_ENTRY_IDS.has(e.id)));
+
+  const allTemplatesAreStarter =
+    templates.length === 0 ||
+    (templates.length === MIGRATED_2026_ITEM_TEMPLATES.length &&
+      templates.every((t) => MIGRATED_STARTER_TEMPLATE_IDS.has(t.id) || isDefaultStarterTemplateItem(t)));
+
+  return allEntriesAreStarter && allTemplatesAreStarter;
+}
+
+/**
+ * Detects whether a template profile / BudgetTemplateData is untouched default starter sample data.
+ */
+export function isDefaultStarterTemplateData(
+  tpl?: { itemTemplates?: BudgetItemTemplate[]; isDefaultStarterData?: boolean } | null
+): boolean {
+  if (!tpl) return true;
+  if (tpl.isDefaultStarterData === true) return true;
+  if (tpl.isDefaultStarterData === false) return false;
+
+  const templates = tpl.itemTemplates || [];
+  return (
+    templates.length === 0 ||
+    (templates.length === MIGRATED_2026_ITEM_TEMPLATES.length &&
+      templates.every((t) => MIGRATED_STARTER_TEMPLATE_IDS.has(t.id) || isDefaultStarterTemplateItem(t)))
+  );
+}
+
+/**
+ * Detects whether a SavingsLedgerData object is untouched default starter data.
+ */
+export function isDefaultStarterLedger(ledger?: SavingsLedgerData | null): boolean {
+  if (!ledger) return true;
+  if (ledger.isDefaultStarterData === true) return true;
+  if (ledger.isDefaultStarterData === false) return false;
+
+  const hasTransactions = (ledger.transactions || []).length > 0;
+  const hasLoans = (ledger.loans || []).length > 0;
+  const hasCapital = (ledger.initialCapital || 0) > 0;
+  const hasAccountBalance = (ledger.accounts || []).some((a) => (a.balance || 0) > 0);
+  return !hasTransactions && !hasLoans && !hasCapital && !hasAccountBalance;
+}
+
 export function createEmptyYearBudget(
   year: number,
   userProfile?: {
     customCategories?: { income: string[]; expense: string[]; saving: string[] };
     itemTemplates?: BudgetItemTemplate[];
     isPersonalizedTemplate?: boolean;
+    isDefaultStarterData?: boolean;
   }
 ): YearBudgetData {
   const cleanedUserTemplates = stripDefaultStarterTemplates(userProfile?.itemTemplates).map((t) => ({
     ...t,
     category: normalizeCategoryWording(t.category),
   }));
+  const isStarterProfile = !userProfile || isDefaultStarterTemplateData(userProfile) || cleanedUserTemplates.length === 0;
   const activeTemplates =
-    cleanedUserTemplates.length > 0
+    !isStarterProfile && cleanedUserTemplates.length > 0
       ? cleanedUserTemplates
       : MIGRATED_2026_ITEM_TEMPLATES.map((t) => ({ ...t }));
   const hasPersonalized = activeTemplates.length > 0;
@@ -1217,16 +1282,19 @@ export function createEmptyYearBudget(
         saving: [...SAVING_CATEGORIES],
       };
 
+  const isDefaultData = year === 2026 ? isStarterProfile : false;
+
   return {
     year,
     version: '1.0',
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: isDefaultData ? DEFAULT_STARTER_EPOCH : new Date().toISOString(),
     entryMode: 'monthly',
     currency: '₱',
-    entries: year === 2026 ? OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => ({ ...e })) : [],
+    entries: year === 2026 && isStarterProfile ? OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => ({ ...e })) : [],
     customCategories: activeCategories,
     itemTemplates: activeTemplates,
     isPersonalizedTemplate: hasPersonalized,
+    isDefaultStarterData: isDefaultData,
     budgets: deriveCategoryBudgetsFromTemplates(activeTemplates),
   };
 }
@@ -1238,9 +1306,10 @@ export function generateInitial2026Budget(): YearBudgetData {
 export function generateInitialSavingsLedger(_initial2026Budget?: YearBudgetData): SavingsLedgerData {
   return {
     version: '1.0',
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: DEFAULT_STARTER_EPOCH,
     currency: '₱',
     initialCapital: 0,
+    isDefaultStarterData: true,
     accounts: DEFAULT_SAVINGS_ACCOUNTS.map((acc) => ({
       ...acc,
       balance: 0,

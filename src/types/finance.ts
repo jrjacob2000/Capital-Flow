@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.13.0';
+export const APP_VERSION = '1.14.0';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
@@ -152,6 +152,7 @@ export interface YearBudgetData {
   };
   itemTemplates?: BudgetItemTemplate[];
   isPersonalizedTemplate?: boolean;
+  isDefaultStarterData?: boolean;
   notes?: string;
 }
 
@@ -212,12 +213,14 @@ export interface SavingsLedgerData {
   accounts: SavingsAccount[];
   transactions: SavingsTransaction[];
   loans?: LoanRecord[];
+  isDefaultStarterData?: boolean;
 }
 
 export interface BudgetTemplateData {
   version: string;
   lastUpdated: string;
   isPersonalizedTemplate: boolean;
+  isDefaultStarterData?: boolean;
   customCategories: {
     income: string[];
     expense: string[];

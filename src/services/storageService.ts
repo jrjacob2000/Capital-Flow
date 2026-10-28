@@ -38,6 +38,10 @@ import {
   deriveCategoryBudgetsFromTemplates,
   resolveCanonicalSinkingFundName,
   normalizeSavingCategoryGroup,
+  DEFAULT_STARTER_EPOCH,
+  isDefaultStarterBudget,
+  isDefaultStarterTemplateData,
+  isDefaultStarterLedger,
 } from './sampleData';
 
 const LOCAL_STORAGE_KEY_PREFIX = 'capitalflow_local_budget_';
@@ -58,6 +62,7 @@ export interface UserTemplateProfile {
   };
   itemTemplates: BudgetItemTemplate[];
   isPersonalizedTemplate: boolean;
+  isDefaultStarterData?: boolean;
 }
 
 export class FinanceStorageService {
@@ -116,8 +121,13 @@ export class FinanceStorageService {
           }
         });
 
+        const isStarterTpl = isDefaultStarterTemplateData({
+          itemTemplates: cleanedTemplates,
+          isDefaultStarterData: parsed.isDefaultStarterData,
+        });
         const normalizedProfile: UserTemplateProfile = {
           ...parsed,
+          lastUpdated: isStarterTpl ? DEFAULT_STARTER_EPOCH : parsed.lastUpdated,
           customCategories: {
             expense: normalizedExpenseCats,
             income: [...(parsed.customCategories?.income || INCOME_CATEGORIES)],
@@ -125,6 +135,7 @@ export class FinanceStorageService {
           },
           itemTemplates: cleanedTemplates,
           isPersonalizedTemplate: Boolean(parsed.isPersonalizedTemplate && cleanedTemplates.length > 0),
+          isDefaultStarterData: isStarterTpl,
         };
         if (hadDefaultItems || didUpdateCategories) {
           localStorage.setItem(LOCAL_STORAGE_KEY_USER_TEMPLATE, JSON.stringify(normalizedProfile));
@@ -171,10 +182,15 @@ export class FinanceStorageService {
         ),
       ])
     ).filter(Boolean);
+    const isStarterTpl = isDefaultStarterTemplateData({
+      itemTemplates: cleanedTemplates,
+      isDefaultStarterData: profile.isDefaultStarterData,
+    });
     const fullData: BudgetTemplateData = {
       version: profile.version || '1.0.0',
-      lastUpdated: profile.lastUpdated || new Date().toISOString(),
+      lastUpdated: isStarterTpl ? DEFAULT_STARTER_EPOCH : profile.lastUpdated || new Date().toISOString(),
       isPersonalizedTemplate: Boolean(profile.isPersonalizedTemplate && cleanedTemplates.length > 0),
+      isDefaultStarterData: isStarterTpl,
       customCategories: {
         expense: normalizedExpenseCats,
         income: [...(profile.customCategories?.income || INCOME_CATEGORIES)],
@@ -196,10 +212,14 @@ export class FinanceStorageService {
   static loadLocalTemplateData(fallbackBudget?: YearBudgetData): BudgetTemplateData {
     const saved = FinanceStorageService.loadUserTemplateProfile();
     if (saved) {
+      const isStarter = isDefaultStarterTemplateData(saved);
       return {
         version: saved.version || '1.0.0',
-        lastUpdated: saved.lastUpdated || fallbackBudget?.lastUpdated || new Date().toISOString(),
+        lastUpdated: isStarter
+          ? DEFAULT_STARTER_EPOCH
+          : saved.lastUpdated || fallbackBudget?.lastUpdated || new Date().toISOString(),
         isPersonalizedTemplate: Boolean(saved.isPersonalizedTemplate && saved.itemTemplates.length > 0),
+        isDefaultStarterData: isStarter,
         customCategories: {
           expense: [...(saved.customCategories?.expense || EXPENSE_CATEGORIES)],
           income: [...(saved.customCategories?.income || INCOME_CATEGORIES)],
@@ -211,10 +231,15 @@ export class FinanceStorageService {
 
     if (fallbackBudget && Array.isArray(fallbackBudget.itemTemplates) && fallbackBudget.customCategories) {
       const cleanedFallback = stripDefaultStarterTemplates(fallbackBudget.itemTemplates).map((t) => ({ ...t }));
+      const isStarter = isDefaultStarterTemplateData({
+        itemTemplates: cleanedFallback,
+        isDefaultStarterData: fallbackBudget.isDefaultStarterData,
+      });
       return {
         version: '1.0.0',
-        lastUpdated: fallbackBudget.lastUpdated || new Date().toISOString(),
+        lastUpdated: isStarter ? DEFAULT_STARTER_EPOCH : fallbackBudget.lastUpdated || new Date().toISOString(),
         isPersonalizedTemplate: Boolean(fallbackBudget.isPersonalizedTemplate && cleanedFallback.length > 0),
+        isDefaultStarterData: isStarter,
         customCategories: {
           expense: [...fallbackBudget.customCategories.expense],
           income: [...fallbackBudget.customCategories.income],
@@ -226,8 +251,9 @@ export class FinanceStorageService {
 
     return {
       version: '1.0.0',
-      lastUpdated: new Date().toISOString(),
+      lastUpdated: DEFAULT_STARTER_EPOCH,
       isPersonalizedTemplate: false,
+      isDefaultStarterData: true,
       customCategories: {
         expense: [...EXPENSE_CATEGORIES],
         income: [...INCOME_CATEGORIES],
@@ -275,6 +301,7 @@ export class FinanceStorageService {
       customCategories: normalizedCategories,
       itemTemplates: normalizedTemplates,
       isPersonalizedTemplate: hasPersonalized,
+      isDefaultStarterData: false,
     });
 
     const updatedBudget: YearBudgetData = {
@@ -282,11 +309,12 @@ export class FinanceStorageService {
       customCategories: normalizedCategories,
       itemTemplates: normalizedTemplates,
       isPersonalizedTemplate: hasPersonalized,
+      isDefaultStarterData: false,
       budgets: deriveCategoryBudgetsFromTemplates(normalizedTemplates),
-      lastUpdated: new Date().toISOString(),
+      lastUpdated: templateData.lastUpdated || new Date().toISOString(),
     };
 
-    FinanceStorageService.saveLocalBudget(updatedBudget);
+    FinanceStorageService.saveLocalBudget(updatedBudget, { preserveTimestamp: Boolean(templateData.lastUpdated) });
     return updatedBudget;
   }
 
@@ -500,10 +528,10 @@ export class FinanceStorageService {
     }
 
     const cleanBudget = createEmptyYearBudget(2026);
-    FinanceStorageService.saveLocalBudget(cleanBudget);
+    FinanceStorageService.saveLocalBudget(cleanBudget, { isDefaultStarter: true });
 
     const cleanLedger = generateInitialSavingsLedger(cleanBudget);
-    FinanceStorageService.saveLocalSavingsLedger(cleanLedger);
+    FinanceStorageService.saveLocalSavingsLedger(cleanLedger, { isDefaultStarter: true });
 
     localStorage.setItem(LOCAL_STORAGE_KEY_YEARS, JSON.stringify([2026]));
     localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
@@ -523,16 +551,12 @@ export class FinanceStorageService {
         const parsed = JSON.parse(raw) as YearBudgetData;
         const { budget: normalized, didMigrate } = FinanceStorageService.normalizeBudgetTemplates(parsed);
         let shouldSave = didMigrate;
+        const isStarter = isDefaultStarterBudget(normalized);
 
-        if (year === 2026 && localStorage.getItem(OCT_2026_MIGRATION_KEY) !== 'true') {
-          const octEntryIds = new Set(OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => e.id));
-          const otherEntries = (normalized.entries || []).filter(
-            (e) => e.period !== 'Oct' && !octEntryIds.has(e.id)
-          );
-          normalized.entries = [
-            ...OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => ({ ...e })),
-            ...otherEntries,
-          ];
+        // ONLY update starter sample entries if this budget is STILL untouched default starter data!
+        // Never overwrite a user's real or Drive-restored budget!
+        if (year === 2026 && isStarter && localStorage.getItem(OCT_2026_MIGRATION_KEY) !== 'true') {
+          normalized.entries = OCT_2026_MIGRATED_ACTUAL_ENTRIES.map((e) => ({ ...e }));
           if (!normalized.customCategories) {
             normalized.customCategories = {
               expense: [...EXPENSE_CATEGORIES],
@@ -547,11 +571,14 @@ export class FinanceStorageService {
           });
           localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
           shouldSave = true;
+        } else if (year === 2026 && !isStarter) {
+          localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
         }
 
-        if (year === 2026 && localStorage.getItem(OCT_2026_TEMPLATE_MIGRATION_KEY) !== 'true') {
+        if (year === 2026 && isStarter && localStorage.getItem(OCT_2026_TEMPLATE_MIGRATION_KEY) !== 'true') {
           normalized.itemTemplates = MIGRATED_2026_ITEM_TEMPLATES.map((t) => ({ ...t }));
           normalized.isPersonalizedTemplate = true;
+          normalized.isDefaultStarterData = true;
           normalized.budgets = deriveCategoryBudgetsFromTemplates(normalized.itemTemplates);
           if (!normalized.customCategories) {
             normalized.customCategories = {
@@ -566,13 +593,24 @@ export class FinanceStorageService {
             }
           });
           FinanceStorageService.saveUserTemplateProfile({
-            lastUpdated: new Date().toISOString(),
+            lastUpdated: DEFAULT_STARTER_EPOCH,
             customCategories: normalized.customCategories,
             itemTemplates: normalized.itemTemplates,
             isPersonalizedTemplate: true,
+            isDefaultStarterData: true,
           });
           localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
           shouldSave = true;
+        } else if (year === 2026 && !isStarter) {
+          localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
+        }
+
+        if (isStarter) {
+          if (!normalized.isDefaultStarterData || normalized.lastUpdated !== DEFAULT_STARTER_EPOCH) {
+            normalized.isDefaultStarterData = true;
+            normalized.lastUpdated = DEFAULT_STARTER_EPOCH;
+            shouldSave = true;
+          }
         }
 
         if (shouldSave) {
@@ -590,13 +628,24 @@ export class FinanceStorageService {
       localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
       localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
     }
-    FinanceStorageService.saveLocalBudget(cleanBudget);
+    FinanceStorageService.saveLocalBudget(cleanBudget, {
+      isDefaultStarter: isDefaultStarterBudget(cleanBudget),
+    });
     FinanceStorageService.registerKnownYear(year);
     return cleanBudget;
   }
 
-  static saveLocalBudget(budget: YearBudgetData): void {
-    budget.lastUpdated = new Date().toISOString();
+  static saveLocalBudget(
+    budget: YearBudgetData,
+    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean }
+  ): void {
+    const isStarter = Boolean(options?.isDefaultStarter);
+    budget.isDefaultStarterData = isStarter;
+    budget.lastUpdated = isStarter
+      ? DEFAULT_STARTER_EPOCH
+      : options?.preserveTimestamp && budget.lastUpdated && budget.lastUpdated !== DEFAULT_STARTER_EPOCH
+      ? budget.lastUpdated
+      : new Date().toISOString();
     budget.budgets = deriveCategoryBudgetsFromTemplates(budget.itemTemplates || []);
     if (budget.customCategories && Array.isArray(budget.itemTemplates)) {
       FinanceStorageService.saveUserTemplateProfile({
@@ -604,6 +653,7 @@ export class FinanceStorageService {
         customCategories: budget.customCategories,
         itemTemplates: budget.itemTemplates,
         isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
+        isDefaultStarterData: isStarter,
       });
     }
     localStorage.setItem(`${LOCAL_STORAGE_KEY_PREFIX}${budget.year}`, JSON.stringify(budget));
@@ -671,8 +721,16 @@ export class FinanceStorageService {
             return updated;
           });
         }
+        const isStarter = isDefaultStarterLedger(parsed);
+        if (isStarter) {
+          if (!parsed.isDefaultStarterData || parsed.lastUpdated !== DEFAULT_STARTER_EPOCH) {
+            parsed.isDefaultStarterData = true;
+            parsed.lastUpdated = DEFAULT_STARTER_EPOCH;
+            ledgerMigrated = true;
+          }
+        }
         if (ledgerMigrated) {
-          FinanceStorageService.saveLocalSavingsLedger(parsed);
+          FinanceStorageService.saveLocalSavingsLedger(parsed, { isDefaultStarter: isStarter });
         }
         return parsed;
       } catch (e) {
@@ -683,7 +741,7 @@ export class FinanceStorageService {
     const budget2026 = FinanceStorageService.loadLocalBudget(2026);
     const initialLedger = generateInitialSavingsLedger(budget2026);
     initialLedger.loans = [];
-    FinanceStorageService.saveLocalSavingsLedger(initialLedger);
+    FinanceStorageService.saveLocalSavingsLedger(initialLedger, { isDefaultStarter: true });
     return initialLedger;
   }
 
@@ -707,8 +765,17 @@ export class FinanceStorageService {
     return clean as T;
   }
 
-  static saveLocalSavingsLedger(ledger: SavingsLedgerData): void {
-    ledger.lastUpdated = new Date().toISOString();
+  static saveLocalSavingsLedger(
+    ledger: SavingsLedgerData,
+    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean }
+  ): void {
+    const isStarter = Boolean(options?.isDefaultStarter);
+    ledger.isDefaultStarterData = isStarter;
+    ledger.lastUpdated = isStarter
+      ? DEFAULT_STARTER_EPOCH
+      : options?.preserveTimestamp && ledger.lastUpdated && ledger.lastUpdated !== DEFAULT_STARTER_EPOCH
+      ? ledger.lastUpdated
+      : new Date().toISOString();
     if (!Array.isArray(ledger.loans)) {
       ledger.loans = [];
     }
