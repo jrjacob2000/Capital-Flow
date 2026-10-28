@@ -639,7 +639,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
     const surplus = incAct - expAct;
     const hasBeenCarriedOver = budget.entries.some(
-      (e) => e.period === selectedPeriod && e.description.includes('Carry-over')
+      (e) => e.period === selectedPeriod && (e.description || e.item || '').includes('Carry-over')
     );
     return { surplus, hasBeenCarriedOver, prevPeriodName: prevPeriod };
   }, [budget.entries, periodList, selectedPeriod]);
@@ -1219,7 +1219,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
     unifiedIncomeRows.forEach((inc) => {
       const est = inc.estimatedCost || 0;
-      const act = inc.actualCost || 0;
+      const act = inc.hasActualCost && inc.status === 'Paid' ? inc.actualCost : 0;
       const diff = act - est;
       lines.push(
         `"${inc.item.replace(/"/g, '""')}",${formatCsvNum(est)},${formatCsvNum(act)},${formatCsvNum(diff)}`
@@ -1237,7 +1237,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
     unifiedExpenseRows.forEach((exp) => {
       const est = exp.estimatedCost || 0;
-      const act = exp.actualCost || 0;
+      const act = exp.hasActualCost && exp.status === 'Paid' ? exp.actualCost : 0;
       const cash = getMethodAmount(exp, 'Cash');
       const cc = getMethodAmount(exp, 'Credit Card');
       const gcash = getMethodAmount(exp, 'GCash Transfer');

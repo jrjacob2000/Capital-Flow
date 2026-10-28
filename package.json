@@ -9,7 +9,8 @@
     "postbuild": "node -e \"import('fs').then(fs => { fs.copyFileSync('dist/index.html', 'dist/404.html'); if (fs.existsSync('public/privacy.html')) fs.copyFileSync('public/privacy.html', 'dist/privacy.html'); if (fs.existsSync('public/terms.html')) fs.copyFileSync('public/terms.html', 'dist/terms.html'); })\"",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/utils/budgetCalculations.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

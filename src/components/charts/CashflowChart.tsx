@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { MONTH_NAMES, BIWEEKLY_PERIODS } from '../../services/sampleData';
 import { BudgetEntry, EntryFrequency } from '../../types/finance';
+import { aggregateCashflowByPeriod } from '../../utils/budgetCalculations';
 
 interface CashflowChartProps {
   entries: BudgetEntry[];
@@ -20,39 +20,8 @@ export const CashflowChart: React.FC<CashflowChartProps> = ({
     saving: true,
   });
 
-  const periodLabels =
-    frequency === 'monthly'
-      ? MONTH_NAMES
-      : BIWEEKLY_PERIODS.map((p) => p.id);
-
-  // Aggregate by period index
-  const aggregatedData = periodLabels.map((label, idx) => {
-    let income = 0;
-    let expense = 0;
-    let saving = 0;
-
-    entries.forEach((entry) => {
-      if (entry.period === label) {
-        const amt = entry.actualCost ?? entry.amount ?? 0;
-        if (entry.type === 'income') income += amt;
-        if (entry.type === 'expense') expense += amt;
-        if (entry.type === 'saving') saving += amt;
-      }
-    });
-
-    const net = income - expense;
-    const savingsRate = income > 0 ? (saving / income) * 100 : 0;
-
-    return {
-      label,
-      idx,
-      income,
-      expense,
-      saving,
-      net,
-      savingsRate,
-    };
-  });
+  // Aggregate settled entries by period index
+  const aggregatedData = aggregateCashflowByPeriod(entries, frequency);
 
   // Calculate chart max for scaling
   const maxVal = Math.max(

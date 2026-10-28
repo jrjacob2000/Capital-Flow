@@ -546,11 +546,15 @@ export default function App() {
                   setBudget(updatedBudget);
                   setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
                   showToast('Loaded personalized Estimate Budget Template from Google Drive.', 'success');
-                  setConflictModalState((prev) => ({
-                    ...prev,
-                    items: prev.items.filter((i) => i.id !== 'template'),
-                    isOpen: prev.items.filter((i) => i.id !== 'template').length > 0,
-                  }));
+                  setConflictModalState((prev) => {
+                    const remaining = prev.items.filter((i) => i.id !== 'template');
+                    if (remaining.length === 0) setHasUnsavedChanges(false);
+                    return {
+                      ...prev,
+                      items: remaining,
+                      isOpen: remaining.length > 0,
+                    };
+                  });
                 },
                 onPushToDrive: async () => {
                   try {
@@ -1564,6 +1568,8 @@ export default function App() {
       ) {
         if (!matchedSavingTemplate) {
           matchedSavingTemplate = true;
+          const isBiweeklyBoth =
+            tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both');
           deduplicatedTemplates.push({
             ...tpl,
             item: newClean,
@@ -1571,7 +1577,11 @@ export default function App() {
               ? resolvedCategory
               : normalizeSavingCategoryGroup(newClean, tpl.category),
             defaultEstimatedCost:
-              newMonthlyTarget !== undefined ? newMonthlyTarget : tpl.defaultEstimatedCost,
+              newMonthlyTarget !== undefined
+                ? isBiweeklyBoth
+                  ? newMonthlyTarget / 2
+                  : newMonthlyTarget
+                : tpl.defaultEstimatedCost,
           });
         } else if (newMonthlyTarget === undefined && tpl.defaultEstimatedCost > 0) {
           const existingIdx = deduplicatedTemplates.findIndex(
@@ -2000,6 +2010,8 @@ export default function App() {
     const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
     // Parse YYYY-MM-DD in local time without UTC-midnight shift
     const dateParts = (paymentData.date || '').split('-').map((n) => parseInt(n, 10));
+    const parsedYear =
+      dateParts.length === 3 && !isNaN(dateParts[0]) ? dateParts[0] : budget.year;
     const parsedMonthIdx =
       dateParts.length === 3 && !isNaN(dateParts[1]) ? Math.max(0, Math.min(11, dateParts[1] - 1)) : new Date().getMonth();
     const dayOfMonth =
@@ -2021,7 +2033,7 @@ export default function App() {
       linkedBudgetEntryId = entryId;
       const newBudgetEntry: BudgetEntry = {
         id: entryId,
-        year: budget.year,
+        year: parsedYear,
         period: resolvedPeriod,
         periodIndex: resolvedPeriodIdx,
         date: paymentData.date,
@@ -2056,7 +2068,7 @@ export default function App() {
         currentLedger.transactions.push({
           id: linkedLedgerTxId,
           date: paymentData.date,
-          year: budget.year,
+          year: parsedYear,
           period: resolvedPeriod,
           amount: paymentData.amount,
           accountId: targetAcc.id,
@@ -2072,7 +2084,7 @@ export default function App() {
       id: `lpay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       loanId: loan.id,
       date: paymentData.date,
-      year: budget.year,
+      year: parsedYear,
       period: resolvedPeriod,
       amount: paymentData.amount,
       source: linkedBudgetEntryId ? 'budget_sync' : 'manual_payment',

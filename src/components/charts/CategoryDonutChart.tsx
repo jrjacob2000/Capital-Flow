@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { BudgetEntry, EntryType } from '../../types/finance';
+import { aggregateCategoryDistribution } from '../../utils/budgetCalculations';
 
 interface CategoryDonutChartProps {
   entries: BudgetEntry[];
@@ -26,18 +27,7 @@ export const CategoryDonutChart: React.FC<CategoryDonutChartProps> = ({
 }) => {
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
 
-  const filteredEntries = entries.filter((e) => e.type === type);
-  const categoryTotals: { [key: string]: number } = {};
-
-  filteredEntries.forEach((e) => {
-    categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
-  });
-
-  const sortedCategories = Object.entries(categoryTotals)
-    .map(([category, amount]) => ({ category, amount }))
-    .sort((a, b) => b.amount - a.amount);
-
-  const totalAmount = sortedCategories.reduce((sum, item) => sum + item.amount, 0);
+  const { categories: sortedCategories, totalAmount } = aggregateCategoryDistribution(entries, type);
 
   // Calculate slice angles for SVG donut
   let cumulativeAngle = 0;
@@ -85,7 +75,7 @@ export const CategoryDonutChart: React.FC<CategoryDonutChartProps> = ({
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-slate-900 dark:text-white capitalize">
-            {type} Distribution
+            {type === 'saving' ? 'Funds' : type} Distribution
           </h3>
           <span className="text-xs font-mono font-medium text-slate-500 dark:text-slate-400">
             Total: {currencySymbol}{formatNumber(totalAmount)}
@@ -94,7 +84,7 @@ export const CategoryDonutChart: React.FC<CategoryDonutChartProps> = ({
 
         {totalAmount === 0 ? (
           <div className="h-48 flex items-center justify-center text-sm text-slate-400">
-            No {type} transactions recorded
+            No settled {type === 'saving' ? 'funds' : type} transactions recorded
           </div>
         ) : (
           <div className="flex flex-col sm:flex-row items-center gap-6">

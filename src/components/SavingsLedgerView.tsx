@@ -413,7 +413,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           }
           const fund = getOrCreateFund(fundName, entry.category || 'General Savings');
           if (entry.status !== 'Pending') {
-            fund.savedThisYear = (fund.savedThisYear || 0) + (entry.amount || entry.actualCost || 0);
+            fund.savedThisYear = (fund.savedThisYear || 0) + (entry.actualCost ?? entry.amount ?? 0);
           }
         });
     }
