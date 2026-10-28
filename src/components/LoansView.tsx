@@ -36,6 +36,7 @@ interface LoansViewProps {
     loan: LoanRecord,
     options?: {
       syncToTemplate?: boolean;
+      disburseFromAccountId?: string;
     }
   ) => void;
   onDeleteLoan: (loanId: string) => void;
@@ -107,6 +108,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
   const [formDueDay, setFormDueDay] = useState('');
   const [formNotes, setFormNotes] = useState('');
   const [formSyncTemplate, setFormSyncTemplate] = useState(true);
+  const [formDisburseAccountId, setFormDisburseAccountId] = useState('');
 
   // Record Payment / Collection Modal State
   const [paymentModalLoan, setPaymentModalLoan] = useState<LoanRecord | null>(null);
@@ -286,6 +288,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
     setFormDueDay('');
     setFormNotes('');
     setFormSyncTemplate(defaultDir === 'borrowed');
+    setFormDisburseAccountId('');
     setIsLoanModalOpen(true);
   };
 
@@ -380,7 +383,11 @@ export const LoansView: React.FC<LoansViewProps> = ({
       updatedAt: nowIso,
     };
 
-    onSaveLoan(savedLoan, { syncToTemplate: formSyncTemplate });
+    onSaveLoan(savedLoan, {
+      syncToTemplate: formSyncTemplate,
+      disburseFromAccountId:
+        formDirection === 'lent' && !editingLoan && formDisburseAccountId ? formDisburseAccountId : undefined,
+    });
     setIsLoanModalOpen(false);
   };
 
@@ -1294,6 +1301,35 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     </span>
                   </div>
                 </label>
+              )}
+
+              {/* Optional Account Deduction for Lent Loans */}
+              {formDirection === 'lent' && !editingLoan && ledger.accounts.length > 0 && (
+                <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200/80 dark:border-emerald-800/50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] sm:text-xs font-bold text-slate-900 dark:text-white">
+                      Disburse / Deduct Principal from Funds Account (Optional)
+                    </span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold px-1.5 py-0.5 rounded bg-emerald-100/70 dark:bg-emerald-900/50">
+                      Funds Ledger
+                    </span>
+                  </div>
+                  <p className="text-[10px] sm:text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
+                    Which account did this lent money come from? Select an account below to deduct the principal ({currencySymbol}{formatNumber(parseFloat(formPrincipal) || parseFloat(formTotalContract) || 0)}) from its balance now, or leave unselected to track the receivable agreement without moving account funds.
+                  </p>
+                  <select
+                    value={formDisburseAccountId}
+                    onChange={(e) => setFormDisburseAccountId(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                  >
+                    <option value="">Do not deduct from an account (track agreement only)</option>
+                    {ledger.accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} — Current Balance: {currencySymbol}{formatNumber(acc.balance)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
 
               <div className="flex items-center justify-end gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800">

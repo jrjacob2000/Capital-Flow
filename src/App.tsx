@@ -1737,7 +1737,13 @@ export default function App() {
     return { updatedBudget, templateId };
   };
 
-  const handleSaveLoan = (loan: LoanRecord, options?: { syncToTemplate?: boolean }) => {
+  const handleSaveLoan = (
+    loan: LoanRecord,
+    options?: {
+      syncToTemplate?: boolean;
+      disburseFromAccountId?: string;
+    }
+  ) => {
     const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
     const loans = [...(currentLedger.loans || [])];
     const existingIdx = loans.findIndex((l) => l.id === loan.id);
@@ -1757,14 +1763,55 @@ export default function App() {
       loans.unshift(updatedLoan);
     }
 
+    // Optional: If lending money out and user selected an account to disburse from, deduct the principal
+    let disbursedAccountName: string | undefined;
+    let disbursedAmount = 0;
+    if (existingIdx === -1 && options?.disburseFromAccountId && updatedLoan.direction === 'lent') {
+      const targetAcc = currentLedger.accounts.find((a) => a.id === options.disburseFromAccountId);
+      disbursedAmount = updatedLoan.principalAmount || updatedLoan.totalContractAmount;
+      if (targetAcc && disbursedAmount > 0) {
+        targetAcc.balance = Math.max(0, targetAcc.balance - disbursedAmount);
+        disbursedAccountName = targetAcc.name;
+
+        const dateParts = (updatedLoan.startDate || '').split('-').map((n) => parseInt(n, 10));
+        const parsedYear =
+          dateParts.length === 3 && !isNaN(dateParts[0]) ? dateParts[0] : budget.year;
+        const parsedMonthIdx =
+          dateParts.length === 3 && !isNaN(dateParts[1]) ? Math.max(0, Math.min(11, dateParts[1] - 1)) : new Date().getMonth();
+        const monthName = MONTH_NAMES[parsedMonthIdx] || 'Jan';
+        const dayOfMonth = dateParts.length === 3 && !isNaN(dateParts[2]) ? dateParts[2] : new Date().getDate();
+        const resolvedPeriod =
+          frequency === 'bi-weekly'
+            ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
+            : monthName;
+
+        currentLedger.transactions.push({
+          id: `tx-disburse-${Date.now()}`,
+          date: updatedLoan.startDate || new Date().toISOString().split('T')[0],
+          year: parsedYear,
+          period: resolvedPeriod,
+          amount: disbursedAmount,
+          accountId: targetAcc.id,
+          accountName: targetAcc.name,
+          source: 'withdrawal',
+          category: 'General Reserves / Starting Capital',
+          note: `Disbursed Lent Loan: ${updatedLoan.name}${updatedLoan.counterparty ? ` to ${updatedLoan.counterparty}` : ''}`,
+        });
+        recalculateLedgerRunningCapital(currentLedger);
+      }
+    }
+
     currentLedger.loans = loans;
     FinanceStorageService.saveLocalSavingsLedger(currentLedger);
     setLedger({ ...currentLedger });
     setHasUnsavedChanges(true);
+    const currSym = currentLedger.currency || '₱';
     showToast(
       existingIdx >= 0
         ? `Updated loan "${updatedLoan.name}"`
-        : `Added ${updatedLoan.direction === 'borrowed' ? 'borrowed loan' : 'receivable'} "${updatedLoan.name}"`
+        : `Added ${updatedLoan.direction === 'borrowed' ? 'borrowed loan' : 'receivable'} "${updatedLoan.name}"${
+            disbursedAccountName ? ` (${currSym}${disbursedAmount.toLocaleString()} deducted from ${disbursedAccountName})` : ''
+          }`
     );
   };
 
