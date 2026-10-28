@@ -1,22 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import {
   PiggyBank,
-  TrendingUp,
-  ShieldCheck,
-  Building2,
   Plus,
   Coins,
-  ArrowUpRight,
   Calculator,
-  CheckCircle2,
-  Calendar,
-  Sparkles,
   ArrowRight,
   X,
   Sliders,
   Edit2,
   Trash2,
-  Settings,
   AlertTriangle,
   Landmark,
   Wallet,
@@ -24,11 +16,9 @@ import {
   ArrowDownRight,
   ArrowLeftRight,
   Target,
-  Layers,
-  Filter,
   Search,
-  ChevronDown,
-  ChevronRight,
+  History,
+  Sparkles,
 } from 'lucide-react';
 import {
   SavingsLedgerData,
@@ -151,12 +141,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   onDeleteFund,
   currencySymbol = '$',
 }) => {
+  // Primary sub-navigation: default to Sinking Funds for immediate goal visibility
+  const [activeTab, setActiveTab] = useState<'sinking_funds' | 'accounts' | 'transactions' | 'calculator'>('sinking_funds');
+
   // Transaction modal state (Unified Deposit, Withdraw, Transfer)
   const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
   const [transactionMode, setTransactionMode] = useState<'deposit' | 'withdraw' | 'transfer'>('deposit');
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [isManageAccountsModalOpen, setIsManageAccountsModalOpen] = useState(false);
   const [isManageFundsModalOpen, setIsManageFundsModalOpen] = useState(false);
+
+  // Fund edit/delete state
   const [editingFund, setEditingFund] = useState<CategoryFundSummary | null>(null);
   const [editFundName, setEditFundName] = useState('');
   const [editFundCategory, setEditFundCategory] = useState('Short-Term & General Savings');
@@ -164,9 +159,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [editFundMonthlyTarget, setEditFundMonthlyTarget] = useState('');
   const [deletingFund, setDeletingFund] = useState<CategoryFundSummary | null>(null);
   const [deleteFundReassignTo, setDeleteFundReassignTo] = useState('General Reserves / Starting Capital');
-  const [activeTab, setActiveTab] = useState<'transactions' | 'sinking_funds' | 'accounts' | 'calculator'>('transactions');
+
+  // Ledger history filters
   const [selectedFundFilter, setSelectedFundFilter] = useState<string>('all');
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('all');
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('all');
   const [txSearchQuery, setTxSearchQuery] = useState<string>('');
 
   // Form states - Deposit
@@ -234,6 +231,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [editTxCategory, setEditTxCategory] = useState('');
   const [editTxCustomCategory, setEditTxCustomCategory] = useState('');
 
+  // Compound simulator state
+  const [simYears, setSimYears] = useState(10);
+  const [simMonthly, setSimMonthly] = useState(1200);
+  const [simRate, setSimRate] = useState(7.5);
+
   const handleOpenEditTx = (tx: SavingsTransaction) => {
     setEditingTx(tx);
     setEditTxAmount(String(tx.amount));
@@ -276,13 +278,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setEditingTx(null);
   };
 
-  // Compound simulator state
-  const [simYears, setSimYears] = useState(10);
-  const [simMonthly, setSimMonthly] = useState(1200);
-  const [simRate, setSimRate] = useState(7.5);
-
-  const transactions = [...ledger.transactions].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  const transactions = useMemo(
+    () =>
+      [...ledger.transactions].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      ),
+    [ledger.transactions]
   );
 
   const accountsBalanceSum = ledger.accounts.reduce((sum, a) => sum + (a.balance || 0), 0);
@@ -302,7 +303,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     Math.max(0, ((totalCapital - prevMilestone) / (nextMilestone - prevMilestone)) * 100)
   );
 
-  // Total additions from budget sync
+  // Summary metrics
   const budgetSyncAdditions = ledger.transactions
     .filter((tx) => tx.source === 'budget_sync')
     .reduce((sum, tx) => sum + tx.amount, 0);
@@ -311,16 +312,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     .filter((tx) => tx.source === 'interest_yield')
     .reduce((sum, tx) => sum + tx.amount, 0);
 
-  const manualDeposits = ledger.transactions
-    .filter((tx) => tx.source === 'manual_deposit')
-    .reduce((sum, tx) => sum + tx.amount, 0);
-
   const totalWithdrawn = ledger.transactions
     .filter((tx) => tx.source === 'withdrawal')
-    .reduce((sum, tx) => sum + tx.amount, 0);
-
-  const totalTransfers = ledger.transactions
-    .filter((tx) => tx.source === 'transfer')
     .reduce((sum, tx) => sum + tx.amount, 0);
 
   // Category & Sinking Funds Aggregation
@@ -344,14 +337,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
     const resolveSavingCategory = (fundName: string, fallbackCategory?: string): string => {
       const clean = fundName.trim().toLowerCase();
-      // 1. Check if a saving itemTemplate matches by item name
       const byItem = budget?.itemTemplates?.find(
         (t) => t.type === 'saving' && t.item.trim().toLowerCase() === clean
       );
       if (byItem && byItem.category) {
         return normalizeSavingCategoryGroup(fundName, byItem.category);
       }
-
       return normalizeSavingCategoryGroup(fundName, fallbackCategory);
     };
 
@@ -388,7 +379,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       return fundMap.get(key)!;
     };
 
-    // 1. Pre-register known fund templates from budget (if available)
+    // 1. Pre-register known fund templates from budget
     if (budget?.itemTemplates) {
       budget.itemTemplates
         .filter((t) => t.type === 'saving')
@@ -408,13 +399,22 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       budget.entries
         .filter((e) => e.type === 'saving')
         .forEach((entry) => {
+          const rawItem = (entry.item || entry.description || '').trim();
+          if (rawItem.toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
           const fundName = resolveCanonicalSinkingFundName(
-            entry.item || entry.description,
+            rawItem,
             entry.category,
             knownCanonicalPool
           );
+          if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
           const fund = getOrCreateFund(fundName, entry.category || 'General Savings');
-          fund.savedThisYear = (fund.savedThisYear || 0) + (entry.amount || entry.actualCost || 0);
+          if (entry.status !== 'Pending') {
+            fund.savedThisYear = (fund.savedThisYear || 0) + (entry.amount || entry.actualCost || 0);
+          }
         });
     }
 
@@ -425,8 +425,6 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       const accName = accObj ? accObj.name : tx.accountName;
 
       if (tx.source === 'transfer') {
-        // Physical bank-to-bank transfers do not alter category fund inflow/outflow totals.
-        // If tagged with a specific category fund, shift the physical account breakdown within that fund.
         if (tx.category) {
           const canonicalKey = resolveCanonicalSinkingFundName(tx.category, tx.category, knownCanonicalPool).toLowerCase();
           const targetFund = fundMap.get(canonicalKey);
@@ -486,8 +484,6 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       let fundName = '';
       let category = tx.category || 'General Savings';
 
-      // If explicitly placed into General Reserves / Starting Capital (unallocated),
-      // skip creating a named category fund so it stays in the unallocated remainder pool.
       if (tx.category && tx.category.trim().toLowerCase() === 'general reserves / starting capital') {
         return;
       }
@@ -507,11 +503,18 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           ? budget?.entries?.find((e) => e.id === tx.budgetEntryId)
           : undefined;
         if (linkedEntry) {
+          const rawLinkedItem = (linkedEntry.item || linkedEntry.description || '').trim();
+          if (rawLinkedItem.toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
           fundName = resolveCanonicalSinkingFundName(
-            linkedEntry.item || linkedEntry.description,
+            rawLinkedItem,
             linkedEntry.category,
             knownCanonicalPool
           );
+          if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
           category = linkedEntry.category || category;
         } else if (tx.source === 'manual_deposit' && !tx.category) {
           const cleanNote = tx.note
@@ -640,9 +643,26 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     return result.sort((a, b) => b.currentBalance - a.currentBalance);
   }, [ledger.transactions, ledger.accounts, budget, totalCapital]);
 
-  // Filtered transactions for Tab 1
+  const unallocatedFund = useMemo(
+    () => categoryFunds.find((f) => f.id === 'fund-general-unallocated'),
+    [categoryFunds]
+  );
+  const earmarkedTotal = Math.max(0, totalCapital - (unallocatedFund?.currentBalance || 0));
+
+  // Filtered transactions for Ledger History tab
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
+      if (selectedSourceFilter !== 'all') {
+        if (selectedSourceFilter === 'inflow' && tx.source !== 'budget_sync' && tx.source !== 'manual_deposit' && tx.source !== 'interest_yield') {
+          return false;
+        }
+        if (selectedSourceFilter === 'withdrawal' && tx.source !== 'withdrawal') {
+          return false;
+        }
+        if (selectedSourceFilter === 'transfer' && tx.source !== 'transfer' && tx.source !== 'reallocation') {
+          return false;
+        }
+      }
       if (selectedAccountFilter !== 'all' && tx.accountId !== selectedAccountFilter && tx.toAccountId !== selectedAccountFilter) {
         return false;
       }
@@ -673,7 +693,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
       return true;
     });
-  }, [transactions, selectedAccountFilter, selectedFundFilter, txSearchQuery]);
+  }, [transactions, selectedSourceFilter, selectedAccountFilter, selectedFundFilter, txSearchQuery]);
 
   const getAccountTransactionCount = (accountId: string) => {
     return ledger.transactions.filter((tx) => tx.accountId === accountId || tx.toAccountId === accountId).length;
@@ -698,6 +718,29 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
     }
     setIsTransactionModalOpen(true);
+  };
+
+  const handleOpenReallocateModal = (fromFund?: string, toFund?: string, accountId?: string, amount?: number) => {
+    const firstNamedFund = categoryFunds.find((f) => f.id !== 'fund-general-unallocated');
+    const source = fromFund || 'General Reserves / Starting Capital';
+    setReallocateFromCategory(source);
+    if (toFund) {
+      setReallocateToCategory(toFund);
+    } else if (firstNamedFund && firstNamedFund.name !== source) {
+      setReallocateToCategory(firstNamedFund.name);
+    } else {
+      setReallocateToCategory('__custom__');
+    }
+    const firstUnallocatedAcc = unallocatedFund?.accounts?.[0];
+    setReallocateAccountId(accountId !== undefined ? accountId : (firstUnallocatedAcc ? firstUnallocatedAcc.accountId : ''));
+    if (amount !== undefined) {
+      setReallocateAmount(String(amount));
+    } else if (source === 'General Reserves / Starting Capital' && firstUnallocatedAcc) {
+      setReallocateAmount(String(firstUnallocatedAcc.amount));
+    } else {
+      setReallocateAmount('');
+    }
+    setIsReallocateModalOpen(true);
   };
 
   const handleRecordDeposit = (e: React.FormEvent) => {
@@ -906,7 +949,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
 
   // Compound projector calculation
-  const calculateCompound = () => {
+  const compoundResult = useMemo(() => {
     let current = totalCapital;
     let totalContributed = totalCapital;
     const monthlyRate = simRate / 100 / 12;
@@ -922,477 +965,260 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       contributed: totalContributed,
       interestEarned: current - totalContributed,
     };
-  };
-
-  const compoundResult = calculateCompound();
+  }, [totalCapital, simRate, simYears, simMonthly]);
 
   return (
-    <div className="space-y-6">
-      
-      {/* Top Banner & Capital Header */}
-      <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-indigo-950 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-700/60 text-emerald-200 text-xs font-semibold mb-3 border border-emerald-500/30">
-              <PiggyBank className="w-3.5 h-3.5 text-emerald-300" />
-              <span>Multi-Year Capital Growth Ledger</span>
+    <div className="space-y-4 sm:space-y-5">
+      {/* Compact Unified Capital & Action Header */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Left: Total Capital + Milestone Progress */}
+          <div className="space-y-2 min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
+              <PiggyBank className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Total Accumulated Capital</span>
+              <span>&middot;</span>
+              <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
+                {ledger.accounts.length} {ledger.accounts.length === 1 ? 'account' : 'accounts'}
+              </span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-              Total Accumulated Capital: {currencySymbol}{formatNumber(totalCapital)}
-            </h1>
-            <p className="mt-1 text-sm text-emerald-100/90 max-w-xl">
-              Every savings deposit recorded across your annual budgets accumulates in this separate Google Drive database (<code className="font-mono text-emerald-300">capitalflow_savings_ledger.json</code>).
-            </p>
+
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight font-mono tabular-nums text-slate-900 dark:text-white">
+                {currencySymbol}{formatNumber(totalCapital)}
+              </h1>
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                Milestone: {currencySymbol}{nextMilestone / 1000}k ({milestoneProgress.toFixed(0)}%)
+              </span>
+            </div>
+
+            <div className="w-full max-w-md h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                style={{ width: `${milestoneProgress}%` }}
+              />
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          {/* Right: Primary Quick Actions (4-button thumb-friendly grid on mobile) */}
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 shrink-0">
             <button
+              type="button"
               onClick={() => handleOpenTransactionModal('deposit')}
-              className="px-3.5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-500/30 transition-all flex items-center gap-1.5 cursor-pointer"
+              className="min-h-[42px] px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shadow-xs"
             >
-              <Coins className="w-4 h-4" />
-              <span>Record Deposit</span>
+              <Coins className="w-3.5 h-3.5 shrink-0" />
+              <span>Deposit</span>
             </button>
             <button
+              type="button"
               onClick={() => handleOpenTransactionModal('withdraw')}
-              className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-rose-600/30 transition-all flex items-center gap-1.5 cursor-pointer"
+              className="min-h-[42px] px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shadow-xs"
             >
-              <ArrowDownRight className="w-4 h-4" />
+              <ArrowDownRight className="w-3.5 h-3.5 shrink-0" />
               <span>Withdraw</span>
             </button>
             <button
+              type="button"
               onClick={() => handleOpenTransactionModal('transfer')}
-              className="px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-1.5 cursor-pointer"
+              className="min-h-[42px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
-              <ArrowLeftRight className="w-4 h-4" />
+              <ArrowLeftRight className="w-3.5 h-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" />
               <span>Transfer</span>
             </button>
             <button
-              onClick={handleOpenAddAccount}
-              className="px-3 py-2.5 bg-white/10 hover:bg-white/20 text-white font-medium text-xs rounded-xl backdrop-blur-xs border border-white/15 transition-all flex items-center gap-1.5 cursor-pointer"
+              type="button"
+              onClick={() => handleOpenReallocateModal()}
+              className="min-h-[42px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
-              <Plus className="w-4 h-4" />
-              <span>Add Account</span>
-            </button>
-            <button
-              onClick={() => setIsManageAccountsModalOpen(true)}
-              className="px-3 py-2.5 bg-white/10 hover:bg-white/20 text-white font-medium text-xs rounded-xl backdrop-blur-xs border border-white/15 transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Sliders className="w-4 h-4" />
-              <span>Manage Accounts</span>
+              <Target className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>Reallocate</span>
             </button>
           </div>
         </div>
 
-        {/* Milestone Progress Bar */}
-        <div className="mt-8 pt-6 border-t border-white/10">
-          <div className="flex items-center justify-between text-xs mb-2">
-            <span className="text-emerald-200">
-              Current Milestone: <strong className="text-white">{currencySymbol}{prevMilestone / 1000}k</strong>
-            </span>
-            <span className="font-semibold text-white">
-              Target: <strong className="text-emerald-300">{currencySymbol}{nextMilestone / 1000}k</strong> ({milestoneProgress.toFixed(1)}%)
+        {/* Compact 4-Metric Strip */}
+        <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Earmarked in Funds</span>
+            <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {currencySymbol}{formatNumber(earmarkedTotal)}
             </span>
           </div>
-          <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden p-0.5 backdrop-blur-xs">
-            <div
-              className="h-full bg-gradient-to-r from-emerald-400 to-teal-300 rounded-full transition-all duration-500"
-              style={{ width: `${milestoneProgress}%` }}
-            />
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Budget Sync Inflow</span>
+            <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+              +{currencySymbol}{formatNumber(budgetSyncAdditions)}
+            </span>
+          </div>
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Yield &amp; Interest</span>
+            <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-indigo-600 dark:text-indigo-400">
+              +{currencySymbol}{formatNumber(yieldAdditions)}
+            </span>
+          </div>
+          <div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Total Withdrawn</span>
+            <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400">
+              -{currencySymbol}{formatNumber(totalWithdrawn)}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Summary KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Automated Budget Inflows
-          </span>
-          <div className="mt-2 text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-            +{currencySymbol}{formatNumber(budgetSyncAdditions)}
-          </div>
-          <p className="mt-1 text-xs text-slate-400">
-            Transferred automatically from budget page entries
-          </p>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Interest &amp; Compounding Yields
-          </span>
-          <div className="mt-2 text-2xl font-bold font-mono text-indigo-600 dark:text-indigo-400">
-            +{currencySymbol}{formatNumber(yieldAdditions)}
-          </div>
-          <p className="mt-1 text-xs text-slate-400">
-            High-yield APY &amp; market investment growth
-          </p>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Total Withdrawals
-          </span>
-          <div className="mt-2 text-2xl font-bold font-mono text-rose-600 dark:text-rose-400">
-            -{currencySymbol}{formatNumber(totalWithdrawn)}
-          </div>
-          <p className="mt-1 text-xs text-slate-400">
-            Withdrawn across emergency, bills &amp; living expenses
-          </p>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Active Accounts &amp; Buckets
-          </span>
-          <div className="mt-2 text-2xl font-bold font-mono text-slate-900 dark:text-white">
-            {ledger.accounts.length} Accounts
-          </div>
-          <p className="mt-1 text-xs text-slate-400">
-            Digital banks, e-wallets, traditional &amp; MP2
-          </p>
-        </div>
-      </div>
-
-      {/* Navigation Sub-Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 text-xs font-semibold overflow-x-auto scrollbar-none">
+      {/* Segmented Navigation Bar (Responsive 2x2 on Mobile, 4-Across on Tablet & Desktop) */}
+      <div className="grid grid-cols-2 min-[540px]:grid-cols-4 gap-1.5 sm:gap-2 bg-slate-100 dark:bg-slate-800/90 p-1.5 rounded-2xl border border-slate-200/70 dark:border-slate-800">
         <button
-          onClick={() => setActiveTab('transactions')}
-          className={`px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-            activeTab === 'transactions'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          Savings Ledger Entries ({transactions.length})
-        </button>
-        <button
+          type="button"
           onClick={() => setActiveTab('sinking_funds')}
-          className={`px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
             activeTab === 'sinking_funds'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
           }`}
         >
-          <PiggyBank className="w-3.5 h-3.5" />
-          <span>Category &amp; Sinking Funds ({categoryFunds.length})</span>
+          <Target className="w-4 h-4 shrink-0" />
+          <span className="truncate">Funds</span>
+          <span
+            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full leading-none shrink-0 ${
+              activeTab === 'sinking_funds'
+                ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold'
+                : 'bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 font-medium'
+            }`}
+          >
+            {categoryFunds.length}
+          </span>
         </button>
+
         <button
+          type="button"
           onClick={() => setActiveTab('accounts')}
-          className={`px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
             activeTab === 'accounts'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
           }`}
         >
-          Physical Accounts ({ledger.accounts.length})
+          <Wallet className="w-4 h-4 shrink-0" />
+          <span className="truncate">Accounts</span>
+          <span
+            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full leading-none shrink-0 ${
+              activeTab === 'accounts'
+                ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold'
+                : 'bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 font-medium'
+            }`}
+          >
+            {ledger.accounts.length}
+          </span>
         </button>
+
         <button
-          onClick={() => setActiveTab('calculator')}
-          className={`px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-            activeTab === 'calculator'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          type="button"
+          onClick={() => setActiveTab('transactions')}
+          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
+            activeTab === 'transactions'
+              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
           }`}
         >
-          <Calculator className="w-3.5 h-3.5" />
-          <span>Compound Growth Projector</span>
+          <History className="w-4 h-4 shrink-0" />
+          <span className="truncate">History</span>
+          <span
+            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full leading-none shrink-0 ${
+              activeTab === 'transactions'
+                ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold'
+                : 'bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 font-medium'
+            }`}
+          >
+            {transactions.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('calculator')}
+          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
+            activeTab === 'calculator'
+              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
+          }`}
+        >
+          <Calculator className="w-4 h-4 shrink-0" />
+          <span className="truncate">
+            <span className="hidden sm:inline">Growth </span>Projector
+          </span>
         </button>
       </div>
 
-      {/* Tab 1: Savings Ledger Transactions */}
-      {activeTab === 'transactions' && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden space-y-0">
-          <div className="p-4 bg-slate-50/70 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-semibold text-slate-700 dark:text-slate-200 shrink-0">
-                Cumulative Capital Progression Ledger
-              </span>
-              <span className="font-mono text-emerald-600 dark:text-emerald-400 font-medium shrink-0">
-                ({filteredTransactions.length} of {transactions.length})
-              </span>
-            </div>
-
-            {/* Filters Toolbar */}
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Search Box */}
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={txSearchQuery}
-                  onChange={(e) => setTxSearchQuery(e.target.value)}
-                  placeholder="Search memo, account, fund..."
-                  className="pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none w-44 sm:w-52"
-                />
-              </div>
-
-              {/* Account Filter */}
-              <select
-                value={selectedAccountFilter}
-                onChange={(e) => setSelectedAccountFilter(e.target.value)}
-                className="px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
-              >
-                <option value="all">All Accounts</option>
-                {ledger.accounts.map((acc) => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.name}
-                  </option>
-                ))}
-              </select>
-
-              {/* Fund Filter */}
-              <select
-                value={selectedFundFilter}
-                onChange={(e) => setSelectedFundFilter(e.target.value)}
-                className="px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
-              >
-                <option value="all">All Category Funds</option>
-                {categoryFunds.map((f) => (
-                  <option key={f.id} value={f.name}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-
-              {(selectedFundFilter !== 'all' || selectedAccountFilter !== 'all' || txSearchQuery.trim()) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedFundFilter('all');
-                    setSelectedAccountFilter('all');
-                    setTxSearchQuery('');
-                  }}
-                  className="px-2 py-1 bg-rose-50 text-rose-600 dark:bg-rose-950/80 dark:text-rose-300 rounded-lg text-xs font-semibold hover:underline cursor-pointer"
-                >
-                  Clear Filters
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 dark:border-slate-800">
-                <tr>
-                  <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-4">Source</th>
-                  <th className="py-3 px-4">Account</th>
-                  <th className="py-3 px-4">Note / Memo</th>
-                  <th className="py-3 px-4 text-right">Flow / Change</th>
-                  <th className="py-3 px-4 text-right">Running Total Capital</th>
-                  <th className="py-3 px-4 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredTransactions.map((tx) => (
-                  <tr key={tx.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
-                    <td className="py-3 px-4 whitespace-nowrap font-mono text-slate-700 dark:text-slate-300">
-                      {tx.date} <span className="text-[10px] text-slate-400">({tx.period})</span>
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                          tx.source === 'budget_sync'
-                            ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                            : tx.source === 'interest_yield'
-                            ? 'bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
-                            : tx.source === 'withdrawal'
-                            ? 'bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
-                            : tx.source === 'transfer'
-                            ? 'bg-sky-50 dark:bg-sky-950/70 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800'
-                            : tx.source === 'reallocation'
-                            ? 'bg-purple-50 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
-                            : 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                        }`}
-                      >
-                        {tx.source === 'budget_sync' && 'Budget Transfer'}
-                        {tx.source === 'interest_yield' && 'Interest / Yield'}
-                        {tx.source === 'manual_deposit' && 'Direct Deposit'}
-                        {tx.source === 'withdrawal' && 'Withdrawal'}
-                        {tx.source === 'transfer' && 'Account Transfer'}
-                        {tx.source === 'reallocation' && 'Category Reallocation'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">
-                      {tx.source === 'transfer' && tx.toAccountName ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs">
-                          <span>{tx.accountName}</span>
-                          <ArrowRight className="w-3 h-3 text-sky-500" />
-                          <span className="text-sky-700 dark:text-sky-300 font-semibold">{tx.toAccountName}</span>
-                        </span>
-                      ) : tx.source === 'reallocation' && tx.toCategory ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs">
-                          <span>{tx.category || 'Reserves'}</span>
-                          <ArrowRight className="w-3 h-3 text-purple-500" />
-                          <span className="text-purple-700 dark:text-purple-300 font-semibold">{tx.toCategory}</span>
-                        </span>
-                      ) : (
-                        tx.accountName
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span>{tx.note}</span>
-                        {tx.category && tx.source !== 'reallocation' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70">
-                            <Target className="w-2.5 h-2.5" />
-                            <span>{tx.category}</span>
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono font-bold whitespace-nowrap">
-                      {tx.source === 'withdrawal' ? (
-                        <span className="text-rose-600 dark:text-rose-400">
-                          -{currencySymbol}{formatNumber(tx.amount)}
-                        </span>
-                      ) : tx.source === 'transfer' ? (
-                        <span className="text-sky-600 dark:text-sky-400">
-                          ⇄ {currencySymbol}{formatNumber(tx.amount)}
-                        </span>
-                      ) : tx.source === 'reallocation' ? (
-                        <span className="text-purple-600 dark:text-purple-400">
-                          ⇄ {currencySymbol}{formatNumber(tx.amount)}
-                        </span>
-                      ) : (
-                        <span className="text-emerald-600 dark:text-emerald-400">
-                          +{currencySymbol}{formatNumber(tx.amount)}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 dark:text-white whitespace-nowrap">
-                      {currencySymbol}{formatNumber(tx.runningTotalCapital || 0)}
-                    </td>
-                    <td className="py-3 px-4 text-center whitespace-nowrap">
-                      {tx.source !== 'budget_sync' ? (
-                        <div className="flex items-center justify-center gap-1">
-                          {onUpdateTransaction && (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditTx(tx)}
-                              className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors cursor-pointer"
-                              title="Edit transaction"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {onDeleteTransaction && (
-                            <button
-                              type="button"
-                              onClick={() => onDeleteTransaction(tx.id)}
-                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                              title="Delete transaction"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-slate-400" title="Managed via Budget Sheet">
-                          Synced
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 2: Category & Sinking Funds */}
+      {/* TAB 1: SINKING FUNDS & ENVELOPES */}
       {activeTab === 'sinking_funds' && (
-        <div className="space-y-6">
-          {/* Header Info Banner */}
-          <div className="bg-gradient-to-r from-emerald-950/80 via-teal-950/80 to-slate-900 rounded-2xl p-5 border border-emerald-800/60 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <PiggyBank className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-base font-bold">Category Funds &amp; Goal Earmarks Breakdown</h3>
-              </div>
-              <p className="text-xs text-emerald-200/80 max-w-2xl">
-                This view breaks down your <strong>{currencySymbol}{formatNumber(totalCapital)}</strong> in total reserves by its earmarked purpose (Emergency Fund, Travel Sinking Fund, Car Maintenance, MP2, etc.) and shows which physical accounts store each fund.
-              </p>
+        <div className="space-y-4">
+          {/* Compact Section Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800">
+            <div className="text-xs text-slate-600 dark:text-slate-300">
+              <span className="font-semibold text-slate-900 dark:text-white">Sinking Funds &amp; Envelopes</span>
+              <span className="mx-1.5 text-slate-300 dark:text-slate-700">&middot;</span>
+              <span>
+                Track goal balances and which physical bank accounts store each reserve
+              </span>
             </div>
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setIsManageFundsModalOpen(true)}
-                className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-xl border border-white/15 transition-colors flex items-center gap-1.5 cursor-pointer"
+                className="min-h-[38px] px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl border border-slate-200/70 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
-                <Sliders className="w-3.5 h-3.5" />
+                <Sliders className="w-3.5 h-3.5 shrink-0" />
                 <span>Manage Funds</span>
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const firstNamedFund = categoryFunds.find((f) => f.id !== 'fund-general-unallocated');
-                  const unallocatedFund = categoryFunds.find((f) => f.id === 'fund-general-unallocated');
-                  setReallocateFromCategory('General Reserves / Starting Capital');
-                  setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
-                  const firstUnallocatedAcc = unallocatedFund?.accounts?.[0];
-                  setReallocateAccountId(firstUnallocatedAcc ? firstUnallocatedAcc.accountId : '');
-                  setReallocateAmount(
-                    firstUnallocatedAcc
-                      ? String(firstUnallocatedAcc.amount)
-                      : unallocatedFund
-                      ? String(unallocatedFund.currentBalance)
-                      : ''
-                  );
-                  setIsReallocateModalOpen(true);
-                }}
-                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                onClick={() => handleOpenReallocateModal()}
+                className="min-h-[38px] px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
-                <ArrowLeftRight className="w-3.5 h-3.5" />
-                <span>Reallocate Funds</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenTransactionModal('deposit')}
-                className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Deposit to Goal</span>
+                <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
+                <span>Reallocate</span>
               </button>
             </div>
           </div>
 
-          {/* Category Funds Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categoryFunds.map((fund) => (
-              <div
-                key={fund.id}
-                className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between space-y-4 hover:border-emerald-500/50 transition-all group"
-              >
-                <div className="space-y-3">
-                  {/* Card Header */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div
-                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-white shadow-xs text-sm"
-                        style={{ backgroundColor: fund.color }}
-                      >
-                        <Target className="w-5 h-5" />
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate" title={fund.name}>
-                          {fund.name}
-                        </h4>
-                        <span className="inline-block text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md truncate max-w-[190px]">
-                          {fund.category}
-                        </span>
-                      </div>
-                    </div>
+          {/* Compact Category Funds Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {categoryFunds.map((fund) => {
+              const isUnallocated = fund.id === 'fund-general-unallocated';
+              const targetPct =
+                fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0
+                  ? Math.min(100, (fund.currentBalance / fund.plannedAnnualTarget) * 100)
+                  : fund.percentageOfTotal;
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      {/* Share Badge */}
-                      <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800 px-2 py-1 rounded-lg">
-                        {fund.percentageOfTotal.toFixed(1)}%
-                      </span>
-                      {fund.id !== 'fund-general-unallocated' && (
-                        <>
+              return (
+                <div
+                  key={fund.id}
+                  className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 flex flex-col justify-between gap-3.5 hover:border-slate-300 dark:hover:border-slate-700 transition-colors"
+                >
+                  <div className="space-y-3">
+                    {/* Top Row: Fund Identity + Balance */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <span
+                          className="w-3 h-3 rounded-full shrink-0 mt-1"
+                          style={{ backgroundColor: fund.color }}
+                        />
+                        <div className="min-w-0">
+                          <h4
+                            className="font-bold text-sm text-slate-900 dark:text-white truncate"
+                            title={fund.name}
+                          >
+                            {fund.name}
+                          </h4>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            {fund.category} &middot; {fund.percentageOfTotal.toFixed(1)}% of capital
+                          </p>
+                        </div>
+                      </div>
+
+                      {!isUnallocated && (
+                        <div className="flex items-center gap-0.5 shrink-0 -mr-1 -mt-1">
                           <button
                             type="button"
                             onClick={() => {
@@ -1404,8 +1230,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                                 fund.plannedAnnualTarget ? String(Math.round(fund.plannedAnnualTarget / 12)) : '0'
                               );
                             }}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                            title="Rename, merge, or change category/target for this fund"
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                            title="Edit or merge fund"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
@@ -1420,234 +1246,234 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                                 otherNamed ? otherNamed.name : 'General Reserves / Starting Capital'
                               );
                             }}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
-                            title="Delete or merge this fund"
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
+                            title="Remove fund"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        </>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Balance + Target Progress */}
+                    <div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <div className="text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                          {currencySymbol}{formatNumber(fund.currentBalance)}
+                        </div>
+                        {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0 ? (
+                          <span className="text-[11px] font-mono tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
+                            {((fund.currentBalance / fund.plannedAnnualTarget) * 100).toFixed(0)}% of {currencySymbol}{formatNumber(fund.plannedAnnualTarget)}/yr
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">
+                            {isUnallocated ? 'Unassigned pool' : 'Open reserve'}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(100, Math.max(3, targetPct))}%`,
+                            backgroundColor: fund.color,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Stored In Accounts (Flat Hairline List — Zero Nested Boxes) */}
+                    <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                        <span>Stored in accounts</span>
+                        <span className="font-mono tabular-nums">
+                          {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
+                        </span>
+                      </div>
+
+                      {fund.accounts.length > 0 ? (
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                          {fund.accounts.map((acc) => (
+                            <div
+                              key={acc.accountId}
+                              className="py-1 flex items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: acc.accountColor || '#10b981' }}
+                                />
+                                <span className="text-slate-700 dark:text-slate-300 truncate">
+                                  {acc.accountName}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
+                                  {currencySymbol}{formatNumber(acc.amount)}
+                                </span>
+                                {isUnallocated && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenReallocateModal(
+                                        'General Reserves / Starting Capital',
+                                        undefined,
+                                        acc.accountId,
+                                        acc.amount
+                                      )
+                                    }
+                                    className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                                  >
+                                    Allocate
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic">No account balance assigned yet</p>
                       )}
                     </div>
                   </div>
 
-                  {/* Balance Display */}
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block mb-0.5">
-                      Earmarked Capital Balance
-                    </span>
-                    <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
-                      {currencySymbol}{formatNumber(fund.currentBalance)}
-                    </div>
-                    {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0 ? (
-                      <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
-                        <span>Planned Target: {currencySymbol}{formatNumber(fund.plannedAnnualTarget)}/yr</span>
-                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                          {((fund.currentBalance / fund.plannedAnnualTarget) * 100).toFixed(0)}% reached
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
-                        <span className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
-                          <ShieldCheck className="w-3 h-3" />
-                          <span>Open-Ended Cushion Reserve</span>
-                        </span>
-                        <span className="font-mono text-slate-500 text-[10px]">
-                          Continuous Pool
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Visual Progress Bar */}
-                  <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${Math.min(100, Math.max(3, fund.percentageOfTotal))}%`,
-                        backgroundColor: fund.color,
-                      }}
-                    />
-                  </div>
-
-                  {/* PHYSICAL LOCATION OF THESE FUNDS */}
-                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                      <Landmark className="w-3 h-3 text-slate-400" />
-                      <span>Physical Accounts Storing This Money:</span>
-                    </span>
-
-                    {fund.accounts.length > 0 ? (
-                      <div className="space-y-1">
-                        {fund.accounts.map((acc) => (
-                          <div
-                            key={acc.accountId}
-                            className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
-                          >
-                            <div className="flex items-center gap-1.5 truncate pr-2">
-                              <span
-                                className="w-2 h-2 rounded-full shrink-0"
-                                style={{ backgroundColor: acc.accountColor || '#10b981' }}
-                              />
-                              <span className="font-semibold text-slate-700 dark:text-slate-200 truncate">
-                                {acc.accountName}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
-                                {currencySymbol}{formatNumber(acc.amount)}
-                              </span>
-                              {fund.id === 'fund-general-unallocated' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const firstNamedFund = categoryFunds.find(
-                                      (f) => f.id !== 'fund-general-unallocated'
-                                    );
-                                    setReallocateFromCategory('General Reserves / Starting Capital');
-                                    setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
-                                    setReallocateAccountId(acc.accountId);
-                                    setReallocateAmount(String(acc.amount));
-                                    setIsReallocateModalOpen(true);
-                                  }}
-                                  className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 rounded transition-colors cursor-pointer"
-                                  title={`Allocate ${acc.accountName} beginning balance to a fund`}
-                                >
-                                  Allocate
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-400 italic">
-                        No specific account assigned
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Action Footer Buttons */}
-                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
-                  </span>
-                  <div className="flex items-center gap-1.5">
+                  {/* Card Footer Quick Actions */}
+                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-3 gap-1.5">
                     <button
                       type="button"
                       onClick={() => {
                         setSelectedFundFilter(fund.name);
                         setActiveTab('transactions');
                       }}
-                      className="px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 rounded-lg transition-colors cursor-pointer"
+                      className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
                     >
-                      View Entries
+                      History
                     </button>
                     <button
                       type="button"
                       onClick={() => {
-                        if (fund.id === 'fund-general-unallocated') {
-                          const firstNamedFund = categoryFunds.find(
-                            (f) => f.id !== 'fund-general-unallocated'
-                          );
+                        if (isUnallocated) {
                           const firstAcc = fund.accounts[0];
-                          setReallocateFromCategory('General Reserves / Starting Capital');
-                          setReallocateToCategory(firstNamedFund ? firstNamedFund.name : '__custom__');
-                          setReallocateAccountId(firstAcc ? firstAcc.accountId : '');
-                          setReallocateAmount(
-                            firstAcc ? String(firstAcc.amount) : String(fund.currentBalance)
+                          handleOpenReallocateModal(
+                            'General Reserves / Starting Capital',
+                            undefined,
+                            firstAcc ? firstAcc.accountId : '',
+                            firstAcc ? firstAcc.amount : fund.currentBalance
                           );
                         } else {
-                          setReallocateFromCategory('General Reserves / Starting Capital');
-                          setReallocateToCategory(fund.name);
+                          handleOpenReallocateModal('General Reserves / Starting Capital', fund.name);
                         }
-                        setIsReallocateModalOpen(true);
                       }}
-                      className="px-2 py-1 text-[11px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
+                      className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50/70 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-950 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
                     >
-                      {fund.id === 'fund-general-unallocated' ? 'Allocate to Fund' : 'Reallocate'}
+                      {isUnallocated ? 'Allocate' : 'Reallocate'}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
                         setDepositType('manual_deposit');
-                        setDepositCategory(fund.name);
-                        setDepositNote(fund.name);
+                        setDepositCategory(isUnallocated ? '' : fund.name);
+                        setDepositNote(isUnallocated ? '' : fund.name);
                         handleOpenTransactionModal('deposit');
                       }}
-                      className="px-2.5 py-1 text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer"
+                      className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
                     >
-                      Deposit
+                      + Deposit
                     </button>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Tab 2: Accounts Allocation */}
+      {/* TAB 2: PHYSICAL ACCOUNTS */}
       {activeTab === 'accounts' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-            <div>
-              <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Wallet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Savings &amp; Investment Accounts ({ledger.accounts.length})</span>
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Manage your asset buckets, rename accounts, adjust returns, or transfer funds.
-              </p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800">
+            <div className="text-xs text-slate-600 dark:text-slate-300">
+              <span className="font-semibold text-slate-900 dark:text-white">
+                Physical Bank &amp; Wallet Accounts ({ledger.accounts.length})
+              </span>
+              <span className="mx-1.5 text-slate-300 dark:text-slate-700">&middot;</span>
+              <span>Manage high-yield banks, e-wallets, MP2, and investment buckets</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
+                type="button"
                 onClick={() => setIsManageAccountsModalOpen(true)}
-                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition-all border border-slate-200/60 dark:border-slate-700"
+                className="min-h-[38px] px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors border border-slate-200/70 dark:border-slate-700 whitespace-nowrap"
               >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>Manage Accounts</span>
+                <Sliders className="w-3.5 h-3.5 shrink-0" />
+                <span>Manage</span>
               </button>
               <button
+                type="button"
                 onClick={handleOpenAddAccount}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                className="min-h-[38px] px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors whitespace-nowrap"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-3.5 h-3.5 shrink-0" />
                 <span>Add Account</span>
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
             {ledger.accounts.map((acc) => {
               const share = totalCapital > 0 ? (acc.balance / totalCapital) * 100 : 0;
               const txCount = getAccountTransactionCount(acc.id);
+
+              const allocatedSlices = categoryFunds
+                .filter((cf) => cf.id !== 'fund-general-unallocated')
+                .map((cf) => {
+                  const match = cf.accounts.find((a) => a.accountId === acc.id);
+                  return match && match.amount > 0
+                    ? { name: cf.name, color: cf.color, amount: match.amount }
+                    : null;
+                })
+                .filter(Boolean) as { name: string; color: string; amount: number }[];
+              const allocatedTotal = allocatedSlices.reduce((s, item) => s + item.amount, 0);
+              const unallocatedAmt = Math.max(0, acc.balance - allocatedTotal);
+
               return (
                 <div
                   key={acc.id}
-                  className="group bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs hover:shadow-md transition-all flex flex-col justify-between relative"
+                  className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 flex flex-col justify-between gap-3.5 hover:border-slate-300 dark:hover:border-slate-700 transition-colors"
                 >
-                  <div>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2">
+                  <div className="space-y-3">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2.5 min-w-0">
                         <span
-                          className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs ring-2 ring-white dark:ring-slate-900"
+                          className="w-3 h-3 rounded-full shrink-0 mt-1"
                           style={{ backgroundColor: acc.color }}
                         />
-                        {acc.apy !== undefined && acc.apy > 0 && (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
-                            {acc.apy}% APY
-                          </span>
-                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-slate-900 dark:text-white text-sm truncate">
+                              {acc.name}
+                            </h4>
+                            {acc.apy !== undefined && acc.apy > 0 && (
+                              <span className="text-[11px] font-mono tabular-nums font-semibold text-emerald-600 dark:text-emerald-400 shrink-0">
+                                {acc.apy}% APY
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            {acc.type}
+                            {acc.institution ? ` · ${acc.institution}` : ''}
+                          </p>
+                        </div>
                       </div>
 
-                      {/* Quick Action buttons on card: Edit/Rename and Delete */}
-                      <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-0.5 shrink-0 -mr-1 -mt-1">
                         <button
                           type="button"
                           onClick={() => handleOpenEditAccount(acc)}
-                          className="p-1.5 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                          title="Rename or Edit Account"
+                          className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Account"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
@@ -1655,176 +1481,498 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           type="button"
                           onClick={() => handleOpenDeleteAccount(acc)}
                           disabled={ledger.accounts.length <= 1}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                          title={ledger.accounts.length <= 1 ? "Cannot delete the last remaining account" : "Delete Account"}
+                          className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title={ledger.accounts.length <= 1 ? 'Cannot delete the last account' : 'Delete Account'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
 
-                    <h4 className="font-semibold text-slate-900 dark:text-white text-sm line-clamp-1">
-                      {acc.name}
-                    </h4>
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-xs text-slate-400">
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px] font-medium border border-slate-200/60 dark:border-slate-700/60">
-                        {acc.type}
+                    {/* Balance & Share */}
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {currencySymbol}{formatNumber(acc.balance)}
+                      </div>
+                      <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                        {share.toFixed(1)}% of capital &middot; {txCount} {txCount === 1 ? 'entry' : 'entries'}
                       </span>
-                      {acc.institution && (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                          <Landmark className="w-3 h-3 text-slate-400" />
-                          {acc.institution}
+                    </div>
+
+                    {/* Fund Breakdown Inside This Account */}
+                    <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 dark:text-slate-400">
+                          Earmarked: <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">{currencySymbol}{formatNumber(allocatedTotal)}</strong>
                         </span>
+                        <span className="text-slate-400 font-mono tabular-nums">
+                          Unallocated: {currencySymbol}{formatNumber(unallocatedAmt)}
+                        </span>
+                      </div>
+
+                      <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden flex">
+                        {allocatedSlices.map((slice, idx) => (
+                          <div
+                            key={`${slice.name}-${idx}`}
+                            style={{
+                              width: `${acc.balance > 0 ? Math.min(100, (slice.amount / acc.balance) * 100) : 0}%`,
+                              backgroundColor: slice.color,
+                            }}
+                            title={`${slice.name}: ${currencySymbol}${formatNumber(slice.amount)}`}
+                            className="h-full"
+                          />
+                        ))}
+                      </div>
+
+                      {allocatedSlices.length > 0 && (
+                        <div className="pt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-400">
+                          {allocatedSlices.slice(0, 3).map((slice) => (
+                            <span key={slice.name} className="inline-flex items-center gap-1 truncate max-w-full">
+                              <span
+                                className="w-1.5 h-1.5 rounded-full shrink-0"
+                                style={{ backgroundColor: slice.color }}
+                              />
+                              <span className="truncate">{slice.name}:</span>
+                              <span className="font-mono tabular-nums font-medium text-slate-800 dark:text-slate-200">
+                                {currencySymbol}{formatNumber(slice.amount)}
+                              </span>
+                            </span>
+                          ))}
+                          {allocatedSlices.length > 3 && (
+                            <span className="text-[10px] text-slate-400">
+                              +{allocatedSlices.length - 3} more
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
-                    <div>
-                      <div className="text-lg font-bold font-mono text-slate-900 dark:text-white">
-                        {currencySymbol}{formatNumber(acc.balance)}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5 flex items-center justify-between">
-                        <span>Share of Net Worth</span>
-                        <span className="font-semibold text-slate-700 dark:text-slate-300">{share.toFixed(1)}%</span>
-                      </div>
-                    </div>
-
-                    {/* Account Category Fund Allocation Breakdown Bar */}
-                    {(() => {
-                      const allocatedSlices = categoryFunds
-                        .filter((cf) => cf.id !== 'fund-general-unallocated')
-                        .map((cf) => {
-                          const match = cf.accounts.find((a) => a.accountId === acc.id);
-                          return match && match.amount > 0
-                            ? { name: cf.name, color: cf.color, amount: match.amount }
-                            : null;
-                        })
-                        .filter(Boolean) as { name: string; color: string; amount: number }[];
-                      const allocatedTotal = allocatedSlices.reduce((s, item) => s + item.amount, 0);
-                      const unallocatedAmt = Math.max(0, acc.balance - allocatedTotal);
-                      const allocatedPct = acc.balance > 0 ? Math.min(100, (allocatedTotal / acc.balance) * 100) : 0;
-
-                      return (
-                        <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-1.5">
-                          <div className="flex items-center justify-between text-[10px]">
-                            <span className="font-semibold text-slate-600 dark:text-slate-300">
-                              Allocated to Funds: {currencySymbol}{formatNumber(allocatedTotal)}
-                            </span>
-                            <span className="font-mono text-slate-400">
-                              Unallocated: {currencySymbol}{formatNumber(unallocatedAmt)}
-                            </span>
-                          </div>
-                          <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
-                            {allocatedSlices.map((slice, idx) => (
-                              <div
-                                key={`${slice.name}-${idx}`}
-                                style={{
-                                  width: `${acc.balance > 0 ? Math.min(100, (slice.amount / acc.balance) * 100) : 0}%`,
-                                  backgroundColor: slice.color,
-                                }}
-                                title={`${slice.name}: ${currencySymbol}${formatNumber(slice.amount)}`}
-                                className="h-full"
-                              />
-                            ))}
-                            {allocatedSlices.length === 0 && allocatedPct > 0 && (
-                              <div
-                                style={{ width: `${allocatedPct}%` }}
-                                className="h-full bg-indigo-500"
-                              />
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    <div className="flex items-center gap-1.5 pt-2 border-t border-slate-100/80 dark:border-slate-800/80">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenTransactionModal('deposit', acc.id)}
-                        className="flex-1 py-1.5 px-1.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                        title="Deposit into this account"
-                      >
-                        <Coins className="w-3 h-3" />
-                        <span>Deposit</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenTransactionModal('withdraw', acc.id)}
-                        className="flex-1 py-1.5 px-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                        title="Withdraw from this account"
-                      >
-                        <ArrowDownRight className="w-3 h-3" />
-                        <span>Withdraw</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenTransactionModal('transfer', acc.id)}
-                        disabled={ledger.accounts.length <= 1}
-                        className="flex-1 py-1.5 px-1.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-40"
-                        title="Transfer from this account"
-                      >
-                        <ArrowLeftRight className="w-3 h-3" />
-                        <span>Transfer</span>
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
-                      <span>{txCount} {txCount === 1 ? 'entry' : 'entries'}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditAccount(acc)}
-                        className="text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:underline font-medium cursor-pointer"
-                      >
-                        Rename / Edit
-                      </button>
-                    </div>
+                  {/* Quick Actions */}
+                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenTransactionModal('deposit', acc.id)}
+                      className="min-h-[36px] px-2 py-1 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <Coins className="w-3 h-3 shrink-0" />
+                      <span>Deposit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenTransactionModal('withdraw', acc.id)}
+                      className="min-h-[36px] px-2 py-1 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <ArrowDownRight className="w-3 h-3 shrink-0" />
+                      <span>Withdraw</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenTransactionModal('transfer', acc.id)}
+                      disabled={ledger.accounts.length <= 1}
+                      className="min-h-[36px] px-2 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40"
+                    >
+                      <ArrowLeftRight className="w-3 h-3 shrink-0" />
+                      <span>Transfer</span>
+                    </button>
                   </div>
                 </div>
               );
             })}
 
-            {/* Quick Add Account Card at end of grid */}
+            {/* Quick Add Account Tile */}
             <button
               type="button"
               onClick={handleOpenAddAccount}
-              className="border-2 border-dashed border-slate-200 dark:border-slate-800 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-2xl p-5 flex flex-col items-center justify-center gap-2 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all cursor-pointer min-h-[170px] group bg-slate-50/50 dark:bg-slate-900/50"
+              className="border border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-2xl p-5 flex flex-col items-center justify-center gap-2 text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer min-h-[160px] bg-slate-50/40 dark:bg-slate-900/40"
             >
-              <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 group-hover:bg-emerald-50 dark:group-hover:bg-emerald-950 flex items-center justify-center transition-colors">
-                <Plus className="w-5 h-5 group-hover:text-emerald-600 dark:group-hover:text-emerald-400" />
+              <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                <Plus className="w-4 h-4" />
               </div>
-              <span className="text-xs font-semibold">Add New Account</span>
-              <span className="text-[10px] text-slate-400">HYSA, Brokerage, Retirement</span>
+              <span className="text-xs font-semibold">Add Savings Account</span>
+              <span className="text-[11px] text-slate-400">Digital Bank, MP2, E-Wallet, Brokerage</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Tab 3: Compound Projector */}
+      {/* TAB 3: SAVINGS LEDGER TRANSACTIONS */}
+      {activeTab === 'transactions' && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+          {/* Compact Search & Filter Bar */}
+          <div className="p-3.5 sm:p-4 bg-slate-50/60 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              {/* Quick Type Filter Segment */}
+              <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'inflow', label: 'Inflows' },
+                  { id: 'withdrawal', label: 'Withdrawals' },
+                  { id: 'transfer', label: 'Transfers & Realloc' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setSelectedSourceFilter(tab.id)}
+                    className={`min-h-[34px] px-3 py-1 rounded-lg font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                      selectedSourceFilter === tab.id
+                        ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
+                Showing {filteredTransactions.length} of {transactions.length} entries
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={txSearchQuery}
+                  onChange={(e) => setTxSearchQuery(e.target.value)}
+                  placeholder="Search note, account, fund..."
+                  className="w-full min-h-[38px] pl-8 pr-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
+                />
+              </div>
+
+              <select
+                value={selectedAccountFilter}
+                onChange={(e) => setSelectedAccountFilter(e.target.value)}
+                className="min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
+              >
+                <option value="all">All Accounts</option>
+                {ledger.accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.name}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedFundFilter}
+                  onChange={(e) => setSelectedFundFilter(e.target.value)}
+                  className="flex-1 min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
+                >
+                  <option value="all">All Sinking Funds</option>
+                  {categoryFunds.map((f) => (
+                    <option key={f.id} value={f.name}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+
+                {(selectedFundFilter !== 'all' ||
+                  selectedAccountFilter !== 'all' ||
+                  selectedSourceFilter !== 'all' ||
+                  txSearchQuery.trim()) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFundFilter('all');
+                      setSelectedAccountFilter('all');
+                      setSelectedSourceFilter('all');
+                      setTxSearchQuery('');
+                    }}
+                    className="min-h-[38px] px-2.5 py-1.5 bg-rose-50 text-rose-600 dark:bg-rose-950/80 dark:text-rose-300 rounded-xl text-xs font-semibold hover:bg-rose-100 whitespace-nowrap cursor-pointer"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {filteredTransactions.length === 0 ? (
+            <div className="p-8 text-center space-y-2">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                No matching ledger transactions
+              </p>
+              <p className="text-xs text-slate-400">
+                Try clearing your filters or record a new deposit, transfer, or reallocation.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Mobile List Rows (Clean Zero-Pill Typography & 36px+ Touch Targets) */}
+              <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredTransactions.map((tx) => {
+                  const sourceLabel =
+                    tx.source === 'budget_sync'
+                      ? 'Budget Sync'
+                      : tx.source === 'interest_yield'
+                      ? 'Yield'
+                      : tx.source === 'manual_deposit'
+                      ? 'Deposit'
+                      : tx.source === 'withdrawal'
+                      ? 'Withdraw'
+                      : tx.source === 'transfer'
+                      ? 'Transfer'
+                      : 'Reallocate';
+
+                  const dotColor =
+                    tx.source === 'withdrawal'
+                      ? 'bg-rose-500'
+                      : tx.source === 'transfer' || tx.source === 'reallocation'
+                      ? 'bg-indigo-500'
+                      : tx.source === 'interest_yield'
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-500';
+
+                  return (
+                    <div
+                      key={tx.id}
+                      className="p-3.5 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 flex items-start justify-between gap-3"
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                          {tx.note}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 truncate">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+                          <span className="font-semibold">{sourceLabel}</span>
+                          <span>&middot;</span>
+                          <span className="truncate">
+                            {tx.source === 'transfer' && tx.toAccountName
+                              ? `${tx.accountName} → ${tx.toAccountName}`
+                              : tx.source === 'reallocation' && tx.toCategory
+                              ? `${tx.category || 'Reserves'} → ${tx.toCategory}`
+                              : tx.accountName}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono tabular-nums flex-wrap">
+                          <span>{tx.date} ({tx.period})</span>
+                          {tx.category && tx.source !== 'reallocation' && (
+                            <>
+                              <span>&middot;</span>
+                              <span className="font-sans font-medium text-emerald-600 dark:text-emerald-400">
+                                {tx.category}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <div className="font-mono tabular-nums font-bold text-xs">
+                          {tx.source === 'withdrawal' ? (
+                            <span className="text-rose-600 dark:text-rose-400">
+                              -{currencySymbol}{formatNumber(tx.amount)}
+                            </span>
+                          ) : tx.source === 'transfer' || tx.source === 'reallocation' ? (
+                            <span className="text-indigo-600 dark:text-indigo-400">
+                              ⇄ {currencySymbol}{formatNumber(tx.amount)}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-600 dark:text-emerald-400">
+                              +{currencySymbol}{formatNumber(tx.amount)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] font-mono tabular-nums text-slate-400">
+                          Bal: {currencySymbol}{formatNumber(tx.runningTotalCapital || 0)}
+                        </div>
+                        {tx.source !== 'budget_sync' && (
+                          <div className="flex items-center gap-1 mt-0.5 -mr-1">
+                            {onUpdateTransaction && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditTx(tx)}
+                                className="min-h-[34px] min-w-[34px] flex items-center justify-center text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                                title="Edit"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {onDeleteTransaction && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteTransaction(tx.id)}
+                                className="min-h-[34px] min-w-[34px] flex items-center justify-center text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Type</th>
+                      <th className="py-3 px-4">Account / Envelope</th>
+                      <th className="py-3 px-4">Note &amp; Fund</th>
+                      <th className="py-3 px-4 text-right">Amount</th>
+                      <th className="py-3 px-4 text-right">Running Capital</th>
+                      <th className="py-3 px-4 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredTransactions.map((tx) => {
+                      const typeLabel =
+                        tx.source === 'budget_sync'
+                          ? 'Budget Sync'
+                          : tx.source === 'interest_yield'
+                          ? 'Yield'
+                          : tx.source === 'manual_deposit'
+                          ? 'Deposit'
+                          : tx.source === 'withdrawal'
+                          ? 'Withdrawal'
+                          : tx.source === 'transfer'
+                          ? 'Transfer'
+                          : 'Reallocation';
+
+                      const dotColor =
+                        tx.source === 'withdrawal'
+                          ? 'bg-rose-500'
+                          : tx.source === 'transfer' || tx.source === 'reallocation'
+                          ? 'bg-indigo-500'
+                          : tx.source === 'interest_yield'
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500';
+
+                      return (
+                        <tr key={tx.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                          <td className="py-3 px-4 whitespace-nowrap font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                            {tx.date} <span className="text-[10px] text-slate-400">({tx.period})</span>
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                              <span>{typeLabel}</span>
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                            {tx.source === 'transfer' && tx.toAccountName ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs">
+                                <span>{tx.accountName}</span>
+                                <ArrowRight className="w-3 h-3 text-indigo-500" />
+                                <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{tx.toAccountName}</span>
+                              </span>
+                            ) : tx.source === 'reallocation' && tx.toCategory ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs">
+                                <span>{tx.category || 'Reserves'}</span>
+                                <ArrowRight className="w-3 h-3 text-indigo-500" />
+                                <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{tx.toCategory}</span>
+                              </span>
+                            ) : (
+                              tx.accountName
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span>{tx.note}</span>
+                              {tx.category && tx.source !== 'reallocation' && (
+                                <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                                  &middot; {tx.category}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums font-bold whitespace-nowrap">
+                            {tx.source === 'withdrawal' ? (
+                              <span className="text-rose-600 dark:text-rose-400">
+                                -{currencySymbol}{formatNumber(tx.amount)}
+                              </span>
+                            ) : tx.source === 'transfer' || tx.source === 'reallocation' ? (
+                              <span className="text-indigo-600 dark:text-indigo-400">
+                                ⇄ {currencySymbol}{formatNumber(tx.amount)}
+                              </span>
+                            ) : (
+                              <span className="text-emerald-600 dark:text-emerald-400">
+                                +{currencySymbol}{formatNumber(tx.amount)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                            {currencySymbol}{formatNumber(tx.runningTotalCapital || 0)}
+                          </td>
+                          <td className="py-3 px-4 text-center whitespace-nowrap">
+                            {tx.source !== 'budget_sync' ? (
+                              <div className="flex items-center justify-center gap-1">
+                                {onUpdateTransaction && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditTx(tx)}
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition-colors cursor-pointer"
+                                    title="Edit transaction"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {onDeleteTransaction && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteTransaction(tx.id)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                                    title="Delete transaction"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-400" title="Managed via Budget Sheet">
+                                Synced
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* TAB 4: COMPOUND PROJECTOR */}
       {activeTab === 'calculator' && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center gap-2 mb-4">
-            <Calculator className="w-5 h-5 text-emerald-600" />
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Long-Term Capital Compound Growth Projector
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex items-center gap-2 mb-1">
+            <Calculator className="w-4 h-4 text-emerald-600" />
+            <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+              Compound Growth Projector
             </h3>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">
-            Project your total capital accumulation based on your current liquid assets of {currencySymbol}{formatNumber(totalCapital)} and steady recurring contributions.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-5">
+            Project long-term growth starting from your current capital of {currencySymbol}{formatNumber(totalCapital)}.
           </p>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="space-y-4 text-xs">
               <div>
-                <div className="flex justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  <span>Monthly Savings Contribution:</span>
-                  <span className="font-mono text-emerald-600">{currencySymbol}{formatNumber(simMonthly)}/mo</span>
+                <div className="flex justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <span>Monthly Contribution</span>
+                  <span className="font-mono tabular-nums text-emerald-600">
+                    {currencySymbol}{formatNumber(simMonthly)}/mo
+                  </span>
                 </div>
                 <input
                   type="range"
                   min="100"
-                  max="10000"
-                  step="50"
+                  max="50000"
+                  step="100"
                   value={simMonthly}
                   onChange={(e) => setSimMonthly(parseFloat(e.target.value))}
                   className="w-full accent-emerald-600"
@@ -1832,13 +1980,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </div>
 
               <div>
-                <div className="flex justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  <span>Expected Annual Rate of Return:</span>
-                  <span className="font-mono text-indigo-600">{simRate}%</span>
+                <div className="flex justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <span>Expected Annual Return (APY)</span>
+                  <span className="font-mono tabular-nums text-indigo-600">{simRate}%</span>
                 </div>
                 <input
                   type="range"
-                  min="2"
+                  min="1"
                   max="15"
                   step="0.5"
                   value={simRate}
@@ -1848,9 +1996,9 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </div>
 
               <div>
-                <div className="flex justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  <span>Time Horizon:</span>
-                  <span className="font-mono text-slate-900 dark:text-white">{simYears} Years</span>
+                <div className="flex justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <span>Time Horizon</span>
+                  <span className="font-mono tabular-nums text-slate-900 dark:text-white">{simYears} Years</span>
                 </div>
                 <input
                   type="range"
@@ -1864,29 +2012,28 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </div>
             </div>
 
-            {/* Results display */}
-            <div className="bg-slate-50 dark:bg-slate-800/70 rounded-2xl p-6 border border-slate-200 dark:border-slate-700 flex flex-col justify-between">
+            <div className="bg-slate-50 dark:bg-slate-800/60 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 flex flex-col justify-between gap-4">
               <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Projected Portfolio in {simYears} Years
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Projected Value in {simYears} Years
                 </span>
-                <div className="text-3xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-2">
+                <div className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
                   {currencySymbol}{formatNumber(compoundResult.futureVal)}
                 </div>
               </div>
 
-              <div className="space-y-2 pt-4 border-t border-slate-200 dark:border-slate-700 text-xs">
+              <div className="space-y-1.5 pt-3 border-t border-slate-200 dark:border-slate-700 text-xs">
                 <div className="flex justify-between text-slate-600 dark:text-slate-300">
-                  <span>Starting Capital:</span>
-                  <span className="font-mono font-medium">{currencySymbol}{formatNumber(totalCapital)}</span>
+                  <span>Starting Capital</span>
+                  <span className="font-mono tabular-nums font-medium">{currencySymbol}{formatNumber(totalCapital)}</span>
                 </div>
                 <div className="flex justify-between text-slate-600 dark:text-slate-300">
-                  <span>Cumulative Cash Added:</span>
-                  <span className="font-mono font-medium">{currencySymbol}{formatNumber(compoundResult.contributed)}</span>
+                  <span>Total Principal Contributed</span>
+                  <span className="font-mono tabular-nums font-medium">{currencySymbol}{formatNumber(compoundResult.contributed)}</span>
                 </div>
                 <div className="flex justify-between text-indigo-600 dark:text-indigo-400 font-bold">
-                  <span>Compound Interest / Returns:</span>
-                  <span className="font-mono">+{currencySymbol}{formatNumber(compoundResult.interestEarned)}</span>
+                  <span>Compound Yield Earned</span>
+                  <span className="font-mono tabular-nums">+{currencySymbol}{formatNumber(compoundResult.interestEarned)}</span>
                 </div>
               </div>
             </div>
@@ -1896,51 +2043,36 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Unified Transaction Modal (Deposit, Withdraw, Transfer) */}
       {isTransactionModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                    transactionMode === 'deposit'
-                      ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400'
-                      : transactionMode === 'withdraw'
-                      ? 'bg-rose-100 dark:bg-rose-950/70 text-rose-600 dark:text-rose-400'
-                      : 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400'
-                  }`}
-                >
-                  {transactionMode === 'deposit' && <Coins className="w-5 h-5" />}
-                  {transactionMode === 'withdraw' && <ArrowDownRight className="w-5 h-5" />}
-                  {transactionMode === 'transfer' && <ArrowLeftRight className="w-5 h-5" />}
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    {transactionMode === 'deposit' && 'Record Savings Deposit / Yield'}
-                    {transactionMode === 'withdraw' && 'Withdraw from Savings'}
-                    {transactionMode === 'transfer' && 'Transfer Between Savings Accounts'}
-                  </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {transactionMode === 'deposit' && 'Add fresh funds or compound yield dividend to your accounts'}
-                    {transactionMode === 'withdraw' && 'Draw money from your savings bucket for expenses or needs'}
-                    {transactionMode === 'transfer' && 'Reallocate funds across your bank, digital & e-wallet buckets'}
-                  </p>
-                </div>
+        <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md sm:max-w-lg bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                  {transactionMode === 'deposit' && 'Record Deposit or Yield'}
+                  {transactionMode === 'withdraw' && 'Withdraw from Savings'}
+                  {transactionMode === 'transfer' && 'Transfer Between Accounts'}
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  {transactionMode === 'deposit' && 'Add funds or interest yield to an account & fund'}
+                  {transactionMode === 'withdraw' && 'Record an outflow from your savings reserves'}
+                  {transactionMode === 'transfer' && 'Move balance between physical bank accounts'}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsTransactionModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg cursor-pointer shrink-0"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
             {/* Mode Switcher Tabs */}
-            <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl mt-4 text-xs font-semibold">
+            <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl mt-2.5 sm:mt-3 text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setTransactionMode('deposit')}
-                className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`h-8 sm:h-9 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   transactionMode === 'deposit'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1952,7 +2084,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <button
                 type="button"
                 onClick={() => setTransactionMode('withdraw')}
-                className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`h-8 sm:h-9 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   transactionMode === 'withdraw'
                     ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1964,7 +2096,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <button
                 type="button"
                 onClick={() => setTransactionMode('transfer')}
-                className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`h-8 sm:h-9 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   transactionMode === 'transfer'
                     ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1975,98 +2107,85 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </button>
             </div>
 
-            {/* TAB 1: DEPOSIT / YIELD FORM */}
+            {/* DEPOSIT / YIELD FORM */}
             {transactionMode === 'deposit' && (
-              <form onSubmit={handleRecordDeposit} className="mt-4 space-y-3.5">
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Source Type</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setDepositType('interest_yield')}
-                      className={`py-1.5 px-3 rounded-lg font-semibold border transition-all cursor-pointer ${
-                        depositType === 'interest_yield'
-                          ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-400 text-amber-700 dark:text-amber-300'
-                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
-                      }`}
+              <form onSubmit={handleRecordDeposit} className="mt-3 space-y-2.5 sm:space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDepositType('manual_deposit')}
+                    className={`h-8 sm:h-9 px-3 rounded-xl font-semibold border transition-all cursor-pointer ${
+                      depositType === 'manual_deposit'
+                        ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-400 text-emerald-700 dark:text-emerald-300'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Direct Deposit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepositType('interest_yield')}
+                    className={`h-8 sm:h-9 px-3 rounded-xl font-semibold border transition-all cursor-pointer ${
+                      depositType === 'interest_yield'
+                        ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-400 text-amber-700 dark:text-amber-300'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Interest / Yield
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        <span className="sm:hidden">Account</span>
+                        <span className="hidden sm:inline">Destination Account</span>
+                      </label>
+                    </div>
+                    <select
+                      value={depositAccountId}
+                      onChange={(e) => setDepositAccountId(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                     >
-                      Interest / Yield Payout
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDepositType('manual_deposit')}
-                      className={`py-1.5 px-3 rounded-lg font-semibold border transition-all cursor-pointer ${
-                        depositType === 'manual_deposit'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-400 text-emerald-700 dark:text-emerald-300'
-                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
-                      }`}
-                    >
-                      Direct Capital Injection
-                    </button>
+                      {ledger.accounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Amount ({currencySymbol})</label>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      placeholder="0.00"
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
+                    />
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Destination Account</label>
-                  <select
-                    value={depositAccountId}
-                    onChange={(e) => setDepositAccountId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  >
-                    {ledger.accounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} — {currencySymbol}{formatNumber(acc.balance)} ({acc.type})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Amount ({currencySymbol})</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    required
-                    placeholder="e.g. 5000.00"
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-sm text-slate-900 dark:text-white"
-                  />
-                </div>
-
-                {/* Balance Preview for Deposit */}
-                {(() => {
-                  const selAcc = ledger.accounts.find((a) => a.id === depositAccountId) || ledger.accounts[0];
-                  const addAmt = parseFloat(depositAmount) || 0;
-                  if (!selAcc) return null;
-                  return (
-                    <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/40 rounded-xl border border-emerald-200/70 dark:border-emerald-800/70 text-[11px] flex items-center justify-between">
-                      <div className="text-slate-600 dark:text-slate-300">
-                        <span>{selAcc.name}: </span>
-                        <span className="font-mono">{currencySymbol}{formatNumber(selAcc.balance)}</span>
-                        {addAmt > 0 && (
-                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                            {' '}➔ {currencySymbol}{formatNumber(selAcc.balance + addAmt)} (+{currencySymbol}{formatNumber(addAmt)})
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-emerald-700 dark:text-emerald-300 font-medium">+Net Worth</span>
-                    </div>
-                  );
-                })()}
-
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Which Fund to Put the Money In (Category / Sinking Fund)
-                  </label>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      Target Sinking Fund / Envelope
+                    </label>
+                  </div>
                   <select
                     value={depositCategory}
                     onChange={(e) => setDepositCategory(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   >
                     {depositType === 'interest_yield' ? (
-                      <option value="">Compounding Yields &amp; Dividend (Default Yield Pool)</option>
+                      <option value="">Compounding Yields &amp; Dividend (Default)</option>
                     ) : (
                       <option value="">General Reserves / Starting Capital (Unallocated)</option>
                     )}
@@ -2083,50 +2202,51 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         <option key={cat} value={cat}>
                           {cat}
                           {matchingFund
-                            ? ` — Current: ${currencySymbol}${formatNumber(matchingFund.currentBalance)}`
+                            ? ` (${currencySymbol}${formatNumber(matchingFund.currentBalance)})`
                             : ''}
                         </option>
                       );
                     })}
-                    <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
+                    <option value="__custom__">+ Create New Sinking Fund...</option>
                   </select>
                   {depositCategory === '__custom__' && (
-                    <div className="mt-2">
-                      <input
-                        type="text"
-                        required
-                        placeholder="Enter new fund name (e.g. Emergency Fund, MP2, Travel Fund)"
-                        value={depositCustomCategory}
-                        onChange={(e) => setDepositCustomCategory(e.target.value)}
-                        className="w-full px-3 py-2 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  )}
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Choose which earmarked fund receives this deposit, or leave as General Reserves to add to your unallocated balance.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Date</label>
-                    <input
-                      type="date"
-                      required
-                      value={depositDate}
-                      onChange={(e) => setDepositDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Memo / Description</label>
                     <input
                       type="text"
-                      placeholder="e.g. Monthly interest or cash bonus"
+                      required
+                      placeholder="Enter new fund name (e.g. Emergency Fund, MP2)"
+                      value={depositCustomCategory}
+                      onChange={(e) => setDepositCustomCategory(e.target.value)}
+                      className="mt-2 w-full min-w-0 h-8 sm:h-9 px-2.5 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                    />
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Date</label>
+                    </div>
+                    <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                      <input
+                        type="date"
+                        required
+                        value={depositDate}
+                        onChange={(e) => setDepositDate(e.target.value)}
+                        className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-[11px] sm:text-xs font-mono text-slate-900 dark:text-white outline-none appearance-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Memo (Optional)</label>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Interest, bonus..."
                       value={depositNote}
                       onChange={(e) => setDepositNote(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                      className="block w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                     />
                   </div>
                 </div>
@@ -2135,113 +2255,95 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsTransactionModalOpen(false)}
-                    className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                    className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                    className="h-8 sm:h-9 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <Coins className="w-3.5 h-3.5" />
-                    <span>Record Deposit</span>
+                    <span>Save Deposit</span>
                   </button>
                 </div>
               </form>
             )}
 
-            {/* TAB 2: WITHDRAWAL FORM */}
+            {/* WITHDRAWAL FORM */}
             {transactionMode === 'withdraw' && (
-              <form onSubmit={handleRecordWithdrawal} className="mt-4 space-y-3.5">
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Withdraw From Account</label>
-                  <select
-                    value={withdrawAccountId}
-                    onChange={(e) => setWithdrawAccountId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  >
-                    {ledger.accounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} — Balance: {currencySymbol}{formatNumber(acc.balance)} ({acc.type})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold">Amount ({currencySymbol})</label>
-                    {(() => {
-                      const selAcc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
-                      if (!selAcc || selAcc.balance <= 0) return null;
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => setWithdrawAmount(selAcc.balance.toString())}
-                          className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline font-medium cursor-pointer"
-                        >
-                          Withdraw Full ({currencySymbol}{formatNumber(selAcc.balance)})
-                        </button>
-                      );
-                    })()}
+              <form onSubmit={handleRecordWithdrawal} className="mt-3 space-y-2.5 sm:space-y-3">
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Account</label>
+                    </div>
+                    <select
+                      value={withdrawAccountId}
+                      onChange={(e) => setWithdrawAccountId(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    >
+                      {ledger.accounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    required
-                    placeholder="e.g. 5000.00"
-                    value={withdrawAmount}
-                    onChange={(e) => setWithdrawAmount(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-sm text-slate-900 dark:text-white"
-                  />
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Amount ({currencySymbol})</label>
+                      {(() => {
+                        const selAcc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
+                        if (!selAcc || selAcc.balance <= 0) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setWithdrawAmount(selAcc.balance.toString())}
+                            className="text-[10px] text-rose-600 dark:text-rose-400 hover:underline font-semibold cursor-pointer shrink-0 leading-none"
+                          >
+                            Max
+                          </button>
+                        );
+                      })()}
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      placeholder="0.00"
+                      value={withdrawAmount}
+                      onChange={(e) => setWithdrawAmount(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
+                    />
+                  </div>
                 </div>
 
-                {/* Balance validation alert & preview */}
                 {(() => {
                   const selAcc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
                   const wAmt = parseFloat(withdrawAmount) || 0;
-                  if (!selAcc) return null;
-                  const exceeds = wAmt > selAcc.balance;
-                  const newBal = Math.max(0, selAcc.balance - wAmt);
-
+                  if (!selAcc || wAmt <= selAcc.balance) return null;
                   return (
-                    <div className="space-y-1.5">
-                      {exceeds && (
-                        <div className="p-2.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
-                          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
-                          <span>
-                            Warning: Entered amount ({currencySymbol}{formatNumber(wAmt)}) exceeds current available balance ({currencySymbol}{formatNumber(selAcc.balance)}).
-                          </span>
-                        </div>
-                      )}
-                      <div className="p-3 bg-rose-50/70 dark:bg-rose-950/40 rounded-xl border border-rose-200/70 dark:border-rose-800/70 text-[11px] flex flex-col gap-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-600 dark:text-slate-300">
-                            {selAcc.name}: <strong className="font-mono text-slate-800 dark:text-slate-100">{currencySymbol}{formatNumber(selAcc.balance)}</strong>
-                            {wAmt > 0 && (
-                              <span className="font-semibold text-rose-600 dark:text-rose-400">
-                                {' '}➔ {currencySymbol}{formatNumber(newBal)} (-{currencySymbol}{formatNumber(wAmt)})
-                              </span>
-                            )}
-                          </span>
-                          <span className="text-rose-700 dark:text-rose-300 font-semibold">-Capital Outflow</span>
-                        </div>
-                        <p className="text-[10px] text-slate-400">
-                          Total multi-year accumulated capital will decrease by {currencySymbol}{formatNumber(wAmt)}.
-                        </p>
-                      </div>
+                    <div className="p-2 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                      <span>
+                        Exceeds balance ({currencySymbol}{formatNumber(selAcc.balance)}).
+                      </span>
                     </div>
                   );
                 })()}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Category Fund / Reason</label>
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Fund / Reason</label>
+                    </div>
                     <select
                       value={withdrawCategory}
                       onChange={(e) => setWithdrawCategory(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                     >
                       {Array.from(
                         new Set([
@@ -2257,26 +2359,32 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Date</label>
-                    <input
-                      type="date"
-                      required
-                      value={withdrawDate}
-                      onChange={(e) => setWithdrawDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                    />
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Date</label>
+                    </div>
+                    <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                      <input
+                        type="date"
+                        required
+                        value={withdrawDate}
+                        onChange={(e) => setWithdrawDate(e.target.value)}
+                        className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-[11px] sm:text-xs font-mono text-slate-900 dark:text-white outline-none appearance-none"
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Memo / Purpose (Optional)</label>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Memo (Optional)</label>
+                  </div>
                   <input
                     type="text"
-                    placeholder="e.g. Hospital emergency / tuition fee / cash withdrawal"
+                    placeholder="e.g. Emergency expense or bill settlement"
                     value={withdrawNote}
                     onChange={(e) => setWithdrawNote(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   />
                 </div>
 
@@ -2284,13 +2392,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsTransactionModalOpen(false)}
-                    className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                    className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                    className="h-8 sm:h-9 px-4 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <ArrowDownRight className="w-3.5 h-3.5" />
                     <span>Confirm Withdrawal</span>
@@ -2299,12 +2407,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </form>
             )}
 
-            {/* TAB 3: TRANSFER BETWEEN ACCOUNTS FORM */}
+            {/* TRANSFER BETWEEN ACCOUNTS FORM */}
             {transactionMode === 'transfer' && (
-              <form onSubmit={handleRecordTransfer} className="mt-4 space-y-3.5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">From Account (Source)</label>
+              <form onSubmit={handleRecordTransfer} className="mt-3 space-y-2.5 sm:space-y-3">
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Account</label>
+                    </div>
                     <select
                       value={transferFromAccountId}
                       onChange={(e) => {
@@ -2315,7 +2425,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           if (other) setTransferToAccountId(other.id);
                         }
                       }}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                     >
                       {ledger.accounts.map((acc) => (
                         <option key={acc.id} value={acc.id}>
@@ -2325,12 +2435,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">To Account (Destination)</label>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">To Account</label>
+                    </div>
                     <select
                       value={transferToAccountId}
                       onChange={(e) => setTransferToAccountId(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                     >
                       {ledger.accounts
                         .filter((acc) => acc.id !== transferFromAccountId)
@@ -2343,125 +2455,76 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
                 </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold">Transfer Amount ({currencySymbol})</label>
-                    {(() => {
-                      const fromAcc = ledger.accounts.find((a) => a.id === transferFromAccountId) || ledger.accounts[0];
-                      if (!fromAcc || fromAcc.balance <= 0) return null;
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => setTransferAmount(fromAcc.balance.toString())}
-                          className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline font-medium cursor-pointer"
-                        >
-                          Transfer Max ({currencySymbol}{formatNumber(fromAcc.balance)})
-                        </button>
-                      );
-                    })()}
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Amount ({currencySymbol})</label>
+                      {(() => {
+                        const fromAcc = ledger.accounts.find((a) => a.id === transferFromAccountId) || ledger.accounts[0];
+                        if (!fromAcc || fromAcc.balance <= 0) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setTransferAmount(fromAcc.balance.toString())}
+                            className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-semibold cursor-pointer shrink-0 leading-none"
+                          >
+                            Max
+                          </button>
+                        );
+                      })()}
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      placeholder="0.00"
+                      value={transferAmount}
+                      onChange={(e) => setTransferAmount(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
+                    />
                   </div>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    required
-                    placeholder="e.g. 10000.00"
-                    value={transferAmount}
-                    onChange={(e) => setTransferAmount(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-sm text-slate-900 dark:text-white"
-                  />
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Date</label>
+                    </div>
+                    <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                      <input
+                        type="date"
+                        required
+                        value={transferDate}
+                        onChange={(e) => setTransferDate(e.target.value)}
+                        className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-[11px] sm:text-xs font-mono text-slate-900 dark:text-white outline-none appearance-none"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                {/* Transfer Preview Card */}
-                {(() => {
-                  const fromAcc = ledger.accounts.find((a) => a.id === transferFromAccountId) || ledger.accounts[0];
-                  const toAcc =
-                    ledger.accounts.find((a) => a.id === transferToAccountId) ||
-                    ledger.accounts.find((a) => a.id !== fromAcc?.id) ||
-                    ledger.accounts[0];
-                  const tAmt = parseFloat(transferAmount) || 0;
-                  if (!fromAcc || !toAcc) return null;
-                  const exceeds = tAmt > fromAcc.balance;
-
-                  return (
-                    <div className="space-y-1.5">
-                      {exceeds && (
-                        <div className="p-2.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
-                          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
-                          <span>
-                            Notice: Transfer amount ({currencySymbol}{formatNumber(tAmt)}) exceeds {fromAcc.name} balance ({currencySymbol}{formatNumber(fromAcc.balance)}).
-                          </span>
-                        </div>
-                      )}
-                      <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl border border-indigo-200/70 dark:border-indigo-800/70 text-[11px] space-y-2">
-                        <div className="flex items-center justify-between text-indigo-900 dark:text-indigo-200 font-semibold">
-                          <span>Reallocation Preview</span>
-                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">Net Capital Change: {currencySymbol}0.00</span>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600 dark:text-slate-300">
-                          <div className="p-2 bg-white/70 dark:bg-slate-900/60 rounded-lg border border-indigo-100 dark:border-indigo-900/50">
-                            <div className="text-[10px] text-rose-500 font-medium">From: {fromAcc.name}</div>
-                            <div className="font-mono text-xs text-slate-900 dark:text-white mt-0.5">
-                              {currencySymbol}{formatNumber(fromAcc.balance)}
-                              {tAmt > 0 && (
-                                <span className="text-rose-600 dark:text-rose-400 font-semibold">
-                                  {' '}➔ {currencySymbol}{formatNumber(Math.max(0, fromAcc.balance - tAmt))}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="p-2 bg-white/70 dark:bg-slate-900/60 rounded-lg border border-indigo-100 dark:border-indigo-900/50">
-                            <div className="text-[10px] text-emerald-500 font-medium">To: {toAcc.name}</div>
-                            <div className="font-mono text-xs text-slate-900 dark:text-white mt-0.5">
-                              {currencySymbol}{formatNumber(toAcc.balance)}
-                              {tAmt > 0 && (
-                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                                  {' '}➔ {currencySymbol}{formatNumber(toAcc.balance + tAmt)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Transfer Date</label>
-                    <input
-                      type="date"
-                      required
-                      value={transferDate}
-                      onChange={(e) => setTransferDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                    />
+                <div>
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Memo (Optional)</label>
                   </div>
-
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">Memo / Note (Optional)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Move to higher APY digital bank"
-                      value={transferNote}
-                      onChange={(e) => setTransferNote(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                    />
-                  </div>
+                  <input
+                    type="text"
+                    placeholder="e.g. Move to higher APY digital bank"
+                    value={transferNote}
+                    onChange={(e) => setTransferNote(e.target.value)}
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  />
                 </div>
 
                 <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
                   <button
                     type="button"
                     onClick={() => setIsTransactionModalOpen(false)}
-                    className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                    className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                    className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <ArrowLeftRight className="w-3.5 h-3.5" />
                     <span>Complete Transfer</span>
@@ -2475,120 +2538,102 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Full Manage Savings Accounts Overview */}
       {isManageAccountsModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Sliders className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Manage Savings Accounts</span>
+        <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                  Manage Savings Accounts
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Rename, configure, add new accounts, or delete and reassign balances
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  Rename, configure APY, or remove accounts
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
-                  onClick={() => {
-                    handleOpenAddAccount();
-                  }}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                  onClick={handleOpenAddAccount}
+                  className="h-8 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl flex items-center gap-1 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>Add Account</span>
+                  <span>Add</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setIsManageAccountsModalOpen(false)}
-                  className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto my-4 space-y-2.5 pr-1">
+            <div className="flex-1 overflow-y-auto my-2.5 divide-y divide-slate-100 dark:divide-slate-800">
               {ledger.accounts.map((acc) => {
                 const txCount = getAccountTransactionCount(acc.id);
                 return (
                   <div
                     key={acc.id}
-                    className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    className="py-2.5 flex items-center justify-between gap-2.5"
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
                       <span
-                        className="w-4 h-4 rounded-full shrink-0 shadow-xs ring-2 ring-white dark:ring-slate-800"
+                        className="w-3 h-3 rounded-full shrink-0"
                         style={{ backgroundColor: acc.color }}
                       />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-900 dark:text-white text-sm">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-900 dark:text-white text-xs sm:text-sm truncate">
                             {acc.name}
                           </span>
                           {acc.apy !== undefined && acc.apy > 0 && (
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                            <span className="text-[10px] font-mono tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold shrink-0">
                               {acc.apy}% APY
                             </span>
                           )}
                         </div>
-                        <div className="flex flex-wrap items-center gap-2 mt-1 text-slate-400 text-[11px]">
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium border border-slate-200/60 dark:border-slate-700/60 text-[10px]">
-                            {acc.type}
-                          </span>
-                          {acc.institution && (
-                            <>
-                              <span>•</span>
-                              <span>{acc.institution}</span>
-                            </>
-                          )}
-                          <span>•</span>
-                          <span>{txCount} {txCount === 1 ? 'transaction' : 'transactions'}</span>
+                        <div className="text-[10px] sm:text-[11px] text-slate-400 truncate">
+                          {acc.type}
+                          {acc.institution ? ` · ${acc.institution}` : ''} &middot; {txCount} entries
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200 dark:border-slate-700">
-                      <div className="text-right">
-                        <div className="font-mono font-bold text-slate-900 dark:text-white text-sm">
-                          {currencySymbol}{formatNumber(acc.balance)}
-                        </div>
-                        <div className="text-[10px] text-slate-400">Current Balance</div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 pl-2">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditAccount(acc)}
-                          className="px-2.5 py-1.5 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg font-medium text-xs flex items-center gap-1.5 cursor-pointer transition-all"
-                          title="Rename / Edit"
-                        >
-                          <Edit2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                          <span>Rename / Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenDeleteAccount(acc)}
-                          disabled={ledger.accounts.length <= 1}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer disabled:opacity-25 disabled:cursor-not-allowed"
-                          title={ledger.accounts.length <= 1 ? "Cannot delete the last remaining account" : "Delete Account"}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="font-mono tabular-nums font-bold text-slate-900 dark:text-white text-xs sm:text-sm">
+                        {currencySymbol}{formatNumber(acc.balance)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditAccount(acc)}
+                        className="p-1.5 flex items-center justify-center text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
+                        title="Edit"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenDeleteAccount(acc)}
+                        disabled={ledger.accounts.length <= 1}
+                        className="p-1.5 flex items-center justify-center text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer disabled:opacity-25 disabled:cursor-not-allowed"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <span className="text-slate-400 text-xs">
-                Total: <strong>{ledger.accounts.length}</strong> active savings accounts
+                {ledger.accounts.length} active accounts
               </span>
               <button
                 type="button"
                 onClick={() => setIsManageAccountsModalOpen(false)}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white font-semibold rounded-xl cursor-pointer"
+                className="h-8 sm:h-9 px-4 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 font-semibold rounded-xl cursor-pointer"
               >
                 Done
               </button>
@@ -2599,99 +2644,110 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Add Account */}
       {isAccountModalOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Add Savings &amp; Asset Account
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Create a new bucket to track accumulated savings and yield
-                </p>
-              </div>
-              <button onClick={() => setIsAccountModalOpen(false)} className="cursor-pointer">
-                <X className="w-5 h-5 text-slate-400 hover:text-slate-600" />
+        <div className="fixed inset-0 m-0 z-[70] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                Add Savings Account
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsAccountModalOpen(false)}
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateAccount} className="mt-4 space-y-3.5">
+            <form onSubmit={handleCreateAccount} className="mt-3 space-y-2.5 sm:space-y-3">
               <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Account Name <span className="text-rose-500">*</span>
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-700 dark:text-slate-300 font-semibold">
+                    Account Name <span className="text-rose-500">*</span>
+                  </label>
+                </div>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Maya Savings, Pag-IBIG MP2, Seabank, BPI Express Teller"
+                  placeholder="e.g. Maya Savings, Pag-IBIG MP2, SeaBank"
                   value={accName}
                   onChange={(e) => setAccName(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                 />
               </div>
 
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Account Category
-                </label>
-                <select
-                  value={accType}
-                  onChange={(e) => setAccType(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                >
-                  {ACCOUNT_CATEGORIES.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Category
+                    </label>
+                  </div>
+                  <select
+                    value={accType}
+                    onChange={(e) => setAccType(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  >
+                    {ACCOUNT_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Institution (Optional)
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="e.g. Maya Bank, BPI"
+                    value={accInstitution}
+                    onChange={(e) => setAccInstitution(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Institution / Provider <span className="text-slate-400 font-normal">(Optional)</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Maya Bank, SeaBank, Pag-IBIG Fund, BPI, BDO, GCash"
-                  value={accInstitution}
-                  onChange={(e) => setAccInstitution(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Initial Balance ({currencySymbol})
-                  </label>
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Opening Balance ({currencySymbol})
+                    </label>
+                  </div>
                   <input
                     type="number"
                     step="0.01"
                     placeholder="0.00"
                     value={accBalance}
                     onChange={(e) => setAccBalance(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-slate-900 dark:text-white outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Estimated APY / Return %
-                  </label>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Est. APY %
+                    </label>
+                  </div>
                   <input
                     type="number"
                     step="0.1"
-                    placeholder="e.g. 4.5"
+                    placeholder="4.5"
                     value={accApy}
                     onChange={(e) => setAccApy(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-slate-900 dark:text-white outline-none"
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1.5">
-                  Account Accent Color
+                  Color Tag
                 </label>
                 <div className="flex items-center gap-2 flex-wrap">
                   {ACCOUNT_COLORS.map((c) => (
@@ -2699,8 +2755,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       key={c}
                       type="button"
                       onClick={() => setAccColor(c)}
-                      className={`w-7 h-7 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
-                        accColor === c ? 'scale-115 ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-slate-900' : 'hover:scale-105'
+                      className={`w-6 h-6 sm:w-7 sm:h-7 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
+                        accColor === c ? 'scale-110 ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-slate-900' : ''
                       }`}
                       style={{ backgroundColor: c }}
                     >
@@ -2710,17 +2766,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 </div>
               </div>
 
-              <div className="pt-3 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="pt-2.5 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsAccountModalOpen(false)}
-                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                  className="h-8 sm:h-9 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                 >
                   Save Account
                 </button>
@@ -2732,108 +2788,109 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Rename & Edit Account */}
       {isEditAccountModalOpen && editingAccount && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Rename &amp; Edit Account
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Update account name, category, balance, or return rate
-                </p>
-              </div>
+        <div className="fixed inset-0 m-0 z-[70] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                Edit Account
+              </h3>
               <button
+                type="button"
                 onClick={() => {
                   setIsEditAccountModalOpen(false);
                   setEditingAccount(null);
                 }}
-                className="cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer"
               >
-                <X className="w-5 h-5 text-slate-400 hover:text-slate-600" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEditAccount} className="mt-4 space-y-3.5">
+            <form onSubmit={handleSaveEditAccount} className="mt-3 space-y-2.5 sm:space-y-3">
               <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Account Name (Rename) <span className="text-rose-500">*</span>
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-700 dark:text-slate-300 font-semibold">
+                    Account Name <span className="text-rose-500">*</span>
+                  </label>
+                </div>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Maya Savings, Pag-IBIG MP2, Seabank"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Renaming will automatically update all existing transactions and linked budget entries.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Account Category
-                </label>
-                <select
-                  value={editType}
-                  onChange={(e) => setEditType(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                >
-                  {Array.from(new Set([...ACCOUNT_CATEGORIES, ...(editType ? [editType] : [])])).map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Institution / Provider <span className="text-slate-400 font-normal">(Optional)</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Maya Bank, SeaBank, Pag-IBIG Fund, BPI, BDO, GCash"
-                  value={editInstitution}
-                  onChange={(e) => setEditInstitution(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Current Balance ({currencySymbol})
-                  </label>
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Category
+                    </label>
+                  </div>
+                  <select
+                    value={editType}
+                    onChange={(e) => setEditType(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  >
+                    {Array.from(new Set([...ACCOUNT_CATEGORIES, ...(editType ? [editType] : [])])).map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Institution
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    value={editInstitution}
+                    onChange={(e) => setEditInstitution(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Current Balance ({currencySymbol})
+                    </label>
+                  </div>
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="0.00"
                     value={editBalance}
                     onChange={(e) => setEditBalance(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-slate-900 dark:text-white outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Estimated APY / Return %
-                  </label>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Est. APY %
+                    </label>
+                  </div>
                   <input
                     type="number"
                     step="0.1"
-                    placeholder="e.g. 4.5"
                     value={editApy}
                     onChange={(e) => setEditApy(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-slate-900 dark:text-white outline-none"
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1.5">
-                  Account Accent Color
+                  Color Tag
                 </label>
                 <div className="flex items-center gap-2 flex-wrap">
                   {ACCOUNT_COLORS.map((c) => (
@@ -2841,8 +2898,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       key={c}
                       type="button"
                       onClick={() => setEditColor(c)}
-                      className={`w-7 h-7 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
-                        editColor === c ? 'scale-115 ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-slate-900' : 'hover:scale-105'
+                      className={`w-6 h-6 sm:w-7 sm:h-7 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
+                        editColor === c ? 'scale-110 ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-slate-900' : ''
                       }`}
                       style={{ backgroundColor: c }}
                     >
@@ -2852,7 +2909,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 </div>
               </div>
 
-              <div className="pt-3 flex justify-between items-center border-t border-slate-100 dark:border-slate-800">
+              <div className="pt-2.5 flex justify-between items-center border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => {
@@ -2860,10 +2917,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     handleOpenDeleteAccount(editingAccount);
                   }}
                   disabled={ledger.accounts.length <= 1}
-                  className="text-rose-600 hover:text-rose-700 dark:text-rose-400 font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="h-8 sm:h-9 px-2 text-rose-600 hover:text-rose-700 dark:text-rose-400 font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete Account</span>
+                  <span>Delete</span>
                 </button>
 
                 <div className="flex items-center gap-2">
@@ -2873,13 +2930,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       setIsEditAccountModalOpen(false);
                       setEditingAccount(null);
                     }}
-                    className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                    className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                    className="h-8 sm:h-9 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                   >
                     Save Changes
                   </button>
@@ -2892,210 +2949,179 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Delete Account Confirmation & Reassignment */}
       {isDeleteAccountModalOpen && deletingAccount && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-base">
-                <AlertTriangle className="w-5 h-5 shrink-0" />
+        <div className="fixed inset-0 m-0 z-[80] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-sm sm:text-base">
+                <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
                 <h3>Delete Savings Account</h3>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   setIsDeleteAccountModalOpen(false);
                   setDeletingAccount(null);
                 }}
-                className="cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer"
               >
-                <X className="w-5 h-5 text-slate-400 hover:text-slate-600" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
-            {ledger.accounts.length <= 1 ? (
-              <div className="mt-4 space-y-4">
-                <p className="text-slate-700 dark:text-slate-300">
-                  Cannot delete <strong>&quot;{deletingAccount.name}&quot;</strong> because it is your only savings account.
-                </p>
-                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-300">
-                  You must have at least one account in your savings ledger to receive budget savings allocations. Please add another account before deleting this one.
-                </div>
-                <div className="pt-2 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDeleteAccountModalOpen(false);
-                      setDeletingAccount(null);
-                    }}
-                    className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold rounded-xl cursor-pointer"
-                  >
-                    Close
-                  </button>
-                </div>
+            <div className="mt-3 space-y-3">
+              <p className="text-slate-700 dark:text-slate-300">
+                Delete <strong>&quot;{deletingAccount.name}&quot;</strong> ({currencySymbol}{formatNumber(deletingAccount.balance)})?
+              </p>
+
+              <div>
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                  Transfer Balance &amp; History To:
+                </label>
+                <select
+                  value={reassignAccountId}
+                  onChange={(e) => setReassignAccountId(e.target.value)}
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                >
+                  {ledger.accounts
+                    .filter((a) => a.id !== deletingAccount.id)
+                    .map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
+                      </option>
+                    ))}
+                </select>
               </div>
-            ) : (
-              <div className="mt-4 space-y-4">
-                <p className="text-slate-700 dark:text-slate-300">
-                  Are you sure you want to delete <strong>&quot;{deletingAccount.name}&quot;</strong>?
-                </p>
 
-                <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Account Balance:</span>
-                    <span className="font-mono font-bold text-slate-900 dark:text-white">
-                      {currencySymbol}{formatNumber(deletingAccount.balance)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Associated Transactions:</span>
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {getAccountTransactionCount(deletingAccount.id)} records
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Transfer Balance &amp; History To:
-                  </label>
-                  <select
-                    value={reassignAccountId}
-                    onChange={(e) => setReassignAccountId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                  >
-                    {ledger.accounts
-                      .filter((a) => a.id !== deletingAccount.id)
-                      .map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                        </option>
-                      ))}
-                  </select>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    All existing transactions and remaining capital will be safely transferred to this account.
-                  </p>
-                </div>
-
-                <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDeleteAccountModalOpen(false);
-                      setDeletingAccount(null);
-                    }}
-                    className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleConfirmDeleteAccount}
-                    className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete Account</span>
-                  </button>
-                </div>
+              <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDeleteAccountModalOpen(false);
+                    setDeletingAccount(null);
+                  }}
+                  className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteAccount}
+                  className="h-8 sm:h-9 px-4 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Account</span>
+                </button>
               </div>
-            )}
+            </div>
           </div>
         </div>
       )}
 
       {/* Modal: Reallocate Category Funds */}
       {isReallocateModalOpen && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-bold text-base">
-                <ArrowLeftRight className="w-5 h-5 shrink-0" />
-                <h3>Reallocate Category Funds</h3>
+        <div className="fixed inset-0 m-0 z-[80] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                  Reallocate Category Funds
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  Move virtual fund envelopes without changing bank balances
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsReallocateModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
-            <p className="mt-3 text-slate-500 dark:text-slate-400">
-              Shift virtual category envelope allocations without making any real bank transfers. Physical account balances remain completely unchanged.
-            </p>
-
-            <form onSubmit={handleRecordReallocation} className="mt-4 space-y-3.5">
-              <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  From Category Fund (Source Envelope)
-                </label>
-                <select
-                  value={reallocateFromCategory}
-                  onChange={(e) => {
-                    const nextFrom = e.target.value;
-                    setReallocateFromCategory(nextFrom);
-                    if (reallocateToCategory === nextFrom) {
-                      const fallbackTarget = categoryFunds.find((f) => f.name !== nextFrom);
-                      setReallocateToCategory(fallbackTarget ? fallbackTarget.name : '__custom__');
-                    }
-                  }}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                >
-                  {!categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
-                    <option value="General Reserves / Starting Capital">General Reserves / Starting Capital ({currencySymbol}0)</option>
-                  )}
-                  {categoryFunds.map((f) => (
-                    <option key={f.id} value={f.name}>
-                      {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  To Category Fund (Target Envelope)
-                </label>
-                <select
-                  value={reallocateToCategory}
-                  onChange={(e) => setReallocateToCategory(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                >
-                  <option value="">-- Select Target Category Fund --</option>
-                  {categoryFunds
-                    .filter((f) => f.name !== reallocateFromCategory)
-                    .map((f) => (
+            <form onSubmit={handleRecordReallocation} className="mt-3 space-y-2.5 sm:space-y-3">
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      From Fund (Source)
+                    </label>
+                  </div>
+                  <select
+                    value={reallocateFromCategory}
+                    onChange={(e) => {
+                      const nextFrom = e.target.value;
+                      setReallocateFromCategory(nextFrom);
+                      if (reallocateToCategory === nextFrom) {
+                        const fallbackTarget = categoryFunds.find((f) => f.name !== nextFrom);
+                        setReallocateToCategory(fallbackTarget ? fallbackTarget.name : '__custom__');
+                      }
+                    }}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  >
+                    {!categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
+                      <option value="General Reserves / Starting Capital">General Reserves / Starting Capital ({currencySymbol}0)</option>
+                    )}
+                    {categoryFunds.map((f) => (
                       <option key={f.id} value={f.name}>
                         {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                       </option>
                     ))}
-                  {(budget?.customCategories?.saving || [])
-                    .filter(
-                      (cat) =>
-                        cat !== reallocateFromCategory &&
-                        !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
-                    )
-                    .map((cat) => (
-                      <option key={`custom-${cat}`} value={cat}>
-                        {cat} (Savings Category)
-                      </option>
-                    ))}
-                  <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
-                </select>
-                {reallocateToCategory === '__custom__' && (
-                  <input
-                    type="text"
-                    required
-                    placeholder="Enter new fund name (e.g. House Downpayment, Car Fund)"
-                    value={reallocateCustomCategory}
-                    onChange={(e) => setReallocateCustomCategory(e.target.value)}
-                    className="mt-2 w-full px-3 py-2 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
-                  />
-                )}
+                  </select>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      To Fund (Target)
+                    </label>
+                  </div>
+                  <select
+                    value={reallocateToCategory}
+                    onChange={(e) => setReallocateToCategory(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  >
+                    <option value="">-- Select Target --</option>
+                    {categoryFunds
+                      .filter((f) => f.name !== reallocateFromCategory)
+                      .map((f) => (
+                        <option key={f.id} value={f.name}>
+                          {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
+                        </option>
+                      ))}
+                    {(budget?.customCategories?.saving || [])
+                      .filter(
+                        (cat) =>
+                          cat !== reallocateFromCategory &&
+                          !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
+                      )
+                      .map((cat) => (
+                        <option key={`custom-${cat}`} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    <option value="__custom__">+ New Fund...</option>
+                  </select>
+                </div>
               </div>
 
+              {reallocateToCategory === '__custom__' && (
+                <input
+                  type="text"
+                  required
+                  placeholder="Enter new fund name (e.g. House Downpayment)"
+                  value={reallocateCustomCategory}
+                  onChange={(e) => setReallocateCustomCategory(e.target.value)}
+                  className="w-full h-8 sm:h-9 px-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                />
+              )}
+
               <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  Physical Account Holding This Balance
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                    Physical Account Holding This Fund
+                  </label>
+                </div>
                 <select
                   value={reallocateAccountId}
                   onChange={(e) => {
@@ -3105,38 +3131,33 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       nextAccId &&
                       reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
                     ) {
-                      const unallocatedFund = categoryFunds.find((f) => f.id === 'fund-general-unallocated');
                       const accUnalloc = unallocatedFund?.accounts.find((a) => a.accountId === nextAccId);
                       if (accUnalloc && accUnalloc.amount > 0) {
                         setReallocateAmount(String(accUnalloc.amount));
                       }
                     }
                   }}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                 >
                   <option value="">All / Unspecified Account</option>
                   {ledger.accounts.map((acc) => {
-                    const unallocatedFund = categoryFunds.find((f) => f.id === 'fund-general-unallocated');
                     const accUnalloc = unallocatedFund?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
                     const isFromUnallocated =
                       reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
                     return (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} — Total: {currencySymbol}{formatNumber(acc.balance)}
-                        {isFromUnallocated ? ` (Unallocated: ${currencySymbol}${formatNumber(accUnalloc)})` : ''}
+                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)}
+                        {isFromUnallocated ? ` · Unallocated: ${currencySymbol}${formatNumber(accUnalloc)}` : ''})
                       </option>
                     );
                   })}
                 </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Physical bank account balance stays unchanged; this tags which bank account holds the earmarked fund.
-                </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-slate-600 dark:text-slate-300 font-semibold">
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
                       Amount ({currencySymbol})
                     </label>
                     {(() => {
@@ -3150,9 +3171,9 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setReallocateAmount(String(maxAvail))}
-                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer shrink-0 leading-none"
                         >
-                          Max ({currencySymbol}{formatNumber(maxAvail)})
+                          Max
                         </button>
                       );
                     })()}
@@ -3165,33 +3186,39 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     placeholder="0.00"
                     value={reallocateAmount}
                     onChange={(e) => setReallocateAmount(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-sm text-slate-900 dark:text-white"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Date
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={reallocateDate}
-                    onChange={(e) => setReallocateDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  />
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      Date
+                    </label>
+                  </div>
+                  <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                    <input
+                      type="date"
+                      required
+                      value={reallocateDate}
+                      onChange={(e) => setReallocateDate(e.target.value)}
+                      className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-[11px] sm:text-xs font-mono text-slate-900 dark:text-white outline-none appearance-none"
+                    />
+                  </div>
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  Note / Reason
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                    Note (Optional)
+                  </label>
+                </div>
                 <input
                   type="text"
-                  placeholder="e.g. Allocated beginning balance to Emergency Fund"
+                  placeholder="e.g. Earmark opening balance for Emergency Fund"
                   value={reallocateNote}
                   onChange={(e) => setReallocateNote(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                 />
               </div>
 
@@ -3199,7 +3226,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsReallocateModalOpen(false)}
-                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -3211,7 +3238,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     (reallocateToCategory === '__custom__' && !reallocateCustomCategory.trim()) ||
                     !reallocateAmount
                   }
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                  className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                 >
                   Confirm Reallocation
                 </button>
@@ -3223,29 +3250,31 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Edit Ledger Transaction */}
       {editingTx && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Edit Ledger Transaction
+        <div className="fixed inset-0 m-0 z-[80] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                Edit Ledger Entry
               </h3>
               <button
                 type="button"
                 onClick={() => setEditingTx(null)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
-            <form onSubmit={handleSaveEditTx} className="mt-4 space-y-3.5">
+            <form onSubmit={handleSaveEditTx} className="mt-3 space-y-2.5 sm:space-y-3">
               <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  Destination / Source Account
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-600 dark:text-slate-300 font-semibold">
+                    Account
+                  </label>
+                </div>
                 <select
                   value={editTxAccountId}
                   onChange={(e) => setEditTxAccountId(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                 >
                   {ledger.accounts.map((acc) => (
                     <option key={acc.id} value={acc.id}>
@@ -3256,13 +3285,15 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </div>
               {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
                 <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Category / Sinking Fund (Envelope)
-                  </label>
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold">
+                      Sinking Fund / Envelope
+                    </label>
+                  </div>
                   <select
                     value={editTxCategory}
                     onChange={(e) => setEditTxCategory(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   >
                     <option value="">General Reserves / Starting Capital (Unallocated)</option>
                     {Array.from(
@@ -3276,7 +3307,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         {cat}
                       </option>
                     ))}
-                    <option value="__custom__">+ Create New Sinking Fund / Goal...</option>
+                    <option value="__custom__">+ Create New Sinking Fund...</option>
                   </select>
                   {editTxCategory === '__custom__' && (
                     <input
@@ -3285,16 +3316,18 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       placeholder="Enter new fund name..."
                       value={editTxCustomCategory}
                       onChange={(e) => setEditTxCustomCategory(e.target.value)}
-                      className="mt-2 w-full px-3 py-2 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                      className="mt-2 w-full h-8 sm:h-9 px-2.5 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
                     />
                   )}
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Amount ({currencySymbol})
-                  </label>
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      Amount ({currencySymbol})
+                    </label>
+                  </div>
                   <input
                     type="number"
                     step="0.01"
@@ -3302,44 +3335,50 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     required
                     value={editTxAmount}
                     onChange={(e) => setEditTxAmount(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-sm text-slate-900 dark:text-white"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                    Date
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={editTxDate}
-                    onChange={(e) => setEditTxDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  />
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      Date
+                    </label>
+                  </div>
+                  <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                    <input
+                      type="date"
+                      required
+                      value={editTxDate}
+                      onChange={(e) => setEditTxDate(e.target.value)}
+                      className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-[11px] sm:text-xs font-mono text-slate-900 dark:text-white outline-none appearance-none"
+                    />
+                  </div>
                 </div>
               </div>
               <div>
-                <label className="block text-slate-600 dark:text-slate-300 font-semibold mb-1">
-                  Note / Memo
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-600 dark:text-slate-300 font-semibold">
+                    Note
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={editTxNote}
                   onChange={(e) => setEditTxNote(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                 />
               </div>
               <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setEditingTx(null)}
-                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                  className="h-8 sm:h-9 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                 >
                   Save Changes
                 </button>
@@ -3351,30 +3390,29 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Manage All Sinking Funds Overview */}
       {isManageFundsModalOpen && (
-        <div className="fixed inset-0 z-[75] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Target className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Manage Sinking Funds &amp; Envelopes</span>
+        <div className="fixed inset-0 m-0 z-[75] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                  Manage Sinking Funds
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Rename funds, merge redundant funds together, edit monthly targets, or remove unused funds
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  Rename, merge redundant funds, or adjust monthly targets
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsManageFundsModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto my-4 space-y-2.5 pr-1">
+            <div className="flex-1 overflow-y-auto my-2.5 divide-y divide-slate-100 dark:divide-slate-800">
               {categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').length === 0 ? (
-                <div className="p-8 text-center text-slate-400">
+                <div className="p-6 text-center text-slate-400">
                   No named sinking funds yet. Allocate or deposit into a fund to create one.
                 </div>
               ) : (
@@ -3383,40 +3421,27 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   .map((fund) => (
                     <div
                       key={fund.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80"
+                      className="py-2.5 flex items-center justify-between gap-2.5"
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div
-                          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-white font-bold"
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="w-3 h-3 rounded-full shrink-0"
                           style={{ backgroundColor: fund.color }}
-                        >
-                          <Target className="w-4 h-4" />
-                        </div>
+                        />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
-                              {fund.name}
-                            </span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-semibold">
-                              {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
-                            </span>
+                          <div className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white truncate">
+                            {fund.name}
                           </div>
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-3 mt-0.5">
-                            <span>
-                              Balance: <strong className="font-mono text-slate-800 dark:text-slate-200">{currencySymbol}{formatNumber(fund.currentBalance)}</strong>
-                            </span>
-                            {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0 ? (
-                              <span>
-                                Target: <strong className="font-mono text-emerald-600 dark:text-emerald-400">{currencySymbol}{formatNumber(fund.plannedAnnualTarget)}/yr</strong>
-                              </span>
-                            ) : (
-                              <span>Open-Ended Reserve</span>
-                            )}
+                          <div className="text-[10px] sm:text-[11px] text-slate-400 truncate font-mono tabular-nums">
+                            {currencySymbol}{formatNumber(fund.currentBalance)}
+                            {fund.plannedAnnualTarget && fund.plannedAnnualTarget > 0
+                              ? ` · Target: ${currencySymbol}${formatNumber(fund.plannedAnnualTarget)}/yr`
+                              : ' · Open Reserve'}
                           </div>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => {
@@ -3428,10 +3453,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                               fund.plannedAnnualTarget ? String(Math.round(fund.plannedAnnualTarget / 12)) : '0'
                             );
                           }}
-                          className="px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          className="h-8 px-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-lg font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
-                          <span>Rename / Merge</span>
+                          <span>Edit</span>
                         </button>
                         <button
                           type="button"
@@ -3444,10 +3469,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                               otherNamed ? otherNamed.name : 'General Reserves / Starting Capital'
                             );
                           }}
-                          className="px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          className="p-1.5 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg cursor-pointer transition-colors"
+                          title="Delete"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>Delete</span>
                         </button>
                       </div>
                     </div>
@@ -3455,11 +3480,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               )}
             </div>
 
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+            <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 flex justify-end">
               <button
                 type="button"
                 onClick={() => setIsManageFundsModalOpen(false)}
-                className="px-5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold rounded-xl cursor-pointer"
+                className="h-8 sm:h-9 px-4 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 font-semibold rounded-xl cursor-pointer"
               >
                 Done
               </button>
@@ -3470,23 +3495,23 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Edit / Rename / Merge Sinking Fund */}
       {editingFund && (
-        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Edit or Merge Sinking Fund
+        <div className="fixed inset-0 m-0 z-[85] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                  Edit or Merge Fund
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Rename &quot;{editingFund.name}&quot;, merge it into another fund, or update its target
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  Configure &quot;{editingFund.name}&quot;
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingFund(null)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
@@ -3504,12 +3529,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 );
                 setEditingFund(null);
               }}
-              className="mt-4 space-y-3.5"
+              className="mt-3 space-y-2.5 sm:space-y-3"
             >
               <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Merge Into Existing Fund (Optional — Fixes Redundant Funds)
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                    Merge Into Existing Fund (Optional)
+                  </label>
+                </div>
                 <select
                   value={editFundMergeTarget}
                   onChange={(e) => {
@@ -3529,97 +3556,98 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       setEditFundCategory(normalizeSavingCategoryGroup(editingFund.name, editingFund.category));
                     }
                   }}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                 >
                   <option value="">-- Keep Separate (Rename Only) --</option>
                   {categoryFunds
                     .filter((f) => f.id !== 'fund-general-unallocated' && f.id !== editingFund.id)
                     .map((f) => (
                       <option key={f.id} value={f.name}>
-                        Merge into &quot;{f.name}&quot; (Balance: {currencySymbol}{formatNumber(f.currentBalance)})
+                        Merge into &quot;{f.name}&quot; ({currencySymbol}{formatNumber(f.currentBalance)})
                       </option>
                     ))}
                 </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Selecting an existing fund combines both funds&apos; balances, transactions, and planned targets into one card.
-                </p>
               </div>
 
               {!editFundMergeTarget && (
                 <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Fund Name <span className="text-rose-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold">
+                      Fund Name <span className="text-rose-500">*</span>
+                    </label>
+                  </div>
                   <input
                     type="text"
                     required
                     value={editFundName}
                     onChange={(e) => setEditFundName(e.target.value)}
-                    placeholder="e.g. General Savings, Emergency Fund"
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
                   />
                 </div>
               )}
 
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Saving Category (Subtitle Badge)
-                </label>
-                <select
-                  value={editFundCategory}
-                  onChange={(e) => setEditFundCategory(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
-                >
-                  {Array.from(
-                    new Set([
-                      ...SAVING_CATEGORIES,
-                      ...(budget?.customCategories?.saving || []),
-                      editFundCategory || 'Short-Term & General Savings',
-                    ])
-                  )
-                    .filter((cat) => cat && cat !== 'Savings / Envelope')
-                    .map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Matches your configured Saving Categories from Settings / Manage Categories.
-                </p>
-              </div>
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Category Group
+                    </label>
+                  </div>
+                  <select
+                    value={editFundCategory}
+                    onChange={(e) => setEditFundCategory(e.target.value)}
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                  >
+                    {Array.from(
+                      new Set([
+                        ...SAVING_CATEGORIES,
+                        ...(budget?.customCategories?.saving || []),
+                        editFundCategory || 'Short-Term & General Savings',
+                      ])
+                    )
+                      .filter((cat) => cat && cat !== 'Savings / Envelope')
+                      .map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                  Planned Monthly Savings Target ({currencySymbol}/month)
-                </label>
-                <input
-                  type="number"
-                  step="100"
-                  min="0"
-                  value={editFundMonthlyTarget}
-                  onChange={(e) => setEditFundMonthlyTarget(e.target.value)}
-                  placeholder="0 for Open-Ended Cushion Reserve"
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Annual Target: <strong>{currencySymbol}{formatNumber((parseFloat(editFundMonthlyTarget) || 0) * 12)}/yr</strong> (set to 0 for an Open-Ended Cushion Reserve).
-                </p>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-700 dark:text-slate-300 font-semibold truncate">
+                      Target ({currencySymbol}/mo)
+                    </label>
+                  </div>
+                  <input
+                    type="number"
+                    step="100"
+                    min="0"
+                    value={editFundMonthlyTarget}
+                    onChange={(e) => setEditFundMonthlyTarget(e.target.value)}
+                    placeholder="0"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-slate-900 dark:text-white outline-none"
+                  />
+                </div>
               </div>
+              <p className="text-[10px] text-slate-400">
+                Annual Target: <strong>{currencySymbol}{formatNumber((parseFloat(editFundMonthlyTarget) || 0) * 12)}/yr</strong>
+              </p>
 
               <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setEditingFund(null)}
-                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                  className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                 >
-                  {editFundMergeTarget ? `Merge into "${editFundMergeTarget}"` : 'Save Fund Changes'}
+                  {editFundMergeTarget ? 'Merge Fund' : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -3629,78 +3657,56 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* Modal: Delete / Remove Sinking Fund */}
       {deletingFund && (
-        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-base">
-                <AlertTriangle className="w-5 h-5 shrink-0" />
+        <div className="fixed inset-0 m-0 z-[85] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-sm sm:text-base">
+                <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
                 <h3>Remove Sinking Fund</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setDeletingFund(null)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="p-1.5 flex items-center justify-center text-slate-400 hover:text-slate-600 cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
-            <div className="mt-4 space-y-4">
+            <div className="mt-3 space-y-3">
               <p className="text-slate-700 dark:text-slate-300">
-                Are you sure you want to remove the sinking fund <strong>&quot;{deletingFund.name}&quot;</strong>?
+                Remove <strong>&quot;{deletingFund.name}&quot;</strong> ({currencySymbol}{formatNumber(deletingFund.currentBalance)})?
               </p>
 
-              <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Current Fund Balance:</span>
-                  <span className="font-mono font-bold text-slate-900 dark:text-white">
-                    {currencySymbol}{formatNumber(deletingFund.currentBalance)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Linked Entries:</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    {deletingFund.transactionCount} records
-                  </span>
-                </div>
-              </div>
-
-              {deletingFund.currentBalance > 0 || deletingFund.transactionCount > 0 ? (
+              {(deletingFund.currentBalance > 0 || deletingFund.transactionCount > 0) && (
                 <div>
                   <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
-                    Move Balance &amp; Entries To:
+                    Reassign Balance &amp; Entries To:
                   </label>
                   <select
                     value={deleteFundReassignTo}
                     onChange={(e) => setDeleteFundReassignTo(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   >
                     <option value="General Reserves / Starting Capital">
-                      General Reserves / Starting Capital (Return to Unallocated Cash)
+                      General Reserves / Starting Capital (Unallocated)
                     </option>
                     {categoryFunds
                       .filter((f) => f.id !== 'fund-general-unallocated' && f.id !== deletingFund.id)
                       .map((f) => (
                         <option key={f.id} value={f.name}>
-                          {f.name} (Current: {currencySymbol}{formatNumber(f.currentBalance)})
+                          {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                         </option>
                       ))}
                   </select>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Your physical bank account balances will not be affected.
-                  </p>
                 </div>
-              ) : (
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  This fund has a {currencySymbol}0 balance and 0 entries. Removing it will clean it up from your Sinking Funds list and Estimate Template.
-                </p>
               )}
 
               <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setDeletingFund(null)}
-                  className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -3712,7 +3718,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     }
                     setDeletingFund(null);
                   }}
-                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5"
+                  className="h-8 sm:h-9 px-4 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl cursor-pointer shadow-xs flex items-center gap-1.5"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>Remove Fund</span>
@@ -3722,7 +3728,6 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           </div>
         </div>
       )}
-
     </div>
   );
 };

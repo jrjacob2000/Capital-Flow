@@ -430,9 +430,9 @@ export const LoansView: React.FC<LoansViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Page Header & Actions */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-6 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+          <h1 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
             Loans &amp; Receivables Ledger
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
@@ -440,102 +440,100 @@ export const LoansView: React.FC<LoansViewProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 sm:gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => handleOpenAddModal('lent')}
-            className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            className="px-3 sm:px-3.5 py-2.5 sm:py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
-            <ArrowDownLeft className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>Add Lent (Receivable)</span>
+            <ArrowDownLeft className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>Add Lent</span>
           </button>
           <button
             type="button"
             onClick={() => handleOpenAddModal('borrowed')}
-            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            className="px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
-            <Plus className="w-4 h-4" />
-            <span>Add Borrowed Loan</span>
+            <Plus className="w-4 h-4 shrink-0" />
+            <span>Add Borrowed</span>
           </button>
         </div>
       </div>
 
       {/* 4 KPI Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         {/* 1. Total Borrowed (Payables) */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              Outstanding Borrowed (I Owe)
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 leading-tight">
+              Borrowed (I Owe)
             </span>
-            <div className="w-8 h-8 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center">
-              <ArrowUpRight className="w-4 h-4" />
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+              <ArrowUpRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+          <div className="mt-2 sm:mt-3 flex items-baseline gap-2">
+            <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white truncate">
               {currencySymbol}{formatNumber(summaryStats.borrowedRemaining)}
             </span>
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+          <div className="mt-1.5 sm:mt-2 flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
             <span>{summaryStats.activeBorrowedCount} active</span>
             <span aria-hidden="true">&middot;</span>
-            <span>{currencySymbol}{formatNumber(summaryStats.borrowedMonthlyCommitment)}/mo commitment</span>
+            <span className="truncate">{currencySymbol}{formatNumber(summaryStats.borrowedMonthlyCommitment)}/mo</span>
           </div>
         </div>
 
         {/* 2. Total Lent (Receivables) */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              Outstanding Lent (Owed to Me)
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 leading-tight">
+              Lent (Owed to Me)
             </span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-              <ArrowDownLeft className="w-4 h-4" />
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <ArrowDownLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+          <div className="mt-2 sm:mt-3 flex items-baseline gap-2">
+            <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white truncate">
               {currencySymbol}{formatNumber(summaryStats.lentRemaining)}
             </span>
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+          <div className="mt-1.5 sm:mt-2 flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
             <span>{summaryStats.activeLentCount} active</span>
             <span aria-hidden="true">&middot;</span>
-            <span>{currencySymbol}{formatNumber(summaryStats.lentMonthlyExpected)}/mo expected</span>
+            <span className="truncate">{currencySymbol}{formatNumber(summaryStats.lentMonthlyExpected)}/mo</span>
           </div>
         </div>
 
         {/* 3. Total Paid & Collected */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              Paid &amp; Collected to Date
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 leading-tight">
+              Paid &amp; Collected
             </span>
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4" />
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+          <div className="mt-2 sm:mt-3 flex items-baseline gap-2">
+            <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white truncate">
               {currencySymbol}{formatNumber(summaryStats.totalAllPaid)}
             </span>
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+          <div className="mt-1.5 sm:mt-2 flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
             <span>Paid: {currencySymbol}{formatNumber(summaryStats.borrowedPaid)}</span>
-            <span aria-hidden="true">&middot;</span>
-            <span>Collected: {currencySymbol}{formatNumber(summaryStats.lentCollected)}</span>
           </div>
         </div>
 
         {/* 4. Net Loan Position */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              Net Position (Lent − Borrowed)
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 leading-tight">
+              Net Loan Position
             </span>
             <div
-              className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+              className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 ${
                 summaryStats.netLoanPosition > 0.005
                   ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
                   : summaryStats.netLoanPosition < -0.005
@@ -543,31 +541,31 @@ export const LoansView: React.FC<LoansViewProps> = ({
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
               }`}
             >
-              <Scale className="w-4 h-4" />
+              <Scale className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="mt-3 flex items-baseline gap-2">
+          <div className="mt-2 sm:mt-3 flex items-baseline gap-2">
             {summaryStats.netLoanPosition > 0.005 ? (
-              <span className="text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+              <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
                 +{currencySymbol}{formatNumber(summaryStats.netLoanPosition)}
               </span>
             ) : summaryStats.netLoanPosition < -0.005 ? (
-              <span className="text-2xl font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400">
+              <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400 truncate">
                 -{currencySymbol}{formatNumber(Math.abs(summaryStats.netLoanPosition))}
               </span>
             ) : (
-              <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white truncate">
                 {currencySymbol}0.00
               </span>
             )}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+          <div className="mt-1.5 sm:mt-2 flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
             {summaryStats.netLoanPosition > 0.005 ? (
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Net Receivable</span>
             ) : summaryStats.netLoanPosition < -0.005 ? (
-              <span className="text-rose-600 dark:text-rose-400 font-semibold">Net Debt / Payable</span>
+              <span className="text-rose-600 dark:text-rose-400 font-semibold">Net Debt</span>
             ) : (
-              <span className="text-slate-600 dark:text-slate-400 font-medium">Balanced Position</span>
+              <span className="text-slate-600 dark:text-slate-400 font-medium">Balanced</span>
             )}
             <span aria-hidden="true">&middot;</span>
             <span>{summaryStats.completedCount} settled</span>
@@ -938,18 +936,18 @@ export const LoansView: React.FC<LoansViewProps> = ({
 
       {/* Add / Edit Loan Modal */}
       {isLoanModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl my-8">
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+        <div className="fixed inset-0 m-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-2.5 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] sm:max-h-[88vh]">
+            <div className="px-3.5 py-2.5 sm:px-5 sm:py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
                   {editingLoan
                     ? `Edit ${editingLoan.name}`
                     : formDirection === 'borrowed'
                     ? 'Add Borrowed Loan (I Owe)'
                     : 'Add Lent Loan (Owed to Me)'}
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                   {formDirection === 'borrowed'
                     ? 'Track fixed-installment debt, interest total, and payoff progress'
                     : 'Track money lent to others and schedule repayment collections'}
@@ -958,15 +956,15 @@ export const LoansView: React.FC<LoansViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsLoanModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitLoanForm} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+            <form onSubmit={handleSubmitLoanForm} className="p-3.5 sm:p-5 space-y-2.5 sm:space-y-3.5 overflow-y-auto flex-1 text-xs">
               {/* Direction Selector */}
-              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
                 <button
                   type="button"
                   onClick={() => {
@@ -975,14 +973,14 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       setFormCategory(BORROWED_CATEGORIES[0]);
                     }
                   }}
-                  className={`h-9 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  className={`h-8 sm:h-9 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                     formDirection === 'borrowed'
                       ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-2xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <ArrowUpRight className="w-4 h-4" />
-                  <span>Borrowed (I Owe)</span>
+                  <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Borrowed (I Owe)</span>
                 </button>
                 <button
                   type="button"
@@ -992,23 +990,25 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       setFormCategory(LENT_CATEGORIES[0]);
                     }
                   }}
-                  className={`h-9 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  className={`h-8 sm:h-9 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                     formDirection === 'lent'
                       ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <ArrowDownLeft className="w-4 h-4" />
-                  <span>Lent (Owed to Me)</span>
+                  <ArrowDownLeft className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Lent (Owed to Me)</span>
                 </button>
               </div>
 
               {/* Loan Name & Counterparty */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {formDirection === 'borrowed' ? 'Loan / Item Name *' : 'Receivable / Item Name *'}
-                  </label>
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      {formDirection === 'borrowed' ? 'Loan Name *' : 'Receivable Name *'}
+                    </label>
+                  </div>
                   <input
                     type="text"
                     required
@@ -1016,16 +1016,18 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     onChange={(e) => setFormName(e.target.value)}
                     placeholder={
                       formDirection === 'borrowed'
-                        ? 'e.g. SSS Salary Loan, Car Loan'
-                        : 'e.g. Cash Lent to Mark, Trip Split'
+                        ? 'e.g. SSS Loan, Car Loan'
+                        : 'e.g. Lent to Mark'
                     }
-                    className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {formDirection === 'borrowed' ? 'Lender / Institution' : 'Borrower / Recipient Name'}
-                  </label>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      {formDirection === 'borrowed' ? 'Lender / Bank' : 'Borrower Name'}
+                    </label>
+                  </div>
                   <input
                     type="text"
                     value={formCounterparty}
@@ -1033,23 +1035,25 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     placeholder={
                       formDirection === 'borrowed'
                         ? 'e.g. SSS, Pag-IBIG, BPI'
-                        : 'e.g. Mark, Alex, Coworker'
+                        : 'e.g. Mark, Alex'
                     }
-                    className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
               {/* Category & Start Date */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Loan Category
-                  </label>
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      Loan Category
+                    </label>
+                  </div>
                   <select
                     value={formCategory}
                     onChange={(e) => setFormCategory(e.target.value)}
-                    className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     {(formDirection === 'borrowed' ? BORROWED_CATEGORIES : LENT_CATEGORIES).map((cat) => (
                       <option key={cat} value={cat}>
@@ -1058,36 +1062,40 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Start / Issue Date
-                  </label>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      Start / Issue Date
+                    </label>
+                  </div>
                   <input
                     type="date"
                     value={formStartDate}
                     onChange={(e) => setFormStartDate(e.target.value)}
-                    className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="block w-full max-w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-[11px] sm:text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
               {/* Fixed Installment Math Box */}
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold text-slate-900 dark:text-white">
+              <div className="p-3 sm:p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-2.5">
+                <div className="flex items-center justify-between gap-1">
+                  <div className="text-[11px] sm:text-xs font-bold text-slate-900 dark:text-white truncate">
                     Fixed Installment Schedule
                   </div>
-                  <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
-                    Contract = Installment × Terms
+                  <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-medium shrink-0">
+                    Contract = Inst × Terms
                   </span>
                 </div>
 
                 {/* Row 1: Fixed Installment & Total Installments */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Fixed Installment ({currencySymbol}) *
-                    </label>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Installment ({currencySymbol}) *
+                      </label>
+                    </div>
                     <input
                       type="number"
                       step="any"
@@ -1096,14 +1104,16 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       value={formInstallmentAmount}
                       onChange={(e) => handleInstallmentOrTermsChange(e.target.value, formTotalInstallments)}
                       placeholder="e.g. 2500"
-                      className="w-full h-10 px-3 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Total Terms (Installment Count) *
-                    </label>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Total Terms (Count) *
+                      </label>
+                    </div>
                     <input
                       type="number"
                       min="1"
@@ -1112,17 +1122,19 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       value={formTotalInstallments}
                       onChange={(e) => handleInstallmentOrTermsChange(formInstallmentAmount, e.target.value)}
                       placeholder="e.g. 24"
-                      className="w-full h-10 px-3 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
 
                 {/* Row 2: Total Contract & Principal */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Total Contract Amount ({currencySymbol}) *
-                    </label>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Total Contract ({currencySymbol}) *
+                      </label>
+                    </div>
                     <input
                       type="number"
                       step="any"
@@ -1131,66 +1143,74 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       value={formTotalContract}
                       onChange={(e) => setFormTotalContract(e.target.value)}
                       placeholder="Auto-computed"
-                      className="w-full h-10 px-3 text-xs font-mono tabular-nums font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Principal Disbursed (Optional)
-                    </label>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Principal (Optional)
+                      </label>
+                    </div>
                     <input
                       type="number"
                       step="any"
                       min="0"
                       value={formPrincipal}
                       onChange={(e) => setFormPrincipal(e.target.value)}
-                      placeholder="e.g. Initial cash received"
-                      className="w-full h-10 px-3 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Cash received"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
 
                 {/* Row 3: Payment Frequency & Due Date */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Payment Frequency
-                    </label>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Frequency
+                      </label>
+                    </div>
                     <select
                       value={formFrequency}
                       onChange={(e) => setFormFrequency(e.target.value as 'monthly' | 'bi-weekly')}
-                      className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="monthly">Monthly</option>
                       <option value="bi-weekly">Bi-Weekly (Cutoff)</option>
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Due Day / Schedule Note
-                    </label>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Due Day / Schedule
+                      </label>
+                    </div>
                     <input
                       type="text"
                       value={formDueDay}
                       onChange={(e) => setFormDueDay(e.target.value)}
-                      placeholder="e.g. Every 15th, 30th, Payroll"
-                      className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="e.g. 15th, 30th"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
 
                 {/* Row 4: Bi-Weekly Cutoff Allocation (only if bi-weekly) */}
                 {formFrequency === 'bi-weekly' && (
-                  <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Bi-Weekly Cutoff Allocation
-                    </label>
+                  <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Bi-Weekly Cutoff Allocation
+                      </label>
+                    </div>
                     <select
                       value={formBiweeklyPeriod}
                       onChange={(e) => setFormBiweeklyPeriod(e.target.value as 'P1' | 'P2' | 'both')}
-                      className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="both">Both Cutoffs (Period 1 and Period 2)</option>
                       <option value="P1">1st Cutoff Only (Period 1)</option>
@@ -1201,33 +1221,32 @@ export const LoansView: React.FC<LoansViewProps> = ({
               </div>
 
               {/* Prior Paid Balance (For migrating ongoing loans) */}
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-3">
-                <div>
-                  <div className="text-xs font-bold text-slate-900 dark:text-white">
-                    Prior Progress (If Loan Started Before Tracking)
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    For ongoing loans, record terms and amounts already settled prior to tracking.
-                  </p>
+              <div className="p-3 sm:p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-2">
+                <div className="text-[11px] sm:text-xs font-bold text-slate-900 dark:text-white">
+                  Prior Progress (If Started Before Tracking)
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Installments Already Paid
-                    </label>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Terms Paid
+                      </label>
+                    </div>
                     <input
                       type="number"
                       min="0"
                       value={formInitialTermsPaid}
                       onChange={(e) => handleInitialTermsChange(e.target.value)}
                       placeholder="0"
-                      className="w-full h-10 px-3 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Amount Already {formDirection === 'borrowed' ? 'Paid' : 'Collected'} ({currencySymbol})
-                    </label>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Amount {formDirection === 'borrowed' ? 'Paid' : 'Collected'} ({currencySymbol})
+                      </label>
+                    </div>
                     <input
                       type="number"
                       step="any"
@@ -1235,57 +1254,59 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       value={formInitialAmountPaid}
                       onChange={(e) => setFormInitialAmountPaid(e.target.value)}
                       placeholder="0"
-                      className="w-full h-10 px-3 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
               </div>
 
               {/* Notes / Reference */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Notes / Reference (Optional)
-                </label>
+              <div className="min-w-0">
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                    Notes / Reference (Optional)
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={formNotes}
                   onChange={(e) => setFormNotes(e.target.value)}
-                  placeholder="e.g. Account or PN number, special conditions, payoff goals"
-                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Account/PN #, special conditions..."
+                  className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
               {/* Auto-Sync to Budget Template Checkbox */}
               {!editingLoan && (
-                <label className="flex items-start gap-3 p-3.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 cursor-pointer">
+                <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={formSyncTemplate}
                     onChange={(e) => setFormSyncTemplate(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
                   />
-                  <div className="text-xs">
+                  <div className="text-[11px]">
                     <span className="font-semibold text-slate-900 dark:text-slate-100 block">
                       Add to Estimate Budget Template ({formDirection === 'borrowed' ? 'Expense → Loans' : 'Income → Other Income'})
                     </span>
-                    <span className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed block mt-0.5">
-                      Automatically pre-populates this fixed installment in your Budget Sheet and deducts from your remaining loan balance when marked Paid.
+                    <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
+                      Pre-populates this installment in your Budget Sheet and updates loan balance when marked Paid.
                     </span>
                   </div>
                 </label>
               )}
 
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsLoanModalOpen(false)}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-colors cursor-pointer"
+                  className="h-8 sm:h-9 px-4 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-colors cursor-pointer"
                 >
                   {editingLoan ? 'Save Changes' : formDirection === 'borrowed' ? 'Save Borrowed Loan' : 'Save Lent Receivable'}
                 </button>
@@ -1297,34 +1318,36 @@ export const LoansView: React.FC<LoansViewProps> = ({
 
       {/* Record Payment / Collection Modal */}
       {paymentModalLoan && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 m-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-2.5 sm:p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            <div className="px-3.5 py-2.5 sm:px-5 sm:py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
                   {paymentModalLoan.direction === 'borrowed'
                     ? `Record Loan Payment — ${paymentModalLoan.name}`
-                    : `Record Repayment Collection — ${paymentModalLoan.name}`}
+                    : `Record Collection — ${paymentModalLoan.name}`}
                 </h3>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                   Deducts from the remaining contract balance
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setPaymentModalLoan(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitPayment} className="p-5 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Amount ({currencySymbol}) *
-                  </label>
+            <form onSubmit={handleSubmitPayment} className="p-3.5 sm:p-5 space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      Amount ({currencySymbol}) *
+                    </label>
+                  </div>
                   <input
                     type="number"
                     step="any"
@@ -1332,49 +1355,55 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     required
                     value={payAmount}
                     onChange={(e) => setPayAmount(e.target.value)}
-                    className="w-full h-10 px-3 text-xs font-mono tabular-nums font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs font-mono tabular-nums font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Payment Date *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={payDate}
-                    onChange={(e) => setPayDate(e.target.value)}
-                    className="w-full h-10 px-3 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      Payment Date *
+                    </label>
+                  </div>
+                  <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500">
+                    <input
+                      type="date"
+                      required
+                      value={payDate}
+                      onChange={(e) => setPayDate(e.target.value)}
+                      className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-[11px] sm:text-xs font-mono text-slate-900 dark:text-white outline-none appearance-none"
+                    />
+                  </div>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Reference / Note
-                </label>
+                <div className="flex items-center justify-between h-4 mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    Reference / Note
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={payNote}
                   onChange={(e) => setPayNote(e.target.value)}
                   placeholder="e.g. Monthly installment or extra payment"
-                  className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
               {/* Optional Sync to Current Budget Sheet */}
-              <label className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
+              <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={payRecordInBudget}
                   onChange={(e) => setPayRecordInBudget(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
                 />
-                <div className="text-xs">
+                <div className="text-[11px]">
                   <span className="font-semibold text-slate-800 dark:text-slate-200 block">
                     Also record in {budget.year} Budget Sheet
                   </span>
-                  <span className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed block mt-0.5">
+                  <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
                     Logs a Paid {paymentModalLoan.direction === 'borrowed' ? 'Expense (Loans)' : 'Income'} entry so your cashflow sheet stays accurate.
                   </span>
                 </div>
@@ -1383,13 +1412,15 @@ export const LoansView: React.FC<LoansViewProps> = ({
               {/* Optional Deposit to Funds Account for Lent Receivables */}
               {paymentModalLoan.direction === 'lent' && ledger.accounts.length > 0 && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Deposit Collected Cash to Funds Account (Optional)
-                  </label>
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      Deposit Collected Cash to Funds Account (Optional)
+                    </label>
+                  </div>
                   <select
                     value={payDepositAccountId}
                     onChange={(e) => setPayDepositAccountId(e.target.value)}
-                    className="w-full h-10 px-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="">Do not add to Funds Ledger</option>
                     {ledger.accounts.map((acc) => (
@@ -1401,17 +1432,17 @@ export const LoansView: React.FC<LoansViewProps> = ({
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setPaymentModalLoan(null)}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="h-8 sm:h-9 px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-colors cursor-pointer"
+                  className="h-8 sm:h-9 px-4 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-colors cursor-pointer"
                 >
                   Confirm {paymentModalLoan.direction === 'borrowed' ? 'Payment' : 'Collection'}
                 </button>

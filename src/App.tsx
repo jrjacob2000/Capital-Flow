@@ -132,8 +132,8 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Centralized Google Drive session expired handler
-  const handleSessionExpired = useCallback((customMsg?: string) => {
+  // Centralized Google Drive session expired handler (non-intrusive by default)
+  const handleSessionExpired = useCallback((customMsg?: string, showToastAlert: boolean = false) => {
     clearCachedToken();
     setDriveStatus((prev) => ({
       ...prev,
@@ -142,8 +142,9 @@ export default function App() {
       isSessionExpired: true,
       error: customMsg || 'Google Drive session has expired. Please sign in again.',
     }));
-    setIsSessionExpiredModalOpen(true);
-    showToast(customMsg || 'Google Drive session expired. Please sign in again.', 'error');
+    if (showToastAlert) {
+      showToast(customMsg || 'Google Drive session expired. Please sign in again.', 'error');
+    }
   }, []);
 
   // Confirmation Modal State (required for Google Workspace mutating actions)
@@ -224,9 +225,6 @@ export default function App() {
           userName: hasFirebaseUser ? auth?.currentUser?.displayName || prev.userName : null,
           userPhoto: hasFirebaseUser ? auth?.currentUser?.photoURL || prev.userPhoto : null,
         }));
-        if (hasFirebaseUser) {
-          setIsSessionExpiredModalOpen(true);
-        }
       }
     );
 
@@ -584,18 +582,13 @@ export default function App() {
 
       setDriveStatus((prev) => ({ ...prev, isSyncing: false, syncMessage: null }));
 
-      // Check results: DO NOT overwrite local changes silently!
+      // Keep local data untouched and do not pop up the reconnection conflict modal automatically
       if (conflictItems.length > 0) {
-        setConflictModalState({
-          isOpen: true,
-          items: conflictItems,
-        });
-
         const allLocalNewer = conflictItems.every((i) => i.status === 'local_newer');
         if (allLocalNewer) {
-          showToast(`Connected to Drive! Local changes are newer and were preserved.`, 'info');
+          showToast(`Connected to Google Drive as ${result.user.email}. Local changes are preserved.`, 'success');
         } else {
-          showToast(`Connected to Drive. Review cloud file differences.`, 'info');
+          showToast(`Connected to Google Drive as ${result.user.email}.`, 'success');
         }
       } else {
         showToast(`Connected to Google Drive as ${result.user.email}`);
@@ -840,11 +833,13 @@ export default function App() {
     FinanceStorageService.saveLocalBudget(updatedBudget);
     setHasUnsavedChanges(true);
 
-    // If saving entry with positive amount: accumulate in the separate Savings Ledger!
-    if (newEntry.type === 'saving' && newEntry.amount > 0) {
+    // If paid saving entry with positive amount: accumulate in the separate Savings Ledger!
+    if (newEntry.type === 'saving' && newEntry.status !== 'Pending' && newEntry.amount > 0) {
       const updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(newEntry, false);
-      setLedger(updatedLedger);
+      setLedger({ ...updatedLedger });
       showToast(`Savings accumulated: +₱${newEntry.amount} transferred to ${newEntry.savingAccountName || 'Savings Ledger'}`);
+    } else if (newEntry.type === 'saving') {
+      showToast(`Recorded pending funds entry: ₱${newEntry.estimatedCost || newEntry.amount}`);
     } else {
       const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(newEntry, false);
       if (loanSync.matchedLoan) {
@@ -884,10 +879,10 @@ export default function App() {
     const target = updatedEntries.find((e) => e.id === entryId);
     if (oldEntry?.type === 'saving' && target && target.type !== 'saving') {
       const rolledBackLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldEntry, true);
-      setLedger(rolledBackLedger);
+      setLedger({ ...rolledBackLedger });
     } else if (target?.type === 'saving') {
       const updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(target, false);
-      setLedger(updatedLedger);
+      setLedger({ ...updatedLedger });
     }
 
     if (target) {
@@ -1573,9 +1568,9 @@ export default function App() {
 
     const updatedEntries = budget.entries.map((e) => {
       if (
-        !isDestUnallocated &&
         e.type === 'saving' &&
-        (e.item || '').trim().toLowerCase() === targetLower
+        ((e.item || '').trim().toLowerCase() === targetLower ||
+          (e.description || '').trim().toLowerCase() === targetLower)
       ) {
         return { ...e, item: destination, description: destination };
       }
@@ -1666,7 +1661,7 @@ export default function App() {
       }
     });
     newEntries.forEach((entry) => {
-      if (entry.type === 'saving' && (entry.actualCost ?? entry.amount ?? 0) > 0) {
+      if (entry.type === 'saving' && entry.status !== 'Pending' && (entry.actualCost ?? entry.amount ?? 0) > 0) {
         updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, false);
       } else if (entry.type !== 'saving') {
         const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(entry, false);
@@ -2368,7 +2363,7 @@ export default function App() {
       
       {/* Clean Single Drive Sync Toast (Shown only when no modal is open) */}
       {driveStatus.isSyncing && !confirmationModal.isOpen && !conflictModalState.isOpen && (
-        <div className="fixed bottom-6 right-4 sm:right-6 z-[90] animate-in slide-in-from-bottom-5 duration-200 pointer-events-none">
+        <div className="fixed bottom-20 md:bottom-6 right-4 sm:right-6 z-[90] animate-in slide-in-from-bottom-5 duration-200 pointer-events-none">
           <div className="px-4 py-3 rounded-2xl shadow-xl bg-slate-900 dark:bg-slate-800 border border-slate-700/80 flex items-center gap-2.5 text-xs font-semibold text-white">
             <RefreshCw className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
             <span>{driveStatus.syncMessage || 'Syncing with Google Drive...'}</span>
@@ -2378,8 +2373,8 @@ export default function App() {
 
       {/* Floating Notification Banner: Unsaved Local Changes not yet saved to Drive */}
       {hasUnsavedChanges && !isSyncReminderDismissed && !driveStatus.isSyncing && (
-        <div className="fixed bottom-6 left-4 right-4 sm:left-6 sm:right-auto z-40 max-w-md animate-in slide-in-from-bottom-5 duration-300">
-          <div className="bg-slate-900/95 dark:bg-slate-800/95 backdrop-blur-md text-white rounded-2xl p-3.5 sm:p-4 shadow-2xl border border-amber-500/40 flex items-center justify-between gap-3">
+        <div className="fixed bottom-20 md:bottom-6 left-3 right-3 sm:left-6 sm:right-auto z-40 max-w-md animate-in slide-in-from-bottom-5 duration-300">
+          <div className="bg-slate-900/95 dark:bg-slate-800/95 backdrop-blur-md text-white rounded-2xl p-3 sm:p-4 shadow-2xl border border-amber-500/40 flex items-center justify-between gap-2.5 sm:gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
                 <Cloud className="w-5 h-5" />
@@ -2494,18 +2489,18 @@ export default function App() {
 
       {/* Create New Year Modal */}
       {isNewYearModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 m-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-2.5 sm:p-4 animate-in fade-in duration-150">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-                  <Calendar className="w-5 h-5" />
+            <div className="px-3.5 py-2.5 sm:px-5 sm:py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <Calendar className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                <div className="min-w-0">
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
                     Initialize New Budget Year
                   </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                     Create a dedicated annual budget database
                   </p>
                 </div>
@@ -2513,15 +2508,15 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setIsNewYearModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleConfirmCreateNewYear} className="p-5 space-y-4">
+            <form onSubmit={handleConfirmCreateNewYear} className="p-3.5 sm:p-5 space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Budget Year (4-digit)
                 </label>
                 <input
@@ -2532,16 +2527,16 @@ export default function App() {
                   value={newYearInput}
                   onChange={(e) => setNewYearInput(e.target.value)}
                   placeholder="e.g. 2027"
-                  className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
+                  className="w-full h-9 px-3 text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
                 />
               </div>
 
-              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
+              <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={copyTemplatesToNewYear}
                   onChange={(e) => setCopyTemplatesToNewYear(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
                 />
                 <div className="text-xs">
                   <span className="font-semibold text-slate-800 dark:text-slate-200 block">
@@ -2557,13 +2552,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsNewYearModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  className="h-8 sm:h-9 px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition-colors"
+                  className="h-8 sm:h-9 px-4 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition-colors cursor-pointer"
                 >
                   Create {newYearInput || ''} Database
                 </button>
@@ -2592,7 +2587,7 @@ export default function App() {
       />
 
       {/* Body Views */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
         {activeTab === 'dashboard' && (
           <DashboardView
             budget={budget}
@@ -2663,7 +2658,10 @@ export default function App() {
             onSyncAll={triggerSyncAll}
             onPullBudget={async (yr) => {
               const token = await getAccessToken();
-              if (!token) return;
+              if (!token) {
+                handleSessionExpired('Google Drive session expired. Please sign in again.');
+                return;
+              }
               try {
                 setDriveStatus((p) => ({
                   ...p,
@@ -2701,13 +2699,20 @@ export default function App() {
                   },
                 });
               } catch (err: any) {
+                if (isSessionExpiredError(err)) {
+                  handleSessionExpired('Google Drive session expired. Please sign in again.');
+                  return;
+                }
                 setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 showToast(`Failed to pull from Drive: ${err.message}`, 'error');
               }
             }}
             onPullTemplate={async () => {
               const token = await getAccessToken();
-              if (!token) return;
+              if (!token) {
+                handleSessionExpired('Google Drive session expired. Please sign in again.');
+                return;
+              }
               try {
                 setDriveStatus((p) => ({
                   ...p,
@@ -2748,13 +2753,20 @@ export default function App() {
                   },
                 });
               } catch (err: any) {
+                if (isSessionExpiredError(err)) {
+                  handleSessionExpired('Google Drive session expired. Please sign in again.');
+                  return;
+                }
                 setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 showToast(`Failed to pull template: ${err.message}`, 'error');
               }
             }}
             onPullLedger={async () => {
               const token = await getAccessToken();
-              if (!token) return;
+              if (!token) {
+                handleSessionExpired('Google Drive session expired. Please sign in again.');
+                return;
+              }
               try {
                 setDriveStatus((p) => ({
                   ...p,
@@ -2795,6 +2807,10 @@ export default function App() {
                   },
                 });
               } catch (err: any) {
+                if (isSessionExpiredError(err)) {
+                  handleSessionExpired('Google Drive session expired. Please sign in again.');
+                  return;
+                }
                 setDriveStatus((p) => ({ ...p, isSyncing: false, syncMessage: null }));
                 showToast(`Failed to pull ledger: ${err.message}`, 'error');
               }
@@ -2837,7 +2853,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800 py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+      <footer className="border-t border-slate-200 dark:border-slate-800 pt-6 pb-24 md:pb-6 text-center text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
             <span className="font-semibold text-slate-700 dark:text-slate-300">CapitalFlow</span>

@@ -11,22 +11,15 @@ import {
   ArrowRight,
   Sparkles,
   CheckCircle2,
-  Clock,
-  Banknote,
-  CreditCard,
-  Building,
-  Smartphone,
-  Wallet,
-  ShieldCheck,
   ChevronDown,
   ChevronRight,
   SlidersHorizontal,
   X,
   FileSpreadsheet,
-  AlertTriangle,
-  Tag,
   Check,
   Upload,
+  Search,
+  LayoutList,
 } from 'lucide-react';
 import {
   BudgetEntry,
@@ -127,6 +120,12 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [isRowAction, setIsRowAction] = useState<boolean>(false);
   const [entrySourceMode, setEntrySourceMode] = useState<'unplanned' | 'template'>('unplanned');
+  const [mobileShowFullTable, setMobileShowFullTable] = useState<boolean>(false);
+  const [mobileExpenseFilter, setMobileExpenseFilter] = useState<'all' | 'pending' | 'paid' | 'saving'>('all');
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<PaymentMethod | null>(null);
+  const [expenseSearchQuery, setExpenseSearchQuery] = useState<string>('');
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [expandedIncomeRowId, setExpandedIncomeRowId] = useState<string | null>(null);
 
   // Active Categories & Templates (from budget or defaults)
   const expenseCategories = budget.customCategories?.expense || [...EXPENSE_CATEGORIES];
@@ -192,7 +191,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [formDate, setFormDate] = useState<string>(
     new Date().toISOString().split('T')[0].replace(/^\d{4}/, String(budget.year))
   );
-  const [formToBeWithdrawn, setFormToBeWithdrawn] = useState<boolean>(false);
   const [formSavingAccountId, setFormSavingAccountId] = useState<string>(accounts[0]?.id || '');
   const [saveToTemplate, setSaveToTemplate] = useState<boolean>(false);
   const [isCreatingNewSinkingFund, setIsCreatingNewSinkingFund] = useState<boolean>(false);
@@ -331,13 +329,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         actualCost: t.type === 'saving' ? t.defaultEstimatedCost : 0,
         amount: t.type === 'saving' ? t.defaultEstimatedCost : 0,
         paymentMethod: t.defaultPaymentMethod || 'Bank Transfer',
-        difference: t.defaultEstimatedCost,
+        difference:
+          t.type === 'saving'
+            ? 0
+            : t.type === 'income'
+            ? -t.defaultEstimatedCost
+            : t.defaultEstimatedCost,
         status: (t.type === 'saving' ? 'Paid' : 'Pending') as 'Paid' | 'Pending',
         reference: 'Auto-filled from template',
         toBeWithdrawn: Boolean(t.toBeWithdrawn),
         description: t.item || t.category,
         savingAccountId: t.type === 'saving' ? targetAcc?.id : undefined,
         savingAccountName: t.type === 'saving' ? targetAcc?.name : undefined,
+        loanId: t.loanId,
       };
     });
 
@@ -360,15 +364,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   // UNIFIED SHEET ROWS: THE SHEET IS ALREADY PRE-POPULATED WITH ALL ESTIMATES!
   const { unifiedIncomeRows, unifiedExpenseRows } = useMemo(() => {
     const recordedEntries = budget.entries.filter((e) => e.period === selectedPeriod);
-    const recordedMap = new Map<string, BudgetEntry>();
     const usedEntryIds = new Set<string>();
-
-    recordedEntries.forEach((e) => {
-      const key = (e.item || e.description || '').toLowerCase().trim();
-      if (!recordedMap.has(key)) {
-        recordedMap.set(key, e);
-      }
-    });
 
     const incomeRows: SheetRowItem[] = [];
     const expenseRows: SheetRowItem[] = [];
@@ -377,8 +373,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     itemTemplates
       .filter((tpl) => isTemplateValidForPeriod(tpl, frequency, selectedPeriod))
       .forEach((tpl) => {
-      const key = tpl.item.toLowerCase().trim();
-      const matchedEntry = recordedMap.get(key);
+      const tplItemLower = tpl.item.toLowerCase().trim();
+      const matchedEntry = recordedEntries.find(
+        (e) =>
+          !usedEntryIds.has(e.id) &&
+          e.type === tpl.type &&
+          (e.item || e.description || '').toLowerCase().trim() === tplItemLower
+      );
 
       if (matchedEntry) {
         usedEntryIds.add(matchedEntry.id);
@@ -487,15 +488,15 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     });
 
     return { unifiedIncomeRows: incomeRows, unifiedExpenseRows: expenseRows };
-  }, [budget.entries, itemTemplates, selectedPeriod, budget.year]);
+  }, [budget.entries, itemTemplates, selectedPeriod, budget.year, frequency, accounts]);
 
-  // Totals calculations across the pre-populated sheet
+  // Totals calculations across the pre-populated sheet (counting settled/Paid actuals)
   const totalIncomeEstimated = unifiedIncomeRows.reduce(
     (sum, r) => sum + r.estimatedCost,
     0
   );
   const totalIncomeActual = unifiedIncomeRows.reduce(
-    (sum, r) => sum + (r.hasActualCost ? r.actualCost : 0),
+    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
     0
   );
   const incomeDifference = totalIncomeActual - totalIncomeEstimated;
@@ -505,7 +506,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     0
   );
   const totalExpenseActual = unifiedExpenseRows.reduce(
-    (sum, r) => sum + (r.hasActualCost ? r.actualCost : 0),
+    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
     0
   );
   const expenseDifference = totalExpenseEstimated - totalExpenseActual;
@@ -515,19 +516,43 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const remainingExtraEstimated = totalIncomeEstimated - totalExpenseEstimated;
 
   const hasAnyIncomeRecorded = useMemo(
-    () => unifiedIncomeRows.some((r) => r.hasActualCost),
+    () => unifiedIncomeRows.some((r) => r.hasActualCost && r.status === 'Paid'),
     [unifiedIncomeRows]
   );
+  const receivedIncomeCount = useMemo(
+    () => unifiedIncomeRows.filter((r) => r.hasActualCost && r.status === 'Paid').length,
+    [unifiedIncomeRows]
+  );
+  const allIncomeReceived = useMemo(
+    () => unifiedIncomeRows.length > 0 && receivedIncomeCount === unifiedIncomeRows.length,
+    [unifiedIncomeRows.length, receivedIncomeCount]
+  );
+  const [isIncomeCollapsed, setIsIncomeCollapsed] = useState<boolean>(false);
+
+  useEffect(() => {
+    setIsIncomeCollapsed(allIncomeReceived);
+  }, [selectedPeriod, allIncomeReceived]);
+
   const hasAnyExpenseRecorded = useMemo(
-    () => unifiedExpenseRows.some((r) => r.hasActualCost),
+    () => unifiedExpenseRows.some((r) => r.hasActualCost && r.status === 'Paid'),
     [unifiedExpenseRows]
   );
 
-  const { surplus, hasBeenCarriedOver } = useMemo(() => {
+  const totalExpensePaid = totalExpenseActual;
+
+  const currentRemainingPaid = hasAnyIncomeRecorded
+    ? totalIncomeActual - totalExpensePaid
+    : remainingExtraEstimated;
+
+  const projectedRemainingAll = hasAnyIncomeRecorded
+    ? totalIncomeActual - totalExpenseActual
+    : remainingExtraEstimated;
+
+  const { surplus, hasBeenCarriedOver, prevPeriodName } = useMemo(() => {
     const currentIndex = periodList.indexOf(selectedPeriod);
-    if (currentIndex <= 0) return { surplus: 0, hasBeenCarriedOver: true };
+    if (currentIndex <= 0) return { surplus: 0, hasBeenCarriedOver: true, prevPeriodName: '' };
     const prevPeriod = periodList[currentIndex - 1];
-    const prevEntries = budget.entries.filter((e) => e.period === prevPeriod);
+    const prevEntries = budget.entries.filter((e) => e.period === prevPeriod && e.status !== 'Pending');
     const incAct = prevEntries
       .filter((e) => e.type === 'income')
       .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
@@ -538,7 +563,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     const hasBeenCarriedOver = budget.entries.some(
       (e) => e.period === selectedPeriod && e.description.includes('Carry-over')
     );
-    return { surplus, hasBeenCarriedOver };
+    return { surplus, hasBeenCarriedOver, prevPeriodName: prevPeriod };
   }, [budget.entries, periodList, selectedPeriod]);
 
   // Helpers
@@ -546,7 +571,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     new Intl.NumberFormat('en-PH', { maximumFractionDigits: 0 }).format(num);
 
   const getMethodAmount = (entry: SheetRowItem, method: PaymentMethod): number => {
-    if (!entry.hasActualCost) return 0;
+    if (!entry.hasActualCost || entry.status !== 'Paid') return 0;
     if (entry.paymentBreakdown) {
       switch (method) {
         case 'Cash':
@@ -568,7 +593,70 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     return entry.paymentMethod === method ? entry.actualCost : 0;
   };
 
-  // Breakdown by payment methods for rows with actuals recorded
+  const getActivePaymentChannels = (entry: SheetRowItem): { label: string; amount: number }[] => {
+    if (!entry.hasActualCost || entry.status !== 'Paid') return [];
+    const channels: { label: string; amount: number }[] = [
+      { label: 'Cash', amount: getMethodAmount(entry, 'Cash') },
+      { label: 'Credit Card', amount: getMethodAmount(entry, 'Credit Card') },
+      { label: 'GCash', amount: getMethodAmount(entry, 'GCash Transfer') },
+      { label: 'Kath Acct', amount: getMethodAmount(entry, 'Kath Account') },
+      { label: 'Check Acct', amount: getMethodAmount(entry, 'Checking Account') },
+      { label: 'Bank Transfer', amount: getMethodAmount(entry, 'Bank Transfer') },
+    ].filter((c) => c.amount > 0);
+    if (channels.length === 0 && entry.actualCost > 0) {
+      return [{ label: entry.paymentMethod || 'Bank Transfer', amount: entry.actualCost }];
+    }
+    return channels;
+  };
+
+  const filteredExpenseRows = useMemo(() => {
+    return unifiedExpenseRows.filter((exp) => {
+      if (mobileExpenseFilter === 'pending' && exp.status === 'Paid') return false;
+      if (mobileExpenseFilter === 'paid' && exp.status !== 'Paid') return false;
+      if (
+        mobileExpenseFilter === 'saving' &&
+        exp.type !== 'saving' &&
+        exp.category !== 'Savings'
+      ) {
+        return false;
+      }
+      if (paymentMethodFilter) {
+        const methodAmt = getMethodAmount(exp, paymentMethodFilter);
+        const matchesPendingMethod = exp.status !== 'Paid' && exp.paymentMethod === paymentMethodFilter;
+        if (methodAmt <= 0 && !matchesPendingMethod) return false;
+      }
+      if (expenseSearchQuery.trim()) {
+        const q = expenseSearchQuery.toLowerCase();
+        const matchItem = exp.item.toLowerCase().includes(q);
+        const matchCat = exp.category.toLowerCase().includes(q);
+        const matchRef = (exp.reference || '').toLowerCase().includes(q);
+        const matchMethod = (exp.paymentMethod || '').toLowerCase().includes(q);
+        if (!matchItem && !matchCat && !matchRef && !matchMethod) return false;
+      }
+      return true;
+    });
+  }, [unifiedExpenseRows, mobileExpenseFilter, paymentMethodFilter, expenseSearchQuery]);
+
+  const isExpenseFiltered =
+    mobileExpenseFilter !== 'all' ||
+    paymentMethodFilter !== null ||
+    expenseSearchQuery.trim().length > 0;
+
+  const filteredExpenseEstimated = useMemo(
+    () => filteredExpenseRows.reduce((sum, r) => sum + r.estimatedCost, 0),
+    [filteredExpenseRows]
+  );
+
+  const filteredExpenseActual = useMemo(
+    () =>
+      filteredExpenseRows.reduce(
+        (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
+        0
+      ),
+    [filteredExpenseRows]
+  );
+
+  // Breakdown by payment methods for rows with settled actuals recorded
   const paymentTotals = useMemo(() => {
     const totals: { [key in PaymentMethod]?: number } = {
       Cash: 0,
@@ -581,7 +669,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     };
 
     unifiedExpenseRows.forEach((e) => {
-      if (e.hasActualCost) {
+      if (e.hasActualCost && e.status === 'Paid') {
         if (e.paymentBreakdown) {
           totals.Cash = (totals.Cash || 0) + (e.paymentBreakdown.cash || 0);
           totals['Credit Card'] = (totals['Credit Card'] || 0) + (e.paymentBreakdown.creditCard || 0);
@@ -602,85 +690,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
     return totals;
   }, [unifiedExpenseRows]);
-
-
-
-  // Real-time calculations for the modal's selected period
-  const modalPeriodStats = useMemo(() => {
-    const entriesInModalPeriod = budget.entries.filter((e) => e.period === modalPeriod);
-    const incAct = entriesInModalPeriod
-      .filter((e) => e.type === 'income')
-      .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-    const incEst = itemTemplates
-      .filter((t) => t.type === 'income' && isTemplateValidForPeriod(t, frequency, modalPeriod))
-      .reduce((sum, t) => sum + t.defaultEstimatedCost, 0);
-
-    // Paid only expenses
-    const expPaid = entriesInModalPeriod
-      .filter((e) => (e.type === 'expense' || e.type === 'saving') && e.status === 'Paid')
-      .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-    // All expenses (paid + pending/scheduled)
-    const expAll = entriesInModalPeriod
-      .filter((e) => e.type === 'expense' || e.type === 'saving')
-      .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-      
-    const expEst = itemTemplates
-      .filter((t) => (t.type === 'expense' || t.type === 'saving') && isTemplateValidForPeriod(t, frequency, modalPeriod))
-      .reduce((sum, t) => sum + t.defaultEstimatedCost, 0);
-
-    const hasRecordedIncome = entriesInModalPeriod.some((e) => e.type === 'income');
-    // Use only actual recorded income
-    const totalIncome = incAct;
-    
-    // Remaining based on PAID items
-    const currRemainingPaid = totalIncome - expPaid;
-    // Projected remaining if ALL items are paid
-    const projectedTotalRemaining = totalIncome - expAll;
-    
-    const hasActualInput = formActual.trim() !== '' && !isNaN(parseFloat(formActual));
-    const actInput = hasActualInput ? parseFloat(formActual) : (parseFloat(formEstimated) || 0);
-
-    let origAct = 0;
-    if (editingEntryId) {
-      const orig = budget.entries.find((e) => e.id === editingEntryId);
-      if (orig && orig.period === modalPeriod) {
-        origAct = orig.actualCost ?? orig.amount ?? 0;
-      }
-    }
-
-    let projectedIncome = totalIncome;
-    let projectedExpense = expAll;
-
-    if (modalType === 'income') {
-      projectedIncome = totalIncome - origAct + actInput;
-    } else {
-      projectedExpense = expAll - origAct + actInput;
-    }
-
-    const projectedRemaining = projectedIncome - projectedExpense;
-    const usedPercentage = projectedIncome > 0 ? (projectedExpense / projectedIncome) * 100 : 0;
-
-    return {
-      incAct,
-      incEst,
-      expAct: expPaid, // Used in the HUD as 'Total Outflow'
-      expEst,
-      currRemainingPaid,
-      projectedTotalRemaining,
-      projectedIncome,
-      projectedExpense,
-      projectedRemaining,
-      usedPercentage,
-    };
-  }, [
-    budget.entries,
-    itemTemplates,
-    modalPeriod,
-    formActual,
-    formEstimated,
-    modalType,
-    editingEntryId,
-  ]);
 
   // Open modal for clicking ANY row on the sheet (virtual estimate or recorded)
   // THE ESTIMATE TEXT IS ALREADY POPULATED!
@@ -730,7 +739,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         bankTransfer: '',
       });
     }
-    setFormToBeWithdrawn(Boolean(row.toBeWithdrawn));
     setFormSavingAccountId(row.savingAccountId || accounts[0]?.id || '');
     setSelectedTemplateId(row.templateId || '');
     setEntrySourceMode(row.templateId || row.isVirtualEstimate || (row.estimatedCost && row.estimatedCost > 0) ? 'template' : 'unplanned');
@@ -738,9 +746,20 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setIsAddModalOpen(true);
   };
 
-  // One-click quick confirm estimate as Paid
+  // One-click quick confirm estimate or pending entry as Paid
   const handleQuickConfirmEstimate = (row: SheetRowItem) => {
     const estNum = row.estimatedCost || 0;
+    if (!row.isVirtualEstimate) {
+      const settledAmount = row.actualCost > 0 ? row.actualCost : estNum;
+      onUpdateEntry(row.id, {
+        status: 'Paid',
+        actualCost: settledAmount,
+        amount: settledAmount,
+        difference: row.type === 'income' ? settledAmount - estNum : estNum - settledAmount,
+      });
+      return;
+    }
+
     let periodIndex = 0;
     if (frequency === 'monthly') {
       periodIndex = Math.max(0, MONTH_NAMES.indexOf(selectedPeriod));
@@ -808,7 +827,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setFormEstimated('0');
     setFormActual('');
     setFormPaymentMethod('Bank Transfer');
-    setFormToBeWithdrawn(false);
     setFormStatus('Paid');
     setFormReference('');
     setSaveToTemplate(false);
@@ -919,6 +937,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
         : formItem.trim() || formCategory;
 
+    const isCashExplicit = formPaymentMethod === 'Cash';
+    const isCashInSplit = Boolean(parsedBreakdown && (parsedBreakdown.cash || 0) > 0);
+    const computedToBeWithdrawn = isCashExplicit || isCashInSplit;
+
     const entryPayload = {
       year: budget.year,
       period: modalPeriod,
@@ -935,7 +957,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       difference: diff,
       status: formStatus,
       reference: formReference.trim(),
-      toBeWithdrawn: formToBeWithdrawn,
+      toBeWithdrawn: computedToBeWithdrawn,
       description: resolvedFundOrItem,
       savingAccountId: modalType === 'saving' ? formSavingAccountId : undefined,
       savingAccountName: modalType === 'saving' ? selectedAcc?.name : undefined,
@@ -967,7 +989,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   item: trimmedItem,
                   defaultEstimatedCost: estNum,
                   defaultPaymentMethod: formPaymentMethod,
-                  toBeWithdrawn: formToBeWithdrawn,
+                  toBeWithdrawn: formPaymentMethod === 'Cash',
                 }
               : t
           );
@@ -981,7 +1003,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           item: trimmedItem,
           defaultEstimatedCost: estNum,
           defaultPaymentMethod: formPaymentMethod,
-          toBeWithdrawn: formToBeWithdrawn,
+          toBeWithdrawn: formPaymentMethod === 'Cash',
         };
         onUpdateTemplates([...itemTemplates, newTpl]);
       }
@@ -1065,142 +1087,142 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     <div className="space-y-6">
       
       {/* Top Controls Toolbar */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
         {/* Row 1: Title & Actions */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 sm:gap-4">
           <div className="flex items-start sm:items-center gap-3 min-w-0">
             <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white shrink-0">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white shrink-0">
                   Period Ledger &amp; Cash Flow Sheet
                 </h2>
                 <span className="inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 whitespace-nowrap shrink-0 leading-none">
                   {selectedPeriod} ({budget.year})
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setIsManagerModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-semibold whitespace-nowrap shrink-0 leading-none hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-colors cursor-pointer"
-                  title="Click to manage or set up your Personalized Estimate Budget Template"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                  {budget.isPersonalizedTemplate && itemTemplates.length > 0
-                    ? `Personalized Template (${itemTemplates.length} items)`
-                    : 'Set Up Personalized Template'}
-                </button>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Estimates are loaded on the sheet. Click any line item to record the actual amount.
+                Estimates are pre-loaded on your sheet. Tap any line item to record or adjust actual amounts.
               </p>
             </div>
           </div>
 
-          {/* Quick Action Buttons */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              onClick={() => handleOpenAdd('income')}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Income</span>
-            </button>
-
-            <button
-              onClick={() => handleOpenAdd('expense')}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Expense</span>
-            </button>
-
-            <button
-              onClick={() => handleOpenAdd('saving')}
-              className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
-              title="Add funds entry to accumulate in separate funds ledger"
-            >
-              <PiggyBank className="w-3.5 h-3.5" />
-              <span>Funds</span>
-            </button>
+          {/* Period Utility Actions (Creation buttons live contextually in each section below) */}
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* View Mode Switcher: Cards vs Table (Available on Mobile & PC) */}
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs mr-1">
+              <button
+                type="button"
+                onClick={() => setMobileShowFullTable(false)}
+                className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                  !mobileShowFullTable
+                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-semibold'
+                }`}
+                title="Switch to clean Card View"
+              >
+                <LayoutList className="w-3.5 h-3.5" />
+                <span>Cards</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileShowFullTable(true)}
+                className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                  mobileShowFullTable
+                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-semibold'
+                }`}
+                title="Switch to compact Table View"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Table</span>
+              </button>
+            </div>
 
             <button
               onClick={handleAutoFillPeriodFromTemplates}
-              className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+              className="px-3 py-2 sm:py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               title={`Populate ${selectedPeriod} with all planned items from your Estimate Budget Template`}
             >
-              <Sparkles className="w-3.5 h-3.5 text-amber-200" />
+              <Sparkles className="w-3.5 h-3.5 text-amber-200 shrink-0" />
               <span>Auto-Fill {selectedPeriod}</span>
             </button>
 
             <button
               onClick={() => setIsManagerModalOpen(true)}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
-              title="Manage monthly estimated budgets and expense, income, and saving categories"
+              className="px-3 py-2 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+              title="Manage recurring estimated budget templates and categories"
             >
-              <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">Estimates &amp; Categories</span>
+              <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>
+                Templates{budget.isPersonalizedTemplate && itemTemplates.length > 0 ? ` (${itemTemplates.length})` : ''}
+              </span>
             </button>
 
             <button
               onClick={() => setIsImportExcelOpen(true)}
-              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-2 sm:py-1.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-semibold rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors cursor-pointer"
               title="Import actual data from any worksheet tab in your Excel (.xlsx) file"
             >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Import Excel</span>
+              <Upload className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Import Excel</span>
+              <span className="sm:hidden">Import</span>
             </button>
 
             <button
               onClick={handleExportCSV}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-2 sm:py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors cursor-pointer"
               title="Download CSV without currency symbols for easy spreadsheet analysis"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export CSV</span>
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Export CSV</span>
+              <span className="sm:hidden">CSV</span>
             </button>
           </div>
         </div>
 
         {/* Row 2: Dedicated Period Navigator Bar */}
         <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center gap-3 min-w-0">
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold">
-              <Calendar className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Period:</span>
-            </div>
+          <div className="flex items-center justify-between md:justify-start gap-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold">
+                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
+                <span>Period:</span>
+              </div>
 
-            {/* Mode Switcher: Monthly vs Bi-Weekly */}
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  onChangeFrequency('monthly');
-                  onSelectPeriod(currentMonthName);
-                }}
-                className={`px-2.5 py-1 rounded-lg transition-all ${
-                  frequency === 'monthly'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
-                }`}
-              >
-                Monthly (12)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onChangeFrequency('bi-weekly');
-                  onSelectPeriod(currentBiWeeklyPeriod);
-                }}
-                className={`px-2.5 py-1 rounded-lg transition-all ${
-                  frequency === 'bi-weekly'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
-                }`}
-              >
-                Bi-Weekly (26)
-              </button>
+              {/* Mode Switcher: Monthly vs Bi-Weekly */}
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangeFrequency('monthly');
+                    onSelectPeriod(currentMonthName);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    frequency === 'monthly'
+                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs'
+                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Monthly (12)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangeFrequency('bi-weekly');
+                    onSelectPeriod(currentBiWeeklyPeriod);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    frequency === 'bi-weekly'
+                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs'
+                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Bi-Weekly (26)
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1259,57 +1281,58 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       </div>
 
       {/* TOP 3-CARD PERIOD SUMMARY: REMAINING SALARY & TOTALS */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 sm:gap-4">
         
         {/* CARD 1: SALARY & INCOME */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-            <span className="font-semibold uppercase tracking-wider">Salary &amp; Income ({selectedPeriod})</span>
-            <TrendingUp className="w-4 h-4 text-emerald-500" />
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 mb-1">
+            <span className="font-semibold uppercase tracking-wider truncate">Income ({selectedPeriod})</span>
+            <TrendingUp className="w-4 h-4 text-emerald-500 shrink-0" />
           </div>
-          <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
+          <div className="text-lg sm:text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400 truncate">
             {currencySymbol}{formatNumber(hasAnyIncomeRecorded ? totalIncomeActual : totalIncomeEstimated)}
-            {!hasAnyIncomeRecorded && <span className="text-xs text-slate-400 ml-1 font-normal">(Est)</span>}
+            {!hasAnyIncomeRecorded && <span className="text-[11px] text-slate-400 ml-1 font-normal">(Est)</span>}
           </div>
-          <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
-            <span>Estimated: {currencySymbol}{formatNumber(totalIncomeEstimated)}</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[10px] sm:text-[11px] text-slate-400 mt-1 gap-0.5">
+            <span>Est: {currencySymbol}{formatNumber(totalIncomeEstimated)}</span>
             <span className={hasAnyIncomeRecorded ? 'text-emerald-600 font-semibold' : 'text-slate-400 font-semibold'}>
-              Actual: {hasAnyIncomeRecorded ? `${currencySymbol}${formatNumber(totalIncomeActual)}` : '—'}
+              Act: {hasAnyIncomeRecorded ? `${currencySymbol}${formatNumber(totalIncomeActual)}` : '—'}
             </span>
           </div>
         </div>
 
         {/* CARD 2: TOTAL EXPENSES & SAVINGS */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-            <span className="font-semibold uppercase tracking-wider">Total Outflow &amp; Savings</span>
-            <Receipt className="w-4 h-4 text-rose-500" />
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 mb-1">
+            <span className="font-semibold uppercase tracking-wider truncate">Outflow &amp; Funds</span>
+            <Receipt className="w-4 h-4 text-rose-500 shrink-0" />
           </div>
-          <div className="text-xl font-bold font-mono text-rose-600 dark:text-rose-400">
+          <div className="text-lg sm:text-xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate">
             {currencySymbol}{formatNumber(hasAnyExpenseRecorded ? totalExpenseActual : totalExpenseEstimated)}
-            {!hasAnyExpenseRecorded && <span className="text-xs text-slate-400 ml-1 font-normal">(Est)</span>}
+            {!hasAnyExpenseRecorded && <span className="text-[11px] text-slate-400 ml-1 font-normal">(Est)</span>}
           </div>
-          <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
-            <span>Estimated: {currencySymbol}{formatNumber(totalExpenseEstimated)}</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[10px] sm:text-[11px] text-slate-400 mt-1 gap-0.5">
+            <span>Est: {currencySymbol}{formatNumber(totalExpenseEstimated)}</span>
             <span className={hasAnyExpenseRecorded ? 'text-slate-700 dark:text-slate-300 font-semibold' : 'text-slate-400'}>
-              Actual: {hasAnyExpenseRecorded ? `${currencySymbol}${formatNumber(totalExpenseActual)}` : '—'}
+              Act: {hasAnyExpenseRecorded ? `${currencySymbol}${formatNumber(totalExpenseActual)}` : '—'}
             </span>
           </div>
         </div>
 
         {/* CARD 3: REMAINING TO SALARY */}
-        <div className="bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl p-4 text-white shadow-md">
+        <div className="col-span-2 md:col-span-1 bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl p-3.5 sm:p-4 text-white shadow-md">
           <div className="flex items-center justify-between text-xs text-emerald-100 mb-1">
             <span className="font-bold uppercase tracking-wider">Remaining to Salary ({selectedPeriod})</span>
             <Sparkles className="w-4 h-4 text-amber-300" />
           </div>
           <div className="text-xl font-black font-mono">
-            {currencySymbol}{formatNumber(modalPeriodStats.currRemainingPaid)}
+            {currencySymbol}{formatNumber(currentRemainingPaid)}
+            {!hasAnyIncomeRecorded && <span className="text-xs text-emerald-100 ml-1 font-normal">(Est)</span>}
           </div>
           <div className="flex items-center justify-between text-[11px] text-emerald-100 mt-1 font-medium">
-            <span>Projected if all paid: {currencySymbol}{formatNumber(modalPeriodStats.projectedTotalRemaining)}</span>
+            <span>Projected net: {currencySymbol}{formatNumber(projectedRemainingAll)}</span>
             <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">
-              {modalPeriodStats.currRemainingPaid >= 0 ? 'Safe Surplus' : 'Deficit'}
+              {currentRemainingPaid >= 0 ? 'Safe Surplus' : 'Deficit'}
             </span>
           </div>
         </div>
@@ -1319,154 +1342,383 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       {/* SPREADSHEET MAIN CONTAINER */}
       <div className="space-y-6">
           
-          {/* 1. INCOME TABLE - PRE-POPULATED ESTIMATES */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-            <div className="p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
+          {/* 1. INCOME TABLE - PRE-POPULATED ESTIMATES (Auto-collapses when all received) */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden transition-all">
+            <div
+              onClick={() => setIsIncomeCollapsed((prev) => !prev)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsIncomeCollapsed((prev) => !prev);
+                }
+              }}
+              className={`p-3 sm:px-4 sm:py-3 bg-slate-50/80 dark:bg-slate-800/60 hover:bg-emerald-50/40 dark:hover:bg-slate-800 transition-colors cursor-pointer select-none flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 ${
+                !isIncomeCollapsed ? 'border-b border-slate-200 dark:border-slate-800' : ''
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="p-1 rounded-lg bg-emerald-100/70 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300">
+                  {isIncomeCollapsed ? (
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </span>
                 <span className="font-bold text-xs uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
                   Income Sources ({selectedPeriod})
                 </span>
-                <span className="text-[10px] text-slate-500 font-mono bg-emerald-50 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                  {unifiedIncomeRows.length} items
-                </span>
+                {allIncomeReceived ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950/90 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>All Received ({receivedIncomeCount}/{unifiedIncomeRows.length})</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-mono bg-emerald-50 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                    {receivedIncomeCount}/{unifiedIncomeRows.length} received
+                  </span>
+                )}
+
+                {/* Compact Summary Readout when Collapsed */}
+                {isIncomeCollapsed && (
+                  <div className="flex items-center gap-2 text-xs font-mono bg-white dark:bg-slate-900 px-2.5 py-1 rounded-xl border border-emerald-200/80 dark:border-emerald-800/70 shadow-2xs">
+                    <span className="text-slate-500 dark:text-slate-400 text-[11px]">
+                      Est: {currencySymbol}{formatNumber(totalIncomeEstimated)}
+                    </span>
+                    <span className="text-slate-300 dark:text-slate-700">•</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                      Actual: {currencySymbol}{formatNumber(totalIncomeActual)}
+                    </span>
+                  </div>
+                )}
+
                 {surplus > 0 && !hasBeenCarriedOver && (
                   <button
-                    onClick={() => setIsCarryOverModalOpen(true)}
-                    className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold rounded-lg border border-amber-600 flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer shrink-0"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsCarryOverModalOpen(true);
+                    }}
+                    className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold rounded-lg border border-amber-600 flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer shrink-0"
                   >
                     <ArrowRight className="w-3.5 h-3.5" />
-                    <span>Bring Forward Previous Surplus: ₱{surplus.toLocaleString()}</span>
+                    <span>Carry Over Surplus: {currencySymbol}{formatNumber(surplus)}</span>
                   </button>
                 )}
               </div>
-              <button
-                onClick={() => handleOpenAdd('income')}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer shrink-0"
-                title="Add an income source for this period"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Income</span>
-              </button>
+
+              <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setIsIncomeCollapsed((prev) => !prev)}
+                  className="px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl transition-colors cursor-pointer"
+                >
+                  {isIncomeCollapsed ? 'Expand' : 'Collapse'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAdd('income')}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer shrink-0"
+                  title="Add an income source for this period"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Income</span>
+                </button>
+              </div>
             </div>
 
-            <div className="overflow-x-auto scrollbar-thin">
-              <table className="w-full text-left text-xs font-mono border-separate border-spacing-0 whitespace-nowrap">
-                <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-sans font-semibold border-b border-slate-200 dark:border-slate-800">
-                  <tr>
-                    {/* Column 1: Income Source (unfrozen) */}
-                    <th className="py-2.5 px-3 min-w-[170px] font-semibold border-b border-r border-slate-200 dark:border-slate-700 truncate">
-                      Income Source
-                    </th>
-                    <th className="py-2.5 px-4 text-right bg-emerald-50/40 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      Estimated Cost
-                    </th>
-                    <th className="py-2.5 px-4 text-right border-b border-r border-slate-200 dark:border-slate-700">Actual Recorded</th>
-                    <th className="py-2.5 px-4 text-right border-b border-r border-slate-200 dark:border-slate-700">Difference</th>
-                    {/* Frozen Right Column: Status */}
-                    <th className="sticky right-[64px] z-20 w-[88px] min-w-[88px] max-w-[88px] bg-slate-100 dark:bg-slate-800 py-2.5 px-1.5 text-center border-b border-l-2 border-slate-300 dark:border-slate-600 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)] font-sans">
-                      Status
-                    </th>
-                    {/* Frozen Right Column: Action */}
-                    <th className="sticky right-0 z-20 w-[64px] min-w-[64px] max-w-[64px] bg-slate-100 dark:bg-slate-800 py-2.5 px-1 text-center font-sans border-b border-l border-slate-200 dark:border-slate-700">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {!isIncomeCollapsed && (
+              <>
+            {/* INCOME CLEAN CARDS VIEW (Responsive: Compact List on Mobile, Multi-Column Card Grid on PC) */}
+            {!mobileShowFullTable ? (
+              <div>
+                {unifiedIncomeRows.length === 0 ? (
+                  <div className="p-6 md:p-8 text-center text-xs md:text-sm text-slate-400">
+                    No income sources recorded for {selectedPeriod} yet.
+                  </div>
+                ) : (
+                <div className="divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-3 md:p-4 md:bg-slate-50/40 dark:md:bg-slate-950/30">
                   {unifiedIncomeRows.map((inc) => {
                     const est = inc.estimatedCost;
                     const act = inc.actualCost;
                     const diff = inc.hasActualCost ? act - est : 0;
+                    const isReceived = inc.hasActualCost && inc.status === 'Paid';
+                    const canQuickConfirm = !isReceived && (est > 0 || act > 0);
+                    const isExpanded = expandedIncomeRowId === inc.id;
+                    return (
+                      <div
+                        key={inc.id}
+                        className="bg-white dark:bg-slate-900 md:rounded-xl md:border md:border-slate-200/90 dark:md:border-slate-800 md:shadow-2xs md:hover:border-emerald-300 dark:md:hover:border-emerald-800/70 md:hover:shadow-xs transition-all overflow-hidden flex flex-col justify-between"
+                      >
+                        <div
+                          onClick={() => setExpandedIncomeRowId(isExpanded ? null : inc.id)}
+                          className="px-3.5 py-2.5 md:px-4 md:py-3 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                        >
+                          {/* Left: Clean Item Title + Unboxed Subtitle */}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              {isReceived ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 md:w-4 md:h-4 text-emerald-500 shrink-0" />
+                              ) : isExpanded ? (
+                                <ChevronDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-emerald-600 shrink-0" />
+                              ) : (
+                                <ChevronRight className="w-3.5 h-3.5 md:w-4 md:h-4 text-slate-400 shrink-0" />
+                              )}
+                              <span className="font-semibold text-xs md:text-sm text-slate-900 dark:text-white truncate">
+                                {inc.item}
+                              </span>
+                            </div>
+                            <div className="pl-5 md:pl-5.5 mt-0.5 flex items-center gap-1.5 text-[11px] md:text-xs text-slate-500 dark:text-slate-400 truncate">
+                              <span className="truncate">{inc.category}</span>
+                              {inc.reference && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="truncate">{inc.reference}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Right: Clean Amount + Single Primary Action */}
+                          <div className="flex items-center gap-2 md:gap-2.5 shrink-0">
+                            <div className="text-right font-mono leading-tight">
+                              {isReceived ? (
+                                <>
+                                  <div className="text-xs md:text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                                    {currencySymbol}{formatNumber(act)}
+                                  </div>
+                                  {est > 0 && est !== act ? (
+                                    <div className="text-[10px] md:text-[11px] text-slate-400">
+                                      Est {currencySymbol}{formatNumber(est)}
+                                    </div>
+                                  ) : est > 0 ? (
+                                    <div className="hidden md:block text-[11px] text-slate-400">
+                                      On target
+                                    </div>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <>
+                                  <div className="text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400">
+                                    {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
+                                  </div>
+                                  {est > 0 && (
+                                    <div className="hidden md:block text-[11px] text-slate-400">
+                                      Estimated
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              {canQuickConfirm && (
+                                <button
+                                  onClick={() => handleQuickConfirmEstimate(inc)}
+                                  className="px-2.5 py-1 md:px-3 md:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] md:text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                  title={`Confirm ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Received`}
+                                >
+                                  <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                  <span>Receive</span>
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleOpenRow(inc)}
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                title="Edit Income"
+                              >
+                                <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="px-3.5 md:px-4 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800/80 text-[11px] md:text-xs flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-150">
+                            <div className="flex flex-wrap items-center gap-2 font-mono text-slate-500 dark:text-slate-400">
+                              <span>Est: <strong className="text-slate-700 dark:text-slate-200">{currencySymbol}{formatNumber(est)}</strong></span>
+                              <span aria-hidden="true">·</span>
+                              <span>Actual: <strong className="text-emerald-600 dark:text-emerald-400">{inc.hasActualCost ? `${currencySymbol}${formatNumber(act)}` : '—'}</strong></span>
+                              {inc.hasActualCost && diff !== 0 && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className={diff > 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                    {diff > 0 ? `+${currencySymbol}${formatNumber(diff)}` : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5 ml-auto">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenRow(inc)}
+                                className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+                              {!inc.isVirtualEstimate && (
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteEntry(inc.id)}
+                                  className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Reset</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                )}
+                <div className="px-3.5 py-2.5 md:px-5 md:py-3 bg-emerald-50/80 dark:bg-emerald-950/40 flex items-center justify-between text-xs md:text-sm font-bold border-t border-emerald-200 dark:border-emerald-800">
+                  <span className="text-slate-800 dark:text-slate-200">Total Income</span>
+                  <div className="font-mono flex items-center gap-3 md:gap-4">
+                    <span className="text-slate-500 font-normal text-[10px] md:text-xs">Est {currencySymbol}{formatNumber(totalIncomeEstimated)}</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 text-xs md:text-sm">{currencySymbol}{formatNumber(totalIncomeActual)}</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+            /* #1: SIMPLIFIED INCOME TABLE (Compact on Mobile, Well-Proportioned on PC) */
+            <div className="overflow-x-auto scrollbar-thin">
+              <table className="w-full text-left text-xs md:text-[13px] font-mono border-separate border-spacing-0 whitespace-nowrap">
+                <thead className="bg-slate-50/90 dark:bg-slate-800/60 text-[11px] md:text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 font-sans font-semibold">
+                  <tr>
+                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none border-b border-r border-slate-200/80 dark:border-slate-800 truncate">
+                      Item
+                    </th>
+                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
+                      Estimated
+                    </th>
+                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
+                      Actual
+                    </th>
+                    <th className="hidden md:table-cell py-2.5 px-4 md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] text-left border-b border-slate-200/80 dark:border-slate-800 truncate">
+                      Reference
+                    </th>
+                    <th className="md:sticky md:right-0 md:z-20 w-[64px] md:w-[88px] bg-slate-50 dark:bg-slate-800 py-2 px-2 md:py-2.5 md:px-3.5 text-right border-b border-l border-slate-200/80 dark:border-slate-800">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                  {unifiedIncomeRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center font-sans text-xs md:text-sm text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
+                        No income sources recorded for {selectedPeriod} yet.
+                      </td>
+                    </tr>
+                  ) : unifiedIncomeRows.map((inc) => {
+                    const est = inc.estimatedCost;
+                    const act = inc.actualCost;
+                    const diff = inc.hasActualCost ? act - est : 0;
+                    const isReceived = inc.status === 'Paid' && inc.hasActualCost;
+                    const canQuickConfirm = !isReceived && (est > 0 || act > 0);
 
                     return (
                       <tr
                         key={inc.id}
                         onClick={() => handleOpenRow(inc)}
-                        className="hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer group"
+                        className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group"
                       >
-                        {/* Column 1: Income Source (unfrozen) */}
-                        <td className="py-2.5 px-3 min-w-[170px] font-sans font-medium text-slate-800 dark:text-slate-200 border-b border-r border-slate-100 dark:border-slate-800 truncate">
-                          <div className="truncate">{inc.item}</div>
-                        </td>
-                        {/* ESTIMATE COLUMN */}
-                        <td className="py-2.5 px-4 text-right font-bold text-slate-800 dark:text-slate-200 bg-emerald-50/20 dark:bg-emerald-950/10 border-b border-r border-slate-100 dark:border-slate-800">
-                          {est > 0 ? (
-                            `${currencySymbol}${formatNumber(est)}`
-                          ) : (
-                            <span className="text-slate-400 font-normal text-xs" title="Unplanned income (No baseline estimate)">—</span>
-                          )}
-                        </td>
-                        {/* ACTUAL COLUMN */}
-                        <td className="py-2.5 px-4 text-right border-b border-r border-slate-100 dark:border-slate-800">
-                          {inc.hasActualCost ? (
-                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                              {currencySymbol}{formatNumber(act)}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 font-sans text-[11px] group-hover:text-emerald-600 font-medium transition-colors">
-                              Record actual
-                            </span>
-                          )}
-                        </td>
-                        {/* DIFFERENCE */}
-                        <td className="py-2.5 px-4 text-right border-b border-r border-slate-100 dark:border-slate-800">
-                          {inc.hasActualCost ? (
-                            <span
-                              className={
-                                diff < 0
-                                  ? 'text-rose-600'
-                                  : diff > 0
-                                  ? 'text-emerald-600 font-bold'
-                                  : 'text-slate-400'
-                              }
-                            >
-                              {diff < 0
-                                ? `(${currencySymbol}${formatNumber(Math.abs(diff))})`
-                                : `${currencySymbol}${formatNumber(diff)}`}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-[10px]">Pending</span>
-                          )}
-                        </td>
-                        {/* Frozen Right Column: Status */}
-                        <td className="sticky right-[64px] z-10 w-[88px] min-w-[88px] max-w-[88px] bg-white dark:bg-slate-900 group-hover:bg-emerald-50/50 py-2.5 px-1.5 text-center font-sans border-b border-l-2 border-slate-300 dark:border-slate-600 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)]">
-                          {inc.hasActualCost ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                              <CheckCircle2 className="w-2.5 h-2.5" />
-                              Received
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                              Estimated
-                            </span>
-                          )}
-                        </td>
-                        {/* Frozen Right Column: Action */}
-                        <td className="sticky right-0 z-10 w-[64px] min-w-[64px] max-w-[64px] bg-white dark:bg-slate-900 group-hover:bg-emerald-50/50 py-2.5 px-1 text-center whitespace-nowrap border-b border-l border-slate-200 dark:border-slate-700" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-center gap-1">
-                            {inc.isVirtualEstimate && inc.estimatedCost > 0 && (
-                              <button
-                                onClick={() => handleQuickConfirmEstimate(inc)}
-                                className="p-1 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 rounded"
-                                title={`Quick confirm ${currencySymbol}${formatNumber(inc.estimatedCost)} as Received`}
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                              </button>
+                        {/* Item + Category (Sticky Left, Reduced Width on Mobile, Default Width on PC) */}
+                        <td
+                          className="sticky left-0 z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800/60 py-1.5 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans border-b border-r border-slate-100 dark:border-slate-800/80"
+                          title={`${inc.item} (${inc.category})`}
+                        >
+                          <div className="flex items-center gap-1 md:gap-1.5 min-w-0">
+                            {isReceived && (
+                              <CheckCircle2 className="w-3 h-3 md:w-3.5 md:h-3.5 text-emerald-500 shrink-0" />
                             )}
+                            <span className="font-semibold text-xs md:text-sm text-slate-900 dark:text-slate-100 truncate">
+                              {inc.item}
+                            </span>
+                          </div>
+                          <div className="text-[10px] md:text-xs text-slate-400 dark:text-slate-500 truncate leading-tight">
+                            {inc.category}
+                          </div>
+                        </td>
+
+                        {/* Estimated */}
+                        <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
+                          {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
+                        </td>
+
+                        {/* Actual (Shows quick Receive button when pending, or Actual + subtle variance when received) */}
+                        <td className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
+                          {isReceived ? (
+                            <div className="leading-tight">
+                              <div className="font-bold text-emerald-600 dark:text-emerald-400">
+                                {currencySymbol}{formatNumber(act)}
+                              </div>
+                              {est > 0 && diff !== 0 && (
+                                <div
+                                  className={`text-[10px] md:text-[11px] ${
+                                    diff < 0 ? 'text-rose-500' : 'text-emerald-600'
+                                  }`}
+                                >
+                                  {diff > 0
+                                    ? `+${currencySymbol}${formatNumber(diff)}`
+                                    : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                </div>
+                              )}
+                            </div>
+                          ) : canQuickConfirm ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleQuickConfirmEstimate(inc);
+                              }}
+                              className="inline-flex items-center gap-1 ml-auto px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans rounded-md text-[10px] md:text-xs font-semibold transition-colors cursor-pointer"
+                              title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Received`}
+                            >
+                              <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                              <span>Receive</span>
+                            </button>
+                          ) : (
+                            <span className="text-slate-300 dark:text-slate-600">—</span>
+                          )}
+                        </td>
+
+                        {/* Reference (Visible on Larger Screens to balance table columns) */}
+                        <td className="hidden md:table-cell py-2.5 px-4 md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-xs text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80 truncate">
+                          {inc.reference ? (
+                            <span title={inc.reference} className="truncate block">
+                              {inc.reference}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300 dark:text-slate-600 font-mono">—</span>
+                          )}
+                        </td>
+
+                        {/* Action (Sticky Right on Desktop) */}
+                        <td
+                          className="md:sticky md:right-0 md:z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800/60 py-1.5 px-2 md:py-2.5 md:px-3.5 text-right font-sans border-b border-l border-slate-100 dark:border-slate-800/80"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => handleOpenRow(inc)}
-                              className="p-1 text-slate-400 hover:text-indigo-600 rounded"
-                              title={inc.hasActualCost ? 'Edit income' : 'Record actual'}
+                              className="p-1 md:p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              title={isReceived ? 'Edit income' : 'Record actual'}
                             >
-                              <Edit2 className="w-3.5 h-3.5" />
+                              <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                             </button>
                             {!inc.isVirtualEstimate && (
                               <button
                                 onClick={() => onDeleteEntry(inc.id)}
-                                className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                                className="p-1 md:p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
                                 title="Reset to estimate"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                               </button>
                             )}
                           </div>
@@ -1476,296 +1728,734 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   })}
 
                   {/* Income Total Row */}
-                  <tr className="bg-emerald-50/80 dark:bg-emerald-950/40 font-bold text-slate-900 dark:text-white border-t-2 border-emerald-500/30">
-                    <td className="py-3 px-4 font-sans border-r border-emerald-200 dark:border-emerald-800">
+                  <tr className="bg-emerald-50/70 dark:bg-emerald-950/30 font-bold text-slate-900 dark:text-white">
+                    <td className="sticky left-0 z-10 bg-emerald-50 dark:bg-emerald-950 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm border-r border-emerald-200/70 dark:border-emerald-800/70 truncate">
                       Total Income
                     </td>
-                    <td className="py-3 px-4 text-right text-emerald-900 dark:text-emerald-200 font-mono text-sm border-r border-emerald-200 dark:border-emerald-800">
+                    <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-slate-600 dark:text-slate-300 font-mono text-xs md:text-sm">
                       {currencySymbol}{formatNumber(totalIncomeEstimated)}
                     </td>
-                    <td className="py-3 px-4 text-right text-emerald-600 dark:text-emerald-400 font-mono text-sm border-r border-emerald-200 dark:border-emerald-800">
+                    <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-emerald-600 dark:text-emerald-400 font-mono text-xs md:text-sm">
                       {currencySymbol}{formatNumber(totalIncomeActual)}
                     </td>
-                    <td className="py-3 px-4 text-right text-slate-700 dark:text-slate-300 border-r border-emerald-200 dark:border-emerald-800">
-                      {incomeDifference < 0
-                        ? `(${currencySymbol}${formatNumber(Math.abs(incomeDifference))})`
-                        : `${currencySymbol}${formatNumber(incomeDifference)}`}
+                    <td className="hidden md:table-cell py-2.5 px-4 font-sans text-xs font-normal text-emerald-800/70 dark:text-emerald-300/70">
+                      {unifiedIncomeRows.length} {unifiedIncomeRows.length === 1 ? 'source' : 'sources'}
                     </td>
-                    <td className="sticky right-[64px] z-10 w-[88px] min-w-[88px] max-w-[88px] bg-emerald-50 dark:bg-emerald-950 border-l-2 border-emerald-300 dark:border-emerald-700 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)]"></td>
-                    <td className="sticky right-0 z-10 w-[64px] min-w-[64px] max-w-[64px] bg-emerald-50 dark:bg-emerald-950 border-l border-emerald-300 dark:border-emerald-700"></td>
+                    <td className="md:sticky md:right-0 md:z-10 bg-emerald-50 dark:bg-emerald-950 border-l border-emerald-200/70 dark:border-emerald-800/70"></td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+            )}
+              </>
+            )}
+          </div>
+
+          {/* STICKY OUTFLOW CONTROLS, FILTERS & MINI SUMMARY BAR (Pinned while scrolling Expenses) */}
+          <div className="sticky top-14 sm:top-16 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-200/90 dark:border-slate-800/90 shadow-sm px-3 py-2.5 flex flex-col gap-2">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+              {/* Left: Status Filter Pills + Compact Period Readout */}
+              <div className="flex items-center justify-between lg:justify-start gap-2 overflow-x-auto scrollbar-none">
+                <div className="flex items-center gap-1 text-[11px] font-semibold shrink-0">
+                  {(
+                    [
+                      { id: 'all', label: `All (${unifiedExpenseRows.length})` },
+                      {
+                        id: 'pending',
+                        label: `Pending (${unifiedExpenseRows.filter((r) => r.status !== 'Paid').length})`,
+                      },
+                      {
+                        id: 'paid',
+                        label: `Paid (${unifiedExpenseRows.filter((r) => r.status === 'Paid').length})`,
+                      },
+                      {
+                        id: 'saving',
+                        label: `Funds (${unifiedExpenseRows.filter((r) => r.type === 'saving' || r.category === 'Savings').length})`,
+                      },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setMobileExpenseFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors cursor-pointer ${
+                        mobileExpenseFilter === tab.id
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Compact Live Pill Readout */}
+                <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono pl-2 border-l border-slate-200 dark:border-slate-700 shrink-0">
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold">
+                    In: {currencySymbol}{formatNumber(hasAnyIncomeRecorded ? totalIncomeActual : totalIncomeEstimated)}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold">
+                    Out: {currencySymbol}{formatNumber(hasAnyExpenseRecorded ? totalExpenseActual : totalExpenseEstimated)}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded font-black ${
+                      currentRemainingPaid >= 0
+                        ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                        : 'bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-200'
+                    }`}
+                  >
+                    Left: {currencySymbol}{formatNumber(currentRemainingPaid)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Right: Quick Search Input + Cards/Table Switcher */}
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1 lg:w-60">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={expenseSearchQuery}
+                    onChange={(e) => setExpenseSearchQuery(e.target.value)}
+                    placeholder="Search bill, category, method..."
+                    className="w-full pl-8 pr-7 py-1.5 bg-slate-100/90 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  {expenseSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setExpenseSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setMobileShowFullTable(false)}
+                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                      !mobileShowFullTable
+                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Cards
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileShowFullTable(true)}
+                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                      mobileShowFullTable
+                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Table
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
           {/* 2. MONTHLY EXPENSES MASTER SPREADSHEET TABLE - PRE-POPULATED ESTIMATES */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-            <div className="p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-xs uppercase tracking-wider text-rose-700 dark:text-rose-400">
-                  {frequency === 'monthly'
-                    ? `Monthly Expenses & Outflows (${selectedPeriod})`
-                    : `Bi-Weekly Expenses & Outflows (${selectedPeriod})`}
-                </span>
-                <span className="text-[10px] text-slate-500 font-mono bg-rose-50 dark:bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-200 dark:border-rose-800">
-                  {unifiedExpenseRows.length} lines
-                </span>
+            <div className="p-3.5 sm:p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-xs uppercase tracking-wider text-rose-700 dark:text-rose-400">
+                    {frequency === 'monthly'
+                      ? `Expenses & Outflows (${selectedPeriod})`
+                      : `Bi-Weekly Outflows (${selectedPeriod})`}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono bg-rose-50 dark:bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-200 dark:border-rose-800">
+                    {filteredExpenseRows.length} / {unifiedExpenseRows.length} lines
+                  </span>
+                  {paymentMethodFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethodFilter(null)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 cursor-pointer"
+                    >
+                      <span>Channel: {paymentMethodFilter}</span>
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+
+                  <button
+                    onClick={() => handleOpenAdd('expense')}
+                    className="flex-1 sm:flex-initial justify-center px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                    title="Add an expense item for this period"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Expense</span>
+                  </button>
+                  <button
+                    onClick={() => handleOpenAdd('saving')}
+                    className="flex-1 sm:flex-initial justify-center px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                    title="Add a fund or savings allocation for this period"
+                  >
+                    <PiggyBank className="w-3.5 h-3.5" />
+                    <span>Add Fund</span>
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => handleOpenAdd('expense')}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-                  title="Add an expense item for this period"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Expense</span>
-                </button>
-                <button
-                  onClick={() => handleOpenAdd('saving')}
-                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-                  title="Add a fund or savings allocation for this period"
-                >
-                  <PiggyBank className="w-3.5 h-3.5" />
-                  <span>Add Fund</span>
-                </button>
+
+              {/* Interactive Payment Method Subtotals Bar (Tap any channel to filter!) */}
+              <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Payment Channel Subtotals (Tap to filter)
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                    Actual Outflow: {currencySymbol}{formatNumber(totalExpenseActual)}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 text-[11px]">
+                  {(
+                    [
+                      { key: 'Cash', label: 'Cash' },
+                      { key: 'Credit Card', label: 'Credit Card' },
+                      { key: 'GCash Transfer', label: 'GCash Transfer' },
+                      { key: 'Kath Account', label: 'Kath Account' },
+                      { key: 'Checking Account', label: 'Check Account' },
+                      { key: 'Bank Transfer', label: 'Bank Transfer' },
+                    ] as const
+                  ).map((ch) => {
+                    const amt = paymentTotals[ch.key] || 0;
+                    const pct = totalExpenseActual > 0 ? Math.round((amt / totalExpenseActual) * 100) : 0;
+                    const isSelected = paymentMethodFilter === ch.key;
+                    return (
+                      <button
+                        type="button"
+                        key={ch.key}
+                        onClick={() =>
+                          setPaymentMethodFilter((prev) => (prev === ch.key ? null : ch.key))
+                        }
+                        className={`px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-1.5 text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs ring-2 ring-indigo-500/30'
+                            : amt > 0
+                            ? 'bg-white dark:bg-slate-900 border-indigo-200/80 dark:border-indigo-800/70 text-slate-800 dark:text-slate-100 hover:border-indigo-400 shadow-2xs'
+                            : 'bg-slate-100/60 dark:bg-slate-900/40 border-slate-200/60 dark:border-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-600'
+                        }`}
+                        title={`Filter by ${ch.label}${pct > 0 ? ` (${pct}% of actual outflow)` : ''}`}
+                      >
+                        <span className="truncate font-medium text-[10px]">{ch.label}</span>
+                        <span
+                          className={`font-mono font-bold shrink-0 ${
+                            isSelected
+                              ? 'text-white'
+                              : amt > 0
+                              ? 'text-indigo-700 dark:text-indigo-300'
+                              : ''
+                          }`}
+                        >
+                          {currencySymbol}{formatNumber(amt)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            <div className="overflow-x-auto scrollbar-thin">
-              <table className="w-full text-left text-[11px] font-mono border-separate border-spacing-0 whitespace-nowrap">
-                <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-sans font-semibold border-b border-slate-200 dark:border-slate-700">
-                  <tr>
-                    {/* Column 1: Category (unfrozen) */}
-                    <th className="py-2.5 px-2.5 min-w-[95px] border-b border-r border-slate-200 dark:border-slate-700 truncate">
-                      Category
-                    </th>
+            {/* #3: CLEAN & SIMPLE CARDS VIEW (Responsive: Compact List on Mobile, Multi-Column Card Grid on PC) */}
+            {!mobileShowFullTable ? (
+              <div>
+                {filteredExpenseRows.length === 0 ? (
+                  <div className="p-8 md:p-12 text-center text-xs md:text-sm text-slate-400 space-y-2">
+                    <div>No matching budget items found for this filter.</div>
+                    {isExpenseFiltered && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileExpenseFilter('all');
+                          setPaymentMethodFilter(null);
+                          setExpenseSearchQuery('');
+                        }}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Clear Filters</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-3 md:p-4 md:bg-slate-50/40 dark:md:bg-slate-950/30">
+                    {filteredExpenseRows.map((exp) => {
+                      const est = exp.estimatedCost;
+                      const act = exp.actualCost;
+                      const diff = exp.hasActualCost ? est - act : est;
+                      const isSaving = exp.type === 'saving' || exp.category === 'Savings';
+                      const isPaid = exp.status === 'Paid' && exp.hasActualCost;
+                      const canQuickPay = !isPaid && (est > 0 || act > 0);
+                      const isExpanded = expandedRowId === exp.id;
+                      const activeChannels = getActivePaymentChannels(exp);
+                      const channelLabel =
+                        activeChannels.length === 1
+                          ? activeChannels[0].label
+                          : activeChannels.length > 1
+                          ? `Split (${activeChannels.length})`
+                          : '';
 
-                    {/* Column 2: Item (unfrozen) */}
-                    <th className="py-2.5 px-2.5 min-w-[140px] border-b border-r border-slate-200 dark:border-slate-700 truncate">
+                      return (
+                        <div
+                          key={exp.id}
+                          className={`md:rounded-xl md:border md:shadow-2xs md:hover:shadow-xs transition-all overflow-hidden flex flex-col justify-between ${
+                            isSaving
+                              ? 'bg-indigo-50/20 dark:bg-indigo-950/15 md:border-indigo-200/80 dark:md:border-indigo-900/60 md:hover:border-indigo-300 dark:md:hover:border-indigo-700'
+                              : 'bg-white dark:bg-slate-900 md:border-slate-200/90 dark:md:border-slate-800 md:hover:border-indigo-300 dark:md:hover:border-indigo-800/70'
+                          }`}
+                        >
+                          {/* Clean 2-line Card Row: Left (Item / Category · Method), Right (Amount + Single Action) */}
+                          <div
+                            onClick={() => setExpandedRowId(isExpanded ? null : exp.id)}
+                            className="px-3.5 py-2.5 md:px-4 md:py-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0 flex-1">
+                              {/* Line 1: Subtle Settled Icon or Chevron + Full Item Title */}
+                              <div className="flex items-center gap-1.5">
+                                {isPaid ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 md:w-4 md:h-4 text-emerald-500 shrink-0" />
+                                ) : isExpanded ? (
+                                  <ChevronDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-indigo-600 shrink-0" />
+                                ) : (
+                                  <ChevronRight className="w-3.5 h-3.5 md:w-4 md:h-4 text-slate-400 shrink-0" />
+                                )}
+                                <span
+                                  className={`text-xs md:text-sm truncate ${
+                                    isPaid
+                                      ? 'font-semibold text-slate-900 dark:text-white'
+                                      : 'font-bold text-slate-900 dark:text-white'
+                                  }`}
+                                >
+                                  {exp.item}
+                                </span>
+                              </div>
+
+                              {/* Line 2: Clean Unboxed Category · Channel / Fund Account */}
+                              <div className="pl-5 md:pl-5.5 mt-0.5 flex items-center gap-1.5 text-[11px] md:text-xs text-slate-500 dark:text-slate-400 truncate">
+                                <span
+                                  className={`truncate ${
+                                    isSaving
+                                      ? 'font-medium text-indigo-600 dark:text-indigo-400'
+                                      : ''
+                                  }`}
+                                >
+                                  {exp.category}
+                                </span>
+                                {isPaid && channelLabel && (
+                                  <>
+                                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-600 shrink-0">·</span>
+                                    <span className="text-slate-600 dark:text-slate-300 shrink-0">
+                                      {channelLabel}
+                                    </span>
+                                  </>
+                                )}
+                                {isSaving && exp.savingAccountName && (
+                                  <>
+                                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-600 shrink-0">·</span>
+                                    <span className="truncate text-indigo-600 dark:text-indigo-400">
+                                      {exp.savingAccountName}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Right Side: Clean Amount + Pay (if pending) + Edit */}
+                            <div className="flex items-center gap-2 md:gap-2.5 shrink-0">
+                              <div className="text-right font-mono leading-tight">
+                                {isPaid ? (
+                                  <>
+                                    <div
+                                      className={`text-xs md:text-sm font-bold ${
+                                        isSaving
+                                          ? 'text-indigo-600 dark:text-indigo-400'
+                                          : 'text-slate-900 dark:text-white'
+                                      }`}
+                                    >
+                                      {currencySymbol}{formatNumber(act)}
+                                    </div>
+                                    {est > 0 && est !== act ? (
+                                      <div className="text-[10px] md:text-[11px] text-slate-400">
+                                        Est {currencySymbol}{formatNumber(est)}
+                                      </div>
+                                    ) : est > 0 ? (
+                                      <div className="hidden md:block text-[11px] text-slate-400">
+                                        On budget
+                                      </div>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400">
+                                      {act > 0
+                                        ? `${currencySymbol}${formatNumber(act)}`
+                                        : est > 0
+                                        ? `${currencySymbol}${formatNumber(est)}`
+                                        : '—'}
+                                    </div>
+                                    {est > 0 && (
+                                      <div className="hidden md:block text-[11px] text-slate-400">
+                                        Estimated
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                {canQuickPay && (
+                                  <button
+                                    onClick={() => handleQuickConfirmEstimate(exp)}
+                                    className="px-2.5 py-1 md:px-3 md:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] md:text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                    title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Paid`}
+                                  >
+                                    <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                    <span>Pay</span>
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleOpenRow(exp)}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                  title="Edit Item"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Compact Expandable Details Bar */}
+                          {isExpanded && (
+                            <div className="px-3.5 md:px-4 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800 text-[11px] md:text-xs space-y-1.5 animate-in fade-in duration-150">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2 font-mono text-slate-500 dark:text-slate-400">
+                                  <span>
+                                    Est: <strong className="text-slate-700 dark:text-slate-200">{est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}</strong>
+                                  </span>
+                                  <span aria-hidden="true">·</span>
+                                  <span>
+                                    Paid: <strong className="text-slate-900 dark:text-white">{isPaid ? `${currencySymbol}${formatNumber(act)}` : '—'}</strong>
+                                  </span>
+                                  {isPaid && est > 0 && diff !== 0 && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span className={diff > 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                        {diff > 0
+                                          ? `Saved ${currencySymbol}${formatNumber(diff)}`
+                                          : `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-1.5 ml-auto">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenRow(exp)}
+                                    className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                    <span>Edit</span>
+                                  </button>
+                                  {!exp.isVirtualEstimate && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onDeleteEntry(exp.id)}
+                                      className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] md:text-[11px] font-semibold flex items-center gap-1"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      <span>Reset</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {(activeChannels.length > 1 || exp.reference) && (
+                                <div className="flex flex-wrap items-center gap-2 text-[10px] md:text-[11px] text-slate-500 dark:text-slate-400">
+                                  {activeChannels.length > 1 && (
+                                    <span>
+                                      Split: {activeChannels.map((c) => `${c.label} (${currencySymbol}${formatNumber(c.amount)})`).join(', ')}
+                                    </span>
+                                  )}
+                                  {exp.reference && (
+                                    <span className="truncate">
+                                      Ref: {exp.reference}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Cards View Summary Footer (Stacked on Mobile, Side-by-Side on Larger Screens) */}
+                {isExpenseFiltered && filteredExpenseRows.length > 0 && (
+                  <div className="px-3.5 py-2 md:px-5 md:py-2.5 bg-indigo-50/70 dark:bg-indigo-950/30 border-t border-indigo-200/70 dark:border-indigo-900/60 flex items-center justify-between text-xs md:text-sm font-bold">
+                    <span className="text-indigo-900 dark:text-indigo-200">
+                      Filtered Selection ({filteredExpenseRows.length} of {unifiedExpenseRows.length})
+                    </span>
+                    <div className="font-mono flex items-center gap-3 md:gap-4">
+                      <span className="text-indigo-700/80 dark:text-indigo-300/80 font-normal text-[10px] md:text-xs">
+                        Est {currencySymbol}{formatNumber(filteredExpenseEstimated)}
+                      </span>
+                      <span className="text-indigo-700 dark:text-indigo-300 text-xs md:text-sm">
+                        Paid {currencySymbol}{formatNumber(filteredExpenseActual)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div className="border-t border-slate-200 dark:border-slate-800 divide-y divide-slate-200/70 dark:divide-slate-800 md:divide-y-0 md:grid md:grid-cols-2 md:divide-x md:divide-slate-200 dark:md:divide-slate-800">
+                  <div className="px-3.5 py-2.5 md:px-5 md:py-3 bg-slate-50 dark:bg-slate-800/80 flex items-center justify-between text-xs md:text-sm font-bold">
+                    <span className="text-slate-800 dark:text-slate-200">
+                      Total Outflows ({unifiedExpenseRows.length})
+                    </span>
+                    <div className="font-mono flex items-center gap-3 md:gap-4">
+                      <span className="text-slate-500 font-normal text-[10px] md:text-xs">
+                        Est {currencySymbol}{formatNumber(totalExpenseEstimated)}
+                      </span>
+                      <span className="text-rose-600 dark:text-rose-400 text-xs md:text-sm">
+                        {currencySymbol}{formatNumber(totalExpenseActual)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="px-3.5 py-2.5 md:px-5 md:py-3 bg-emerald-50/70 dark:bg-emerald-950/30 flex items-center justify-between text-xs md:text-sm font-bold">
+                    <span className="text-emerald-900 dark:text-emerald-200">
+                      Net Remaining (Income − Outflows)
+                    </span>
+                    <div className="font-mono flex items-center gap-3 md:gap-4">
+                      <span className="text-emerald-700/80 dark:text-emerald-300/80 font-normal text-[10px] md:text-xs">
+                        Est {currencySymbol}{formatNumber(remainingExtraEstimated)}
+                      </span>
+                      <span className="text-emerald-700 dark:text-emerald-300 text-xs md:text-sm">
+                        {currencySymbol}{formatNumber(remainingExtra)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+            /* #1 & #2: SIMPLIFIED EXPENSES & OUTFLOWS TABLE (Compact on Mobile, Well-Proportioned on PC) */
+            <div className="overflow-x-auto scrollbar-thin">
+              <table className="w-full text-left text-xs md:text-[13px] font-mono border-separate border-spacing-0 whitespace-nowrap">
+                <thead className="bg-slate-50/90 dark:bg-slate-800/60 text-[11px] md:text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 font-sans font-semibold">
+                  <tr>
+                    {/* Column 1: Item & Category (Frozen Left, Reduced Width on Mobile, Default Width on PC) */}
+                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none border-b border-r border-slate-200/80 dark:border-slate-800 truncate">
                       Item
                     </th>
 
-                    {/* Column 3: Estimated Cost */}
-                    <th className="py-2.5 px-3 text-right bg-amber-50/60 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 border-b border-r border-slate-200 dark:border-slate-700">
-                      Estimated Cost
+                    {/* Column 2: Estimated */}
+                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
+                      Estimated
                     </th>
 
-                    {/* Column 4: Actual Cost */}
-                    <th className="py-2.5 px-3 text-right bg-rose-50/50 dark:bg-rose-950/20 font-bold border-b border-r border-slate-200 dark:border-slate-700">
-                      Actual Cost
-                    </th>
-                    
-                    {/* Payment Breakdown Columns (5-10) */}
-                    <th className="py-2.5 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      Cash
-                    </th>
-                    <th className="py-2.5 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      Credit Card
-                    </th>
-                    <th className="py-2.5 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      GCash Transfer
-                    </th>
-                    <th className="py-2.5 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      Kath Account
-                    </th>
-                    <th className="py-2.5 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      Check Account
-                    </th>
-                    <th className="py-2.5 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      Bank Transfer
+                    {/* Column 3: Actual */}
+                    <th className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-200/80 dark:border-slate-800">
+                      Actual
                     </th>
 
-                    {/* Column 12: Difference */}
-                    <th className="py-2.5 px-3 text-right border-b border-r border-slate-200 dark:border-slate-700">Difference</th>
-
-                    {/* Column 13: Reference */}
-                    <th className="py-2.5 px-3 border-b border-r border-slate-200 dark:border-slate-700 font-sans">Reference</th>
-
-                    {/* Frozen Right Column: Status */}
-                    <th className="sticky right-[64px] z-20 w-[88px] min-w-[88px] max-w-[88px] bg-slate-100 dark:bg-slate-800 py-2.5 px-1.5 text-center border-b border-l-2 border-slate-300 dark:border-slate-600 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)] font-sans">
-                      Status
+                    {/* Column 4: Payment Mode (Reduced Width with Ellipsis on Mobile, Expanded Width on PC) */}
+                    <th className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] text-left border-b border-slate-200/80 dark:border-slate-800 truncate">
+                      Mode
                     </th>
 
-                    {/* Frozen Right Column: Action */}
-                    <th className="sticky right-0 z-20 w-[64px] min-w-[64px] max-w-[64px] bg-slate-100 dark:bg-slate-800 py-2.5 px-1 text-center font-sans border-b border-l border-slate-200 dark:border-slate-700">
+                    {/* Column 5: Action (Frozen Right on Desktop) */}
+                    <th className="md:sticky md:right-0 md:z-20 w-[64px] md:w-[88px] bg-slate-50 dark:bg-slate-800 py-2 px-2 md:py-2.5 md:px-3.5 text-right border-b border-l border-slate-200/80 dark:border-slate-800">
                       Action
                     </th>
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {unifiedExpenseRows.map((exp) => {
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                  {filteredExpenseRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center font-sans text-xs md:text-sm text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
+                        <div className="space-y-2">
+                          <div>No matching budget items found for this filter.</div>
+                          {isExpenseFiltered && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMobileExpenseFilter('all');
+                                setPaymentMethodFilter(null);
+                                setExpenseSearchQuery('');
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              <span>Clear Filters</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : filteredExpenseRows.map((exp) => {
                     const est = exp.estimatedCost;
                     const act = exp.actualCost;
                     const diff = exp.hasActualCost ? est - act : est;
                     const isSaving = exp.type === 'saving' || exp.category === 'Savings';
-
-                    const cash = getMethodAmount(exp, 'Cash');
-                    const cc = getMethodAmount(exp, 'Credit Card');
-                    const gcash = getMethodAmount(exp, 'GCash Transfer');
-                    const kath = getMethodAmount(exp, 'Kath Account');
-                    const chk = getMethodAmount(exp, 'Checking Account');
-                    const bank = getMethodAmount(exp, 'Bank Transfer');
+                    const isPaid = exp.status === 'Paid' && exp.hasActualCost;
+                    const canQuickPay = !isPaid && (est > 0 || act > 0);
+                    const activeChannels = getActivePaymentChannels(exp);
+                    const categorySubtitle =
+                      isSaving && exp.savingAccountName
+                        ? `${exp.category} · ${exp.savingAccountName}`
+                        : exp.category;
 
                     return (
                       <tr
                         key={exp.id}
                         onClick={() => handleOpenRow(exp)}
-                        className={`hover:bg-slate-100/70 dark:hover:bg-slate-800/50 transition-colors cursor-pointer group ${
-                          isSaving ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
+                        className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group ${
+                          isSaving ? 'bg-indigo-50/15 dark:bg-indigo-950/15' : ''
                         }`}
                       >
-                        {/* Column 1: Category (unfrozen) */}
-                        <td className="py-2 px-2.5 min-w-[95px] font-sans font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-100 dark:border-slate-800 truncate">
-                          <div className="truncate">
-                            {isSaving && (
-                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500 mr-1" />
+                        {/* Column 1: Item + Category (Frozen Left, Reduced Width on Mobile, Default Width on PC) */}
+                        <td
+                          className={`sticky left-0 z-10 py-1.5 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans border-b border-r border-slate-100 dark:border-slate-800/80 ${
+                            isSaving
+                              ? 'bg-indigo-50 dark:bg-slate-900'
+                              : 'bg-white dark:bg-slate-900'
+                          } group-hover:bg-slate-50 dark:group-hover:bg-slate-800`}
+                          title={`${exp.item} (${categorySubtitle})`}
+                        >
+                          <div className="flex items-center gap-1 md:gap-1.5 min-w-0">
+                            {isPaid && (
+                              <CheckCircle2 className="w-3 h-3 md:w-3.5 md:h-3.5 text-emerald-500 shrink-0" />
                             )}
-                            {exp.category}
-                          </div>
-                        </td>
-
-                        {/* Column 2: Item (unfrozen) */}
-                        <td className="py-2 px-2.5 min-w-[140px] font-sans font-medium text-slate-900 dark:text-slate-100 border-b border-r border-slate-100 dark:border-slate-800">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="truncate">{exp.item}</span>
-                            {isSaving && (
-                              <div className="flex items-center gap-1 shrink-0">
-                                <span className="px-1 py-0.5 rounded text-[9px] bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 font-semibold">
-                                  Funds
-                                </span>
-                                {exp.savingAccountName && (
-                                  <span
-                                    className="px-1.5 py-0.5 rounded text-[9px] bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200/80 dark:border-emerald-800/80 hidden sm:inline-block truncate max-w-[120px]"
-                                    title={`Deposits to ${exp.savingAccountName}`}
-                                  >
-                                    &rarr; {exp.savingAccountName}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Column 3: Estimated Cost */}
-                        <td className="py-2 px-3 text-right font-bold text-slate-800 dark:text-slate-200 bg-amber-50/20 dark:bg-amber-950/10 border-b border-r border-slate-100 dark:border-slate-800">
-                          {est > 0 ? (
-                            `${currencySymbol}${formatNumber(est)}`
-                          ) : (
-                            <span className="text-slate-400 font-normal text-xs" title="Unplanned entry (No baseline estimate)">—</span>
-                          )}
-                        </td>
-
-                        {/* Column 4: Actual Cost */}
-                        <td className="py-2 px-3 text-right font-bold text-slate-900 dark:text-white bg-rose-50/20 dark:bg-rose-950/10 border-b border-r border-slate-100 dark:border-slate-800">
-                          {exp.hasActualCost ? (
-                            `${currencySymbol}${formatNumber(act)}`
-                          ) : (
-                            <span className="text-slate-400 font-sans text-[10px] group-hover:text-indigo-600 transition-colors">
-                              Record actual
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Columns 5-10: Payment Breakdown */}
-                        <td className="py-2 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-100 dark:border-slate-800">
-                          {cash > 0 ? `${currencySymbol}${formatNumber(cash)}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-100 dark:border-slate-800">
-                          {cc > 0 ? `${currencySymbol}${formatNumber(cc)}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-100 dark:border-slate-800">
-                          {gcash > 0 ? `${currencySymbol}${formatNumber(gcash)}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-100 dark:border-slate-800">
-                          {kath > 0 ? `${currencySymbol}${formatNumber(kath)}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">
-                          {chk > 0 ? `${currencySymbol}${formatNumber(chk)}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-right text-slate-600 dark:text-slate-400 border-b border-r border-slate-100 dark:border-slate-800">
-                          {bank > 0 ? `${currencySymbol}${formatNumber(bank)}` : '—'}
-                        </td>
-
-                        {/* Column 12: Difference */}
-                        <td className="py-2 px-3 text-right font-medium border-b border-r border-slate-100 dark:border-slate-800">
-                          {exp.hasActualCost ? (
                             <span
-                              className={
-                                diff < 0
-                                  ? 'text-rose-600 font-bold'
-                                  : diff > 0
-                                  ? 'text-emerald-600'
-                                  : 'text-slate-400'
+                              className={`text-xs md:text-sm truncate ${
+                                isPaid
+                                  ? 'font-medium text-slate-900 dark:text-slate-100'
+                                  : 'font-semibold text-slate-900 dark:text-white'
+                              }`}
+                            >
+                              {exp.item}
+                            </span>
+                          </div>
+                          <div
+                            className={`text-[10px] md:text-xs truncate leading-tight ${
+                              isSaving
+                                ? 'text-indigo-600 dark:text-indigo-400 font-medium'
+                                : 'text-slate-400 dark:text-slate-500'
+                            }`}
+                          >
+                            {categorySubtitle}
+                          </div>
+                        </td>
+
+                        {/* Column 2: Estimated */}
+                        <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800/80">
+                          {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
+                        </td>
+
+                        {/* Column 3: Actual (Shows quick Pay button when pending, or Actual + subtle variance when paid) */}
+                        <td className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
+                          {isPaid ? (
+                            <div className="leading-tight">
+                              <div
+                                className={`font-bold ${
+                                  isSaving
+                                    ? 'text-indigo-600 dark:text-indigo-400'
+                                    : 'text-slate-900 dark:text-white'
+                                }`}
+                              >
+                                {currencySymbol}{formatNumber(act)}
+                              </div>
+                              {est > 0 && diff !== 0 && (
+                                <div
+                                  className={`text-[10px] md:text-[11px] ${
+                                    diff < 0 ? 'text-rose-500' : 'text-emerald-600'
+                                  }`}
+                                >
+                                  {diff < 0
+                                    ? `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`
+                                    : `Saved ${currencySymbol}${formatNumber(diff)}`}
+                                </div>
+                              )}
+                            </div>
+                          ) : canQuickPay ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleQuickConfirmEstimate(exp);
+                              }}
+                              className="inline-flex items-center gap-1 ml-auto px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans rounded-md text-[10px] md:text-xs font-semibold transition-colors cursor-pointer"
+                              title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Paid`}
+                            >
+                              <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                              <span>Pay</span>
+                            </button>
+                          ) : (
+                            <span className="text-slate-300 dark:text-slate-600">—</span>
+                          )}
+                        </td>
+
+                        {/* Column 4: Payment Mode (Reduced Width + Ellipsis on Mobile, Full Readable Width on PC) */}
+                        <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800/80 truncate">
+                          {!isPaid || activeChannels.length === 0 ? (
+                            <span className="text-slate-300 dark:text-slate-600 font-mono">—</span>
+                          ) : activeChannels.length === 1 ? (
+                            <div
+                              className="truncate"
+                              title={
+                                exp.reference
+                                  ? `${activeChannels[0].label} · ${exp.reference}`
+                                  : activeChannels[0].label
                               }
                             >
-                              {diff < 0
-                                ? `-${currencySymbol}${formatNumber(Math.abs(diff))}`
-                                : `${currencySymbol}${formatNumber(diff)}`}
-                            </span>
+                              {activeChannels[0].label}
+                              {exp.reference ? ` · ${exp.reference}` : ''}
+                            </div>
                           ) : (
-                            <span className="text-slate-400 text-[10px]">Pending</span>
+                            <div
+                              className="text-indigo-600 dark:text-indigo-400 font-medium truncate"
+                              title={activeChannels
+                                .map((c) => `${c.label}: ${currencySymbol}${formatNumber(c.amount)}`)
+                                .join(' | ')}
+                            >
+                              Split ({activeChannels.map((c) => c.label).join(', ')})
+                            </div>
                           )}
                         </td>
 
-                        {/* Column 13: Reference */}
-                        <td className="py-2 px-3 font-sans text-slate-500 text-[10px] truncate max-w-[120px] border-b border-r border-slate-100 dark:border-slate-800">
-                          {exp.reference || '—'}
-                        </td>
-
-                        {/* Frozen Right Column: Status */}
+                        {/* Column 5: Action (Frozen Right on Desktop) */}
                         <td
-                          className={`sticky right-[64px] z-10 w-[88px] min-w-[88px] max-w-[88px] py-2 px-1.5 text-center font-sans border-b border-l-2 border-slate-300 dark:border-slate-600 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)] ${
-                            isSaving ? 'bg-indigo-50 dark:bg-slate-900' : 'bg-white dark:bg-slate-900'
-                          } group-hover:bg-slate-100 dark:group-hover:bg-slate-800`}
+                          className={`md:sticky md:right-0 md:z-10 py-1.5 px-2 md:py-2.5 md:px-3.5 text-right font-sans whitespace-nowrap border-b border-l border-slate-100 dark:border-slate-800/80 ${
+                            isSaving
+                              ? 'bg-indigo-50 dark:bg-slate-900'
+                              : 'bg-white dark:bg-slate-900'
+                          } group-hover:bg-slate-50 dark:group-hover:bg-slate-800`}
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          {exp.status === 'Paid' ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                              <CheckCircle2 className="w-2.5 h-2.5" />
-                              Paid
-                            </span>
-                          ) : exp.status === 'Scheduled' ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                              <Clock className="w-2.5 h-2.5" />
-                              Scheduled
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
-                              <Clock className="w-2.5 h-2.5" />
-                              Pending
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Frozen Right Column: Action */}
-                        <td className={`sticky right-0 z-10 w-[64px] min-w-[64px] max-w-[64px] py-2 px-1 text-center whitespace-nowrap border-b border-l border-slate-200 dark:border-slate-700 ${
-                          isSaving ? 'bg-indigo-50 dark:bg-slate-900' : 'bg-white dark:bg-slate-900'
-                        } group-hover:bg-slate-100 dark:group-hover:bg-slate-800`} onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-center gap-1">
-                            {exp.isVirtualEstimate && exp.estimatedCost > 0 && (
-                              <button
-                                onClick={() => handleQuickConfirmEstimate(exp)}
-                                className="p-1 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 rounded"
-                                title={`Quick confirm ${currencySymbol}${formatNumber(exp.estimatedCost)} as Paid`}
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                              </button>
-                            )}
+                          <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => handleOpenRow(exp)}
-                              className="p-1 text-slate-400 hover:text-indigo-600 rounded"
-                              title={exp.hasActualCost ? 'Edit entry' : 'Record actual'}
+                              className="p-1 md:p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              title={isPaid ? 'Edit entry' : 'Record actual'}
                             >
-                              <Edit2 className="w-3.5 h-3.5" />
+                              <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                             </button>
                             {!exp.isVirtualEstimate && (
                               <button
                                 onClick={() => onDeleteEntry(exp.id)}
-                                className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                                className="p-1 md:p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
                                 title="Reset to estimate"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                               </button>
                             )}
                           </div>
@@ -1774,210 +2464,118 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     );
                   })}
 
+                  {/* FILTERED SUBTOTAL ROW (Shown when a filter or search is active) */}
+                  {isExpenseFiltered && filteredExpenseRows.length > 0 && (
+                    <tr className="bg-indigo-50/70 dark:bg-indigo-950/30 font-bold text-indigo-900 dark:text-indigo-200 border-t border-indigo-200/70 dark:border-indigo-900/60">
+                      <td className="sticky left-0 z-10 bg-indigo-50 dark:bg-slate-900 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm border-b border-r border-indigo-200/70 dark:border-indigo-900/60 truncate">
+                        <div className="truncate">Filtered Subtotal</div>
+                        <div className="text-[10px] md:text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 truncate">
+                          {filteredExpenseRows.length} of {unifiedExpenseRows.length} items
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-800 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
+                        {currencySymbol}{formatNumber(filteredExpenseEstimated)}
+                      </td>
+                      <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-700 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
+                        {currencySymbol}{formatNumber(filteredExpenseActual)}
+                      </td>
+                      <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 border-b border-indigo-200/70 dark:border-indigo-900/60 truncate">
+                        Filtered
+                      </td>
+                      <td className="md:sticky md:right-0 md:z-10 bg-indigo-50 dark:bg-slate-900 border-b border-l border-indigo-200/70 dark:border-indigo-900/60"></td>
+                    </tr>
+                  )}
+
                   {/* SUMMARY TOTALS ROW */}
-                  <tr className="bg-slate-100/90 dark:bg-slate-800/90 font-bold text-slate-900 dark:text-white border-t-2 border-slate-300 dark:border-slate-700">
-                    <td
-                      colSpan={2}
-                      className="py-3 px-3 font-sans uppercase tracking-wider text-[11px] border-b border-r border-slate-200 dark:border-slate-700"
-                    >
-                      Total Expense &amp; Outflows
+                  <tr className="bg-slate-50 dark:bg-slate-800/80 font-bold text-slate-900 dark:text-white border-t border-slate-200 dark:border-slate-700">
+                    <td className="sticky left-0 z-10 bg-slate-50 dark:bg-slate-800 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm border-b border-r border-slate-200/80 dark:border-slate-700 truncate">
+                      <div className="truncate">Total Outflows</div>
+                      <div className="text-[10px] md:text-xs font-normal text-slate-500 dark:text-slate-400 truncate">
+                        {unifiedExpenseRows.length} items
+                      </div>
                     </td>
-                    <td className="py-3 px-3 text-right font-mono text-xs text-amber-800 dark:text-amber-300 border-b border-r border-slate-200 dark:border-slate-700">
+                    <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-slate-600 dark:text-slate-300 border-b border-slate-200/80 dark:border-slate-700">
                       {currencySymbol}{formatNumber(totalExpenseEstimated)}
                     </td>
-                    <td className="py-3 px-3 text-right text-rose-600 dark:text-rose-400 text-xs font-mono border-b border-r border-slate-200 dark:border-slate-700">
+                    <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-rose-600 dark:text-rose-400 text-xs md:text-sm font-mono border-b border-slate-200/80 dark:border-slate-700">
                       {currencySymbol}{formatNumber(totalExpenseActual)}
                     </td>
-
-                    {/* Breakdown Totals */}
-                    <td className="py-3 px-2.5 text-right font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(paymentTotals.Cash || 0)}
+                    <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs font-normal text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-700 truncate">
+                      —
                     </td>
-                    <td className="py-3 px-2.5 text-right font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(paymentTotals['Credit Card'] || 0)}
-                    </td>
-                    <td className="py-3 px-2.5 text-right font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(paymentTotals['GCash Transfer'] || 0)}
-                    </td>
-                    <td className="py-3 px-2.5 text-right font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(paymentTotals['Kath Account'] || 0)}
-                    </td>
-                    <td className="py-3 px-2.5 text-right font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(paymentTotals['Checking Account'] || 0)}
-                    </td>
-                    <td className="py-3 px-2.5 text-right font-medium text-slate-700 dark:text-slate-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(paymentTotals['Bank Transfer'] || 0)}
-                    </td>
-
-                    <td className="py-3 px-3 text-right text-rose-600 font-mono border-b border-r border-slate-200 dark:border-slate-700">
-                      {expenseDifference < 0
-                        ? `-${currencySymbol}${formatNumber(Math.abs(expenseDifference))}`
-                        : `${currencySymbol}${formatNumber(expenseDifference)}`}
-                    </td>
-                    {/* Reference empty */}
-                    <td className="py-3 px-3 border-b border-r border-slate-200 dark:border-slate-700"></td>
-                    {/* Frozen Right Column: Status */}
-                    <td className="sticky right-[64px] z-10 w-[88px] min-w-[88px] max-w-[88px] bg-slate-100 dark:bg-slate-800 py-3 px-1.5 border-b border-l-2 border-slate-300 dark:border-slate-600 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)]"></td>
-                    {/* Frozen Right Column: Action */}
-                    <td className="sticky right-0 z-10 w-[64px] min-w-[64px] max-w-[64px] bg-slate-100 dark:bg-slate-800 py-3 px-1 border-b border-l border-slate-200 dark:border-slate-700"></td>
-                  </tr>
-
-                  {/* Summary Income Row */}
-                  <tr className="bg-slate-50 dark:bg-slate-850 font-semibold text-slate-700 dark:text-slate-300">
-                    <td
-                      colSpan={2}
-                      className="py-2.5 px-3 font-sans border-b border-r border-slate-200 dark:border-slate-700"
-                    >
-                      Income
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-emerald-700 dark:text-emerald-300 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(totalIncomeEstimated)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400 border-b border-r border-slate-200 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(totalIncomeActual)}
-                    </td>
-                    <td colSpan={8} className="border-b border-slate-200 dark:border-slate-700"></td>
-                    {/* Frozen Right Column: Status */}
-                    <td className="sticky right-[64px] z-10 w-[88px] min-w-[88px] max-w-[88px] bg-slate-50 dark:bg-slate-850 border-b border-l-2 border-slate-300 dark:border-slate-600 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)]"></td>
-                    {/* Frozen Right Column: Action */}
-                    <td className="sticky right-0 z-10 w-[64px] min-w-[64px] max-w-[64px] bg-slate-50 dark:bg-slate-850 border-b border-l border-slate-200 dark:border-slate-700"></td>
+                    <td className="md:sticky md:right-0 md:z-10 bg-slate-50 dark:bg-slate-800 border-b border-l border-slate-200/80 dark:border-slate-700"></td>
                   </tr>
 
                   {/* REMAINING EXTRA SALARY ROW */}
-                  <tr className="bg-gradient-to-r from-emerald-100/80 to-teal-100/80 dark:from-emerald-950/60 dark:to-teal-950/60 font-bold text-slate-900 dark:text-white border-t border-emerald-300 dark:border-emerald-800">
-                    <td
-                      colSpan={2}
-                      className="py-3 px-3 font-sans text-xs text-emerald-900 dark:text-emerald-200 border-b border-r border-emerald-200 dark:border-emerald-800"
-                    >
-                      Extra / Remaining to Salary
+                  <tr className="bg-emerald-50/60 dark:bg-emerald-950/30 font-bold text-slate-900 dark:text-white">
+                    <td className="sticky left-0 z-10 bg-emerald-50 dark:bg-emerald-950 py-2 px-2.5 md:py-2.5 md:px-4 w-[125px] max-w-[125px] md:w-[260px] lg:w-[320px] md:max-w-none font-sans text-xs md:text-sm text-emerald-900 dark:text-emerald-200 border-r border-emerald-200/70 dark:border-emerald-800/70 truncate">
+                      <div className="truncate">Net Remaining</div>
+                      <div className="text-[10px] md:text-xs font-normal text-emerald-700 dark:text-emerald-300 truncate">
+                        Income − Outflows
+                      </div>
                     </td>
-                    <td className="py-3 px-3 text-right font-mono text-xs text-emerald-800 dark:text-emerald-300 border-b border-r border-emerald-200 dark:border-emerald-800">
-                      {currencySymbol}{formatNumber(remainingExtraEstimated)} (Est)
+                    <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-emerald-800 dark:text-emerald-300">
+                      {currencySymbol}{formatNumber(remainingExtraEstimated)}
                     </td>
-                    <td className="py-3 px-3 text-right font-mono text-sm text-emerald-700 dark:text-emerald-300 border-b border-r border-emerald-200 dark:border-emerald-800">
+                    <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-emerald-700 dark:text-emerald-300">
                       {currencySymbol}{formatNumber(remainingExtra)}
                     </td>
-                    <td colSpan={8} className="py-3 px-3 font-sans text-[11px] text-emerald-800 dark:text-emerald-300 border-b border-emerald-200 dark:border-emerald-800">
-                      {totalIncomeActual > 0
-                        ? `₱${formatNumber(remainingExtra)} remaining from your recorded salary!`
-                        : `₱${formatNumber(remainingExtraEstimated)} projected remaining from estimated budget.`}
+                    <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[160px] md:max-w-[260px] lg:max-w-[340px] font-sans text-[11px] md:text-xs font-normal text-emerald-800 dark:text-emerald-300 truncate">
+                      {currentRemainingPaid >= 0 ? 'Surplus' : 'Deficit'}
                     </td>
-                    {/* Frozen Right Column: Status */}
-                    <td className="sticky right-[64px] z-10 w-[88px] min-w-[88px] max-w-[88px] bg-emerald-100 dark:bg-emerald-950 border-b border-l-2 border-emerald-300 dark:border-emerald-800 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.12)]"></td>
-                    {/* Frozen Right Column: Action */}
-                    <td className="sticky right-0 z-10 w-[64px] min-w-[64px] max-w-[64px] bg-emerald-100 dark:bg-emerald-950 border-b border-l border-emerald-300 dark:border-emerald-800"></td>
+                    <td className="md:sticky md:right-0 md:z-10 bg-emerald-50 dark:bg-emerald-950 border-l border-emerald-200/70 dark:border-emerald-800/70"></td>
                   </tr>
-
                 </tbody>
               </table>
             </div>
-          </div>
-
-          {/* Payment Channel Breakdown Card */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs p-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 rounded-xl">
-                  <CreditCard className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                    Payment Channel Breakdown ({selectedPeriod})
-                  </h4>
-                  <span className="text-[11px] text-slate-500">
-                    Distribution of actual recorded expenses across payment methods
-                  </span>
-                </div>
-              </div>
-              <div className="text-right text-xs">
-                <span className="text-slate-400 mr-1">Total Actual:</span>
-                <span className="font-mono font-bold text-slate-900 dark:text-white">
-                  {currencySymbol}{formatNumber(totalExpenseActual)}
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4 text-xs">
-              {PAYMENT_METHODS.map((method) => {
-                const amt = paymentTotals[method] || 0;
-                const pct = totalExpenseActual > 0 ? (amt / totalExpenseActual) * 100 : 0;
-                return (
-                  <div
-                    key={method}
-                    className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-3 border border-slate-100 dark:border-slate-800"
-                  >
-                    <span className="text-slate-500 text-[11px] block truncate" title={method}>
-                      {method}
-                    </span>
-                    <span className="font-mono font-bold text-sm text-slate-900 dark:text-white mt-1 block">
-                      {currencySymbol}{formatNumber(amt)}
-                    </span>
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
-                      {pct > 0 ? `${pct.toFixed(0)}% of total` : '—'}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+            )}
           </div>
 
         </div>
 
-      {/* MODAL: ADD / EDIT ENTRY WITH PRE-POPULATED ESTIMATE TEXT AND SALARY HUD */}
+      {/* MODAL: COMPACT, DECLUTTERED ADD / EDIT ENTRY */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-md sm:max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[92vh] sm:max-h-[88vh] overflow-hidden flex flex-col">
             
-            {/* Modal Header (Always Visible) */}
-            <div className="p-5 sm:p-6 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div className={`p-2.5 rounded-2xl ${
-                  modalType === 'income'
-                    ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400'
-                    : modalType === 'saving'
-                    ? 'bg-teal-50 text-teal-600 dark:bg-teal-950 dark:text-teal-400'
-                    : 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400'
-                }`}>
-                  {modalType === 'income' ? (
-                    <TrendingUp className="w-5 h-5" />
-                  ) : modalType === 'saving' ? (
-                    <PiggyBank className="w-5 h-5" />
-                  ) : (
-                    <Receipt className="w-5 h-5" />
-                  )}
-                </div>
-                <div>
-                  <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                    {editingEntryId
-                      ? 'Update Entry'
+            {/* Compact Modal Header */}
+            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-slate-50/90 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 shrink-0 space-y-2 sm:space-y-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div className={`p-1.5 sm:p-2 rounded-xl shrink-0 ${
+                    modalType === 'income'
+                      ? 'bg-emerald-100/80 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400'
                       : modalType === 'saving'
-                      ? 'New Funds'
-                      : `New ${modalType.charAt(0).toUpperCase() + modalType.slice(1)}`}
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Recording for {modalPeriod} ({budget.year})
-                  </p>
+                      ? 'bg-indigo-100/80 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400'
+                      : 'bg-rose-100/80 text-rose-600 dark:bg-rose-950 dark:text-rose-400'
+                  }`}>
+                    {modalType === 'income' ? (
+                      <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    ) : modalType === 'saving' ? (
+                      <PiggyBank className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    ) : (
+                      <Receipt className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                      {editingEntryId
+                        ? 'Update Entry'
+                        : isRowAction
+                        ? 'Record Actual'
+                        : modalType === 'saving'
+                        ? 'New Fund Allocation'
+                        : `New ${modalType.charAt(0).toUpperCase() + modalType.slice(1)}`}
+                    </h3>
+                    <span className="px-1.5 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-700 text-[10px] font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+                      {modalPeriod} {budget.year}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAddModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-xl hover:bg-slate-200/50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-                title="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            {/* Modal Body (Scrollable) */}
-            <div className="p-5 sm:p-6 overflow-y-auto flex-1">
-              <form id="spreadsheet-entry-form" onSubmit={handleSubmitForm} className="space-y-5">
-                {/* 3. TYPE SWITCHER */}
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">
-                    Entry Type
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* Desktop Inline Entry Type Segmented Pill */}
+                  <div className="hidden sm:flex items-center bg-slate-200/70 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px]">
                     <button
                       type="button"
                       onClick={() => {
@@ -1986,18 +2584,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           setFormCategory(expenseCategories[0] || 'Budget');
                         } else {
                           const firstTpl = itemTemplates.find((t) => t.type === 'expense');
-                          if (firstTpl) {
-                            handleSelectTemplate(firstTpl.id);
-                          } else {
+                          if (firstTpl) handleSelectTemplate(firstTpl.id);
+                          else {
                             setFormCategory(expenseCategories[0] || 'Budget');
                             setSelectedTemplateId('');
                           }
                         }
                       }}
-                      className={`py-2 rounded-xl font-semibold border transition-all cursor-pointer ${
+                      className={`px-2 py-1 rounded-md font-semibold transition-all cursor-pointer ${
                         modalType === 'expense'
-                          ? 'bg-rose-50 dark:bg-rose-950/80 border-rose-400 text-rose-700 dark:text-rose-300 shadow-2xs'
-                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                          ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                       }`}
                     >
                       Expense
@@ -2010,18 +2607,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           setFormCategory(incomeCategories[0] || 'Salary');
                         } else {
                           const firstTpl = itemTemplates.find((t) => t.type === 'income');
-                          if (firstTpl) {
-                            handleSelectTemplate(firstTpl.id);
-                          } else {
+                          if (firstTpl) handleSelectTemplate(firstTpl.id);
+                          else {
                             setFormCategory(incomeCategories[0] || 'Salary');
                             setSelectedTemplateId('');
                           }
                         }
                       }}
-                      className={`py-2 rounded-xl font-semibold border transition-all cursor-pointer ${
+                      className={`px-2 py-1 rounded-md font-semibold transition-all cursor-pointer ${
                         modalType === 'income'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/80 border-emerald-400 text-emerald-700 dark:text-emerald-300 shadow-2xs'
-                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                          ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                       }`}
                     >
                       Income
@@ -2031,41 +2627,128 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       onClick={() => {
                         setModalType('saving');
                         setIsCreatingNewSinkingFund(false);
+                        const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
                         if (entrySourceMode === 'unplanned') {
-                          const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
                           setFormCategory(savingCategories[0] || 'General Savings');
                           setFormItem(defaultFund);
                         } else {
                           const firstTpl = itemTemplates.find((t) => t.type === 'saving');
-                          if (firstTpl) {
-                            handleSelectTemplate(firstTpl.id);
-                          } else {
-                            const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
+                          if (firstTpl) handleSelectTemplate(firstTpl.id);
+                          else {
                             setFormCategory(savingCategories[0] || 'General Savings');
                             setFormItem(defaultFund);
                             setSelectedTemplateId('');
                           }
                         }
                       }}
-                      className={`py-2 rounded-xl font-semibold border transition-all cursor-pointer ${
+                      className={`px-2 py-1 rounded-md font-semibold transition-all cursor-pointer ${
                         modalType === 'saving'
-                          ? 'bg-indigo-50 dark:bg-indigo-950/80 border-indigo-400 text-indigo-700 dark:text-indigo-300 shadow-2xs'
-                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                          ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                       }`}
                     >
                       Funds
                     </button>
                   </div>
-                </div>
 
-                {/* 4. ITEM SELECTION & PRE-POPULATED ESTIMATE SELECTOR / UNPLANNED MODE */}
+                  <button
+                    type="button"
+                    onClick={() => setIsAddModalOpen(false)}
+                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Mobile Full-Width Entry Type Segmented Pill */}
+              <div className="grid grid-cols-3 gap-1 sm:hidden bg-slate-200/70 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalType('expense');
+                    if (entrySourceMode === 'unplanned') {
+                      setFormCategory(expenseCategories[0] || 'Budget');
+                    } else {
+                      const firstTpl = itemTemplates.find((t) => t.type === 'expense');
+                      if (firstTpl) handleSelectTemplate(firstTpl.id);
+                      else {
+                        setFormCategory(expenseCategories[0] || 'Budget');
+                        setSelectedTemplateId('');
+                      }
+                    }
+                  }}
+                  className={`py-1 rounded-md font-semibold transition-all cursor-pointer text-center ${
+                    modalType === 'expense'
+                      ? 'bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Expense
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalType('income');
+                    if (entrySourceMode === 'unplanned') {
+                      setFormCategory(incomeCategories[0] || 'Salary');
+                    } else {
+                      const firstTpl = itemTemplates.find((t) => t.type === 'income');
+                      if (firstTpl) handleSelectTemplate(firstTpl.id);
+                      else {
+                        setFormCategory(incomeCategories[0] || 'Salary');
+                        setSelectedTemplateId('');
+                      }
+                    }
+                  }}
+                  className={`py-1 rounded-md font-semibold transition-all cursor-pointer text-center ${
+                    modalType === 'income'
+                      ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Income
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalType('saving');
+                    setIsCreatingNewSinkingFund(false);
+                    const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
+                    if (entrySourceMode === 'unplanned') {
+                      setFormCategory(savingCategories[0] || 'General Savings');
+                      setFormItem(defaultFund);
+                    } else {
+                      const firstTpl = itemTemplates.find((t) => t.type === 'saving');
+                      if (firstTpl) handleSelectTemplate(firstTpl.id);
+                      else {
+                        setFormCategory(savingCategories[0] || 'General Savings');
+                        setFormItem(defaultFund);
+                        setSelectedTemplateId('');
+                      }
+                    }
+                  }}
+                  className={`py-1 rounded-md font-semibold transition-all cursor-pointer text-center ${
+                    modalType === 'saving'
+                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Funds
+                </button>
+              </div>
+            </div>
+
+            {/* Compact Modal Body */}
+            <div className="p-3 sm:p-4 overflow-y-auto overflow-x-hidden flex-1">
+              <form id="spreadsheet-entry-form" onSubmit={handleSubmitForm} className="space-y-2.5 sm:space-y-3.5">
+                
+                {/* 1. COMPACT SOURCE BAR (Only when adding new item) */}
                 {!isRowAction && (
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                        Item Source
-                      </span>
-                      <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <div className="bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-xl border border-slate-200/80 dark:border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
                           type="button"
                           onClick={() => {
@@ -2073,117 +2756,65 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             setSelectedTemplateId('');
                             setFormEstimated('0');
                           }}
-                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
                             entrySourceMode === 'unplanned'
-                              ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-bold'
-                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                              ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                              : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                           }`}
                         >
-                          ✨ Unplanned / One-Off
+                          One-Off
                         </button>
                         <button
                           type="button"
                           onClick={() => {
                             setEntrySourceMode('template');
                             const firstTpl = itemTemplates.find((t) => t.type === modalType);
-                            if (firstTpl) {
-                              handleSelectTemplate(firstTpl.id);
-                            }
+                            if (firstTpl) handleSelectTemplate(firstTpl.id);
                           }}
-                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
                             entrySourceMode === 'template'
-                              ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-2xs font-bold'
-                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                              ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-2xs'
+                              : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                           }`}
                         >
-                          ⚡ From Estimate Template
+                          From Template
                         </button>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsManagerModalOpen(true)}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline px-1.5 cursor-pointer shrink-0"
+                      >
+                        Manage Templates
+                      </button>
                     </div>
 
-                    {entrySourceMode === 'template' ? (
-                      <div className="p-3 bg-amber-50/70 dark:bg-amber-950/30 rounded-2xl border border-amber-200 dark:border-amber-800 animate-in fade-in duration-150">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-[11px] font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                            <span>Choose Template Item (Auto-fills Estimated Cost)</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setIsManagerModalOpen(true)}
-                            className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
-                          >
-                            Manage Templates
-                          </button>
-                        </div>
-                        <select
-                          value={selectedTemplateId}
-                          onChange={(e) => handleSelectTemplate(e.target.value)}
-                          className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500 font-medium"
-                        >
-                          <option value="">⚡ Select Item Preset...</option>
-                          {itemTemplates
-                            .filter((t) => t.type === modalType && isTemplateValidForPeriod(t, frequency, modalPeriod))
-                            .map((tpl) => (
-                              <option key={tpl.id} value={tpl.id}>
-                                {tpl.item} ({tpl.category}) — Est: {currencySymbol}{formatNumber(tpl.defaultEstimatedCost)}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <div className="px-3.5 py-2 bg-indigo-50/60 dark:bg-indigo-950/30 rounded-xl border border-indigo-200/80 dark:border-indigo-800/60 text-xs text-indigo-800 dark:text-indigo-300 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                          <span className="font-semibold">Unplanned Entry:</span>
-                          <span className="text-slate-600 dark:text-slate-400">
-                            Only Category, Item name, and Actual cost are required.
-                          </span>
-                        </div>
-                      </div>
+                    {entrySourceMode === 'template' && (
+                      <select
+                        value={selectedTemplateId}
+                        onChange={(e) => handleSelectTemplate(e.target.value)}
+                        className="w-full min-w-0 h-8 px-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-lg text-[11px] text-slate-900 dark:text-white font-medium outline-none"
+                      >
+                        <option value="">Select preset...</option>
+                        {itemTemplates
+                          .filter((t) => t.type === modalType && isTemplateValidForPeriod(t, frequency, modalPeriod))
+                          .map((tpl) => (
+                            <option key={tpl.id} value={tpl.id}>
+                              {tpl.item} ({currencySymbol}{formatNumber(tpl.defaultEstimatedCost)})
+                            </option>
+                          ))}
+                      </select>
                     )}
                   </div>
                 )}
 
-                {/* 5. CATEGORY & ITEM NAME / TARGET SINKING FUND */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-slate-600 dark:text-slate-400 font-semibold">
-                        {modalType === 'saving' ? 'Saving Category' : 'Category'}
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setIsManagerModalOpen(true)}
-                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
-                      >
-                        Manage
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      list="category-options"
-                      value={formCategory}
-                      onChange={(e) => handleCategoryChange(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                      placeholder="Select or type a category..."
-                    />
-                    <datalist id="category-options">
-                      {(modalType === 'income'
-                        ? incomeCategories
-                        : modalType === 'saving'
-                        ? savingCategories
-                        : expenseCategories
-                      ).map((cat) => (
-                        <option key={cat} value={cat} />
-                      ))}
-                    </datalist>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-slate-600 dark:text-slate-400 font-semibold">
-                        {modalType === 'saving' ? 'Target Sinking Fund (Envelope)' : 'Line Item Name'}
+                {/* 2. ITEM NAME & CATEGORY (Aligned 2-Column Grid on Mobile & Desktop) */}
+                <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 sm:gap-2.5">
+                  <div className="sm:col-span-7 min-w-0">
+                    <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                      <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                        {modalType === 'saving' ? 'Target Fund' : 'Item / Description'}
                       </label>
                       {modalType === 'saving' && isCreatingNewSinkingFund && (
                         <button
@@ -2192,9 +2823,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             setIsCreatingNewSinkingFund(false);
                             setFormItem(existingSinkingFunds[0] || formCategory || 'General Savings');
                           }}
-                          className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
+                          className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
                         >
-                          Select Existing Fund
+                          Existing
                         </button>
                       )}
                     </div>
@@ -2216,7 +2847,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             setFormCategory(normalizeSavingCategoryGroup(val, formCategory));
                           }
                         }}
-                        className="w-full px-3 py-2 bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-semibold"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-500"
                       >
                         {(() => {
                           const allFunds = Array.from(
@@ -2237,28 +2868,28 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             <optgroup key={grpName} label={grpName}>
                               {funds.map((fundName) => (
                                 <option key={fundName} value={fundName}>
-                                  🎯 {fundName}
+                                  {fundName}
                                 </option>
                               ))}
                             </optgroup>
                           ));
                         })()}
-                        <option value="__CREATE_NEW_FUND__">➕ Create a New Sinking Fund...</option>
+                        <option value="__CREATE_NEW_FUND__">+ New Sinking Fund...</option>
                       </select>
                     ) : (
-                      <div className="space-y-1.5">
+                      <div className="space-y-1">
                         <input
                           type="text"
                           required
                           list={modalType === 'saving' ? 'existing-sinking-funds-list' : undefined}
                           placeholder={
                             modalType === 'saving'
-                              ? 'Type new Sinking Fund name (e.g. Car Maintenance Fund)'
-                              : 'e.g. Electricity Bill, Groceries & Market, Emergency Fund'
+                              ? 'New Fund name...'
+                              : 'e.g. Electricity, Groceries'
                           }
                           value={formItem}
                           onChange={(e) => handleItemChange(e.target.value)}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium"
+                          className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         {modalType === 'saving' && (
                           <>
@@ -2275,9 +2906,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 closeMatch.toLowerCase() !== formItem.trim().toLowerCase()
                               ) {
                                 return (
-                                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-[11px] text-amber-800 dark:text-amber-200">
-                                    <span>
-                                      Similar to existing fund <strong>&quot;{closeMatch}&quot;</strong>
+                                  <div className="flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-[10px] text-amber-800 dark:text-amber-200">
+                                    <span className="truncate">
+                                      Match: <strong>{closeMatch}</strong>
                                     </span>
                                     <button
                                       type="button"
@@ -2285,9 +2916,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                         setIsCreatingNewSinkingFund(false);
                                         handleItemChange(closeMatch);
                                       }}
-                                      className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md cursor-pointer shrink-0"
+                                      className="px-1.5 py-0.5 bg-amber-600 text-white font-bold rounded cursor-pointer shrink-0"
                                     >
-                                      Use &quot;{closeMatch}&quot;
+                                      Use
                                     </button>
                                   </div>
                                 );
@@ -2298,97 +2929,101 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         )}
                       </div>
                     )}
-                    {modalType === 'saving' && !isCreatingNewSinkingFund && (
-                      <p className="text-[10px] text-indigo-600 dark:text-indigo-400 mt-1">
-                        Allocates directly into this existing Sinking Fund without creating duplicate funds from typos. Use Reference/Memo below for specific notes.
-                      </p>
-                    )}
+                  </div>
+
+                  <div className="sm:col-span-5 min-w-0">
+                    <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                      <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                        Category
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsManagerModalOpen(true)}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      list="category-options"
+                      value={formCategory}
+                      onChange={(e) => handleCategoryChange(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Category..."
+                    />
+                    <datalist id="category-options">
+                      {(modalType === 'income'
+                        ? incomeCategories
+                        : modalType === 'saving'
+                        ? savingCategories
+                        : expenseCategories
+                      ).map((cat) => (
+                        <option key={cat} value={cat} />
+                      ))}
+                    </datalist>
                   </div>
                 </div>
 
-                {/* 6. ESTIMATED COST & ACTUAL COST */}
-                {entrySourceMode === 'unplanned' ? (
-                  <div className="space-y-2">
-                    <div className="p-3.5 bg-rose-50/60 dark:bg-rose-950/20 rounded-xl border border-rose-200 dark:border-rose-800/60">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                          {modalType === 'income' ? 'Actual Amount Received' : 'Actual Amount Paid'} ({currencySymbol})
-                        </label>
-                        <span className="text-[10px] font-semibold text-rose-600 dark:text-rose-400">
-                          Required
-                        </span>
-                      </div>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        required
-                        placeholder="0.00"
-                        value={formActual}
-                        onChange={(e) => setFormActual(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 rounded-xl font-mono font-bold text-slate-900 dark:text-white text-base focus:ring-2 focus:ring-rose-500 outline-none"
-                      />
-                      <div className="flex items-center justify-between mt-1 text-[11px] text-slate-500">
-                        <span>Baseline Estimate: <strong className="font-mono text-slate-600 dark:text-slate-400">₱0.00 (Unplanned)</strong></span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEntrySourceMode('template');
-                            const firstTpl = itemTemplates.find((t) => t.type === modalType);
-                            if (firstTpl) handleSelectTemplate(firstTpl.id);
-                          }}
-                          className="text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                        >
-                          Have a planned estimate?
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="px-3 py-2 bg-amber-50/40 dark:bg-amber-950/20 rounded-xl border border-amber-200/70 dark:border-amber-800/50 flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="saveToTemplateSheetCheckbox"
-                        checked={saveToTemplate}
-                        onChange={(e) => setSaveToTemplate(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded text-amber-600 accent-amber-600 cursor-pointer shrink-0"
-                      />
-                      <label
-                        htmlFor="saveToTemplateSheetCheckbox"
-                        className="text-[11px] text-slate-700 dark:text-slate-300 font-medium cursor-pointer"
-                      >
-                        Also save this new item to recurring Estimate Budget Template for future periods
+                {/* 3. AMOUNTS: COMPACT SIDE-BY-SIDE OR SINGLE ACTUAL */}
+                {entrySourceMode === 'unplanned' && !isRowAction ? (
+                  <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/80">
+                    <div className="flex items-center justify-between gap-2 h-4 mb-1">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                        {modalType === 'income' ? 'Actual Amount Received' : 'Actual Amount'} ({currencySymbol})
                       </label>
+                      <button
+                        type="button"
+                        onClick={() => setEntrySourceMode('template')}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                      >
+                        + Add Estimate
+                      </button>
                     </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      required
+                      placeholder="0.00"
+                      value={formActual}
+                      onChange={(e) => setFormActual(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg font-mono font-bold text-slate-900 dark:text-white text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="p-3 bg-amber-50/50 dark:bg-amber-950/20 rounded-xl border border-amber-200 dark:border-amber-800/60">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-slate-800 dark:text-slate-200 font-bold flex items-center gap-1">
-                          <span>Estimated Cost ({currencySymbol})</span>
+                  <div className="grid grid-cols-2 gap-2 sm:gap-2.5 p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/80">
+                    <div className="min-w-0">
+                      <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                        <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 truncate">
+                          Estimated ({currencySymbol})
                         </label>
                       </div>
                       <input
                         type="number"
                         step="0.01"
-                        placeholder="e.g. 3500"
+                        placeholder="0.00"
                         value={formEstimated}
                         onChange={(e) => setFormEstimated(e.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl font-mono font-bold text-slate-900 dark:text-white text-sm"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-white dark:bg-slate-900 border border-amber-300/90 dark:border-amber-700 rounded-lg font-mono font-bold text-slate-800 dark:text-slate-200 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-amber-500"
                       />
-                      <p className="text-[10px] text-slate-500 mt-1">
-                        From your personalized estimate template.
-                      </p>
                     </div>
 
-                    <div className="p-3 bg-rose-50/50 dark:bg-rose-950/20 rounded-xl border border-rose-200 dark:border-rose-800/60">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-slate-800 dark:text-slate-200 font-bold">
-                          Actual Cost ({currencySymbol})
+                    <div className="min-w-0">
+                      <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                        <label className="text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate">
+                          Actual ({currencySymbol})
                         </label>
-                        <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold">
-                          Recorded Payment
-                        </span>
+                        {parseFloat(formEstimated) > 0 && formActual !== formEstimated && (
+                          <button
+                            type="button"
+                            onClick={() => setFormActual(formEstimated)}
+                            className="px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 rounded text-[9px] sm:text-[10px] font-semibold hover:bg-indigo-100 cursor-pointer shrink-0 leading-none"
+                            title="Copy estimated amount to actual"
+                          >
+                            = Est
+                          </button>
+                        )}
                       </div>
                       <input
                         type="number"
@@ -2397,74 +3032,118 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         placeholder="0.00"
                         value={formActual}
                         onChange={(e) => setFormActual(e.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 rounded-xl font-mono font-bold text-slate-900 dark:text-white text-sm"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-white dark:bg-slate-900 border border-rose-300/90 dark:border-rose-700 rounded-lg font-mono font-bold text-slate-900 dark:text-white text-xs sm:text-sm outline-none focus:ring-2 focus:ring-rose-500"
                       />
-                      <p className="text-[10px] text-slate-500 mt-1">
-                        Enter actual amount (0 is accepted).
-                      </p>
-                    </div>
-
-                    <div className="sm:col-span-2 px-3 py-2 bg-amber-50/40 dark:bg-amber-950/20 rounded-xl border border-amber-200/70 dark:border-amber-800/50 flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="saveToTemplateSheetCheckbox"
-                        checked={saveToTemplate}
-                        onChange={(e) => setSaveToTemplate(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded text-amber-600 accent-amber-600 cursor-pointer shrink-0"
-                      />
-                      <label
-                        htmlFor="saveToTemplateSheetCheckbox"
-                        className="text-[11px] text-slate-700 dark:text-slate-300 font-medium cursor-pointer"
-                      >
-                        Save this item &amp; estimated cost to my personal recurring Estimate Budget Template (syncs to Drive)
-                      </label>
                     </div>
                   </div>
                 )}
 
-                {/* 7. PAYMENT METHOD / CHANNEL */}
-                {modalType !== 'income' && (
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-slate-600 dark:text-slate-400 font-semibold">
-                        Payment Channel / Account
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setIsSplitPayment((prev) => !prev)}
-                        className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                      >
-                        {isSplitPayment ? 'Use Single Channel' : 'Split Across Multiple Channels'}
-                      </button>
+                {/* 4. PAYMENT CHANNEL & DESTINATION ACCOUNT / STATUS */}
+                {modalType !== 'income' ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                          <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                            <span className="sm:hidden">Channel</span>
+                            <span className="hidden sm:inline">Payment Channel</span>
+                          </label>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setIsSplitPayment((prev) => !prev)}
+                              className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer leading-none"
+                            >
+                              {isSplitPayment ? 'Single' : 'Split'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {!isSplitPayment ? (
+                          <select
+                            value={formPaymentMethod}
+                            onChange={(e) => setFormPaymentMethod(e.target.value as PaymentMethod)}
+                            className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            {PAYMENT_METHODS.map((pm) => (
+                              <option key={pm} value={pm}>
+                                {pm}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-xl text-[11px] text-indigo-700 dark:text-indigo-300 font-semibold flex items-center justify-between gap-1.5 min-w-0">
+                            <span className="truncate">Split (6)</span>
+                            <span className="font-mono shrink-0">{currencySymbol}{formatNumber(parseFloat(formActual) || 0)}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {modalType === 'saving' ? (
+                        <div className="min-w-0">
+                          <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                            <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                              <span className="sm:hidden">Dest. Account</span>
+                              <span className="hidden sm:inline">Destination Account</span>
+                            </label>
+                          </div>
+                          <select
+                            value={formSavingAccountId}
+                            onChange={(e) => setFormSavingAccountId(e.target.value)}
+                            className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white font-medium outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            {accounts.map((acc) => (
+                              <option key={acc.id} value={acc.id}>
+                                {acc.name} ({acc.type})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        <div className="min-w-0">
+                          <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                            <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                              Status
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-3 gap-0.5 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 h-8 sm:h-9 items-center">
+                            {(['Paid', 'Pending', 'Scheduled'] as const).map((st) => (
+                              <button
+                                key={st}
+                                type="button"
+                                onClick={() => setFormStatus(st)}
+                                className={`h-full rounded-lg text-[10px] sm:text-[11px] font-semibold transition-all cursor-pointer truncate px-0.5 ${
+                                  formStatus === st
+                                    ? st === 'Paid'
+                                      ? 'bg-emerald-600 text-white shadow-2xs'
+                                      : st === 'Scheduled'
+                                      ? 'bg-blue-600 text-white shadow-2xs'
+                                      : 'bg-amber-500 text-white shadow-2xs'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                                }`}
+                              >
+                                {st === 'Scheduled' ? 'Sched' : st}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {!isSplitPayment ? (
-                      <select
-                        value={formPaymentMethod}
-                        onChange={(e) => setFormPaymentMethod(e.target.value as PaymentMethod)}
-                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                      >
-                        {PAYMENT_METHODS.map((pm) => (
-                          <option key={pm} value={pm}>
-                            {pm}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
-                        <p className="text-[10px] text-slate-500">
-                          Enter amounts per channel. Actual Cost automatically updates to match the sum.
-                        </p>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+
+                    {/* Split Payment 6-Channel Grid (Only expanded when Split is toggled) */}
+                    {isSplitPayment && (
+                      <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
                           {([
                             { key: 'cash', label: 'Cash' },
                             { key: 'creditCard', label: 'Credit Card' },
-                            { key: 'gcashTransfer', label: 'GCash Transfer' },
-                            { key: 'kathAccount', label: 'Kath Account' },
-                            { key: 'checkAccount', label: 'Checking Account' },
-                            { key: 'bankTransfer', label: 'Bank Transfer' },
+                            { key: 'gcashTransfer', label: 'GCash' },
+                            { key: 'kathAccount', label: 'Kath Acct' },
+                            { key: 'checkAccount', label: 'Check Acct' },
+                            { key: 'bankTransfer', label: 'Bank Trans' },
                           ] as const).map((ch) => (
-                            <div key={ch.key}>
-                              <label className="block text-[10px] text-slate-500 truncate mb-0.5">
+                            <div key={ch.key} className="min-w-0">
+                              <label className="block text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate mb-0.5">
                                 {ch.label}
                               </label>
                               <input
@@ -2488,7 +3167,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                     (parseFloat(next.bankTransfer) || 0);
                                   setFormActual(String(totalSplit));
                                 }}
-                                className="w-full px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-mono text-xs"
+                                className="w-full min-w-0 h-7 sm:h-8 px-1.5 sm:px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-mono text-[11px] sm:text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                               />
                             </div>
                           ))}
@@ -2496,84 +3175,124 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       </div>
                     )}
                   </div>
-                )}
+                ) : null}
 
-                {/* 8. IF SAVING: CHOOSE LEDGER ACCOUNT */}
-                {modalType === 'saving' && (
-                  <div className="p-3 bg-indigo-50 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 space-y-1">
-                    <div className="flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 font-semibold">
-                      <PiggyBank className="w-4 h-4" />
-                      <span>Destination Fund Account</span>
+                {/* 5. COMPACT METADATA ROW: STATUS (for Income/Saving) + DATE + MEMO */}
+                {(modalType === 'income' || modalType === 'saving') && (
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold">
+                        Status
+                      </label>
                     </div>
-                    <select
-                      value={formSavingAccountId}
-                      onChange={(e) => setFormSavingAccountId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-indigo-200 rounded-lg text-xs"
-                    >
-                      {accounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} ({acc.type})
-                        </option>
+                    <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 h-8 sm:h-9 items-center">
+                      {(['Paid', 'Pending', 'Scheduled'] as const).map((st) => (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => setFormStatus(st)}
+                          className={`h-full rounded-lg text-[11px] font-semibold transition-all cursor-pointer truncate px-1 ${
+                            formStatus === st
+                              ? st === 'Paid'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : st === 'Scheduled'
+                                ? 'bg-blue-600 text-white shadow-2xs'
+                                : 'bg-amber-500 text-white shadow-2xs'
+                              : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                          }`}
+                        >
+                          {st}
+                        </button>
                       ))}
-                    </select>
+                    </div>
                   </div>
                 )}
 
-                {/* 9. DATE, STATUS, REFERENCE */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Date</label>
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                        Date
+                      </label>
+                    </div>
+                    <div className="flex items-center w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500">
+                      <input
+                        type="date"
+                        value={formDate}
+                        onChange={(e) => setFormDate(e.target.value)}
+                        className="w-full max-w-full min-w-0 h-full bg-transparent border-0 p-0 m-0 text-slate-900 dark:text-white text-[11px] sm:text-xs font-mono outline-none appearance-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
+                        Reference / Note
+                      </label>
+                    </div>
                     <input
-                      type="date"
-                      value={formDate}
-                      onChange={(e) => setFormDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                      type="text"
+                      placeholder="Receipt, check #, memo..."
+                      value={formReference}
+                      onChange={(e) => setFormReference(e.target.value)}
+                      className="block w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
-
-                  <div>
-                    <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Status</label>
-                    <select
-                      value={formStatus}
-                      onChange={(e) => setFormStatus(e.target.value as any)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                    >
-                      <option value="Paid">Paid</option>
-                      <option value="Pending">Pending</option>
-                      <option value="Scheduled">Scheduled</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Reference / Memo</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. official receipt, check #104, transfer ref"
-                    value={formReference}
-                    onChange={(e) => setFormReference(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  />
                 </div>
               </form>
             </div>
 
-            {/* Modal Footer / Actions (Always Visible) */}
-            <div className="p-4 sm:p-5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsAddModalOpen(false)}
-                className="px-4 py-2.5 text-xs sm:text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-700 rounded-xl font-medium transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                form="spreadsheet-entry-form"
-                className="px-5 py-2.5 text-xs sm:text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
-              >
-                {editingEntryId ? 'Update Line Item' : 'Save to Period Sheet'}
-              </button>
+            {/* Compact Modal Footer with Template Sync & Actions */}
+            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-1.5 min-w-0">
+                {editingEntryId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDeleteEntry(editingEntryId);
+                      setIsAddModalOpen(false);
+                    }}
+                    className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded-lg transition-colors cursor-pointer shrink-0"
+                    title="Delete / Reset to Estimate"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </button>
+                )}
+                <label
+                  htmlFor="saveToTemplateSheetCheckbox"
+                  className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 font-medium cursor-pointer select-none truncate"
+                >
+                  <input
+                    type="checkbox"
+                    id="saveToTemplateSheetCheckbox"
+                    checked={saveToTemplate}
+                    onChange={(e) => setSaveToTemplate(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded text-amber-600 accent-amber-600 cursor-pointer shrink-0"
+                  />
+                  <span className="truncate">
+                    <span className="sm:hidden">Sync template</span>
+                    <span className="hidden sm:inline">Sync to recurring template</span>
+                  </span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-700 rounded-xl font-medium transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="spreadsheet-entry-form"
+                  className="px-3.5 sm:px-4 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  {editingEntryId ? 'Update' : 'Save Entry'}
+                </button>
+              </div>
             </div>
 
           </div>
@@ -2597,16 +3316,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         onClose={() => setIsCarryOverModalOpen(false)}
         onConfirm={() => {
           const currentIndex = periodList.indexOf(selectedPeriod);
-          const prevPeriod = periodList[currentIndex - 1];
-          const prevEntries = budget.entries.filter((e) => e.period === prevPeriod);
-          const incAct = prevEntries
-            .filter((e) => e.type === 'income')
-            .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-          const expAct = prevEntries
-            .filter((e) => e.type === 'expense' || e.type === 'saving')
-            .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-          const surplus = incAct - expAct;
-
+          if (currentIndex <= 0 || surplus <= 0) return;
           onAddEntry({
             year: budget.year,
             period: selectedPeriod,
@@ -2614,34 +3324,15 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             date: new Date().toISOString().split('T')[0],
             type: 'income',
             category: 'Other',
-            item: `Carry-over from ${prevPeriod}`,
+            item: `Carry-over from ${prevPeriodName}`,
             amount: surplus,
             actualCost: surplus,
             status: 'Paid',
-            description: `Carry-over from ${prevPeriod}`,
+            description: `Carry-over from ${prevPeriodName}`,
           });
         }}
-        surplus={
-          (function() {
-            const currentIndex = periodList.indexOf(selectedPeriod);
-            if (currentIndex <= 0) return 0;
-            const prevPeriod = periodList[currentIndex - 1];
-            const prevEntries = budget.entries.filter((e) => e.period === prevPeriod);
-            const incAct = prevEntries
-              .filter((e) => e.type === 'income')
-              .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-            const expAct = prevEntries
-              .filter((e) => e.type === 'expense' || e.type === 'saving')
-              .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-            return incAct - expAct;
-          })()
-        }
-        fromPeriod={
-          (function() {
-            const currentIndex = periodList.indexOf(selectedPeriod);
-            return currentIndex > 0 ? periodList[currentIndex - 1] : '';
-          })()
-        }
+        surplus={surplus}
+        fromPeriod={prevPeriodName}
         toPeriod={selectedPeriod}
         currencySymbol={currencySymbol}
       />

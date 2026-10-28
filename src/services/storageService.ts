@@ -45,8 +45,8 @@ const LOCAL_STORAGE_KEY_LEDGER = 'capitalflow_local_savings_ledger';
 const LOCAL_STORAGE_KEY_YEARS = 'capitalflow_known_years';
 const LOCAL_STORAGE_KEY_USER_TEMPLATE = 'capitalflow_user_template_profile';
 const LIVE_CLEAN_STORAGE_KEY = 'capitalflow_live_clean_v1';
-const OCT_2026_MIGRATION_KEY = 'capitalflow_oct_2026_migrated_v2';
-const OCT_2026_TEMPLATE_MIGRATION_KEY = 'capitalflow_oct_2026_template_migrated_v2';
+const OCT_2026_MIGRATION_KEY = 'capitalflow_oct_2026_migrated_v3';
+const OCT_2026_TEMPLATE_MIGRATION_KEY = 'capitalflow_oct_2026_template_migrated_v3';
 
 export interface UserTemplateProfile {
   version?: string;
@@ -744,7 +744,11 @@ export class FinanceStorageService {
     }
 
     const effectiveAmount = entry.actualCost ?? entry.amount ?? 0;
-    const isPaidOrRecorded = !isDelete && effectiveAmount > 0 && entry.status !== 'Pending';
+    const isPaidOrRecorded =
+      !isDelete &&
+      entry.type !== 'saving' &&
+      effectiveAmount > 0 &&
+      entry.status !== 'Pending';
 
     // 1. Check if any loan already has a payment linked to this budgetEntryId
     let existingLoan: LoanRecord | undefined = loans.find((ln) =>
@@ -755,9 +759,10 @@ export class FinanceStorageService {
     const itemNameLower = (entry.item || entry.description || '').trim().toLowerCase();
     const catLower = (entry.category || '').trim().toLowerCase();
 
-    let targetLoan: LoanRecord | undefined = entry.loanId
-      ? loans.find((ln) => ln.id === entry.loanId)
-      : undefined;
+    let targetLoan: LoanRecord | undefined =
+      entry.type !== 'saving' && entry.loanId
+        ? loans.find((ln) => ln.id === entry.loanId)
+        : undefined;
 
     if (!targetLoan && itemNameLower) {
       if (entry.type === 'expense') {
@@ -774,9 +779,9 @@ export class FinanceStorageService {
           (ln) =>
             ln.direction === 'lent' &&
             (ln.name.trim().toLowerCase() === itemNameLower ||
-              (catLower.includes('loan') || catLower.includes('receivable')) &&
+              ((catLower.includes('loan') || catLower.includes('receivable')) &&
                 (itemNameLower.includes(ln.name.trim().toLowerCase()) ||
-                  ln.name.trim().toLowerCase().includes(itemNameLower)))
+                  ln.name.trim().toLowerCase().includes(itemNameLower))))
         );
       }
     }
@@ -790,14 +795,14 @@ export class FinanceStorageService {
 
     let ledgerModified = false;
 
-    // If the entry was previously linked to a different loan, or is now deleted/pending/zero, remove from old loan
-    if (existingLoan && (!isPaidOrRecorded || (targetLoan && targetLoan.id !== existingLoan.id))) {
+    // If the entry was previously linked to a different loan, unlinked, or is now deleted/pending/zero, remove from old loan
+    if (existingLoan && (!isPaidOrRecorded || !targetLoan || targetLoan.id !== existingLoan.id)) {
       existingLoan.payments = (existingLoan.payments || []).filter((p) => p.budgetEntryId !== entry.id);
       recalculateLoanStatus(existingLoan);
       ledgerModified = true;
     }
 
-    const activeLoan = isPaidOrRecorded ? (targetLoan || existingLoan) : null;
+    const activeLoan = isPaidOrRecorded && targetLoan ? targetLoan : null;
 
     if (activeLoan && isPaidOrRecorded) {
       if (!Array.isArray(activeLoan.payments)) {
@@ -846,7 +851,7 @@ export class FinanceStorageService {
       (tx) => tx.budgetEntryId === entry.id
     );
 
-    if (isDelete || effectiveAmount <= 0) {
+    if (isDelete || entry.type !== 'saving' || entry.status === 'Pending' || effectiveAmount <= 0) {
       if (existingIndex >= 0) {
         const removed = ledger.transactions.splice(existingIndex, 1)[0];
         // update account balance

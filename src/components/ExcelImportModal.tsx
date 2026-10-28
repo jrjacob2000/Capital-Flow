@@ -46,9 +46,12 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>('');
-  const [targetPeriod, setTargetPeriod] = useState<string>(
-    MONTH_NAMES.includes(defaultPeriod) ? defaultPeriod : 'Oct'
-  );
+  const [targetPeriod, setTargetPeriod] = useState<string>(() => {
+    if (MONTH_NAMES.includes(defaultPeriod)) return defaultPeriod;
+    const stripped = defaultPeriod?.replace(/-P[12]$/i, '');
+    if (stripped && MONTH_NAMES.includes(stripped)) return stripped;
+    return MONTH_NAMES[new Date().getMonth()] || 'Jan';
+  });
   const [replaceExisting, setReplaceExisting] = useState<boolean>(true);
   const [parsedEntries, setParsedEntries] = useState<Omit<BudgetEntry, 'id' | 'createdAt'>[]>([]);
   const [discoveredCategories, setDiscoveredCategories] = useState<string[]>([]);
@@ -202,7 +205,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
           difference: -actualColE,
           status: 'Paid',
           reference: refText,
-          toBeWithdrawn: categoryName.toLowerCase().includes('odiongan'),
+          toBeWithdrawn: primaryMethod === 'Cash' || cash > 0,
           description: itemName,
         });
       }
@@ -283,39 +286,39 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     .reduce((s, e) => s + (e.actualCost || 0), 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400">
-              <FileSpreadsheet className="w-5 h-5" />
+    <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between gap-2 pb-2.5 sm:pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-1.5 sm:p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 shrink-0">
+              <FileSpreadsheet className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+            <div className="min-w-0">
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
                 Import Excel (.xlsx / .csv) — Actual Data Only
               </h3>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Select any worksheet tab (e.g. Oct) from your Excel workbook to migrate only actual recorded values
+              <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                Select any worksheet tab (e.g. Oct) to migrate actual recorded values
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+            className="p-1 text-slate-400 hover:text-slate-600 shrink-0 cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto my-4 space-y-4 pr-1">
+        <div className="flex-1 overflow-y-auto my-3 sm:my-4 space-y-3 sm:space-y-4 pr-1">
           {/* File Upload Box */}
-          <label className="flex flex-col items-center justify-center border-2 border-dashed border-emerald-300 dark:border-emerald-800 hover:border-emerald-500 rounded-2xl p-5 bg-emerald-50/40 dark:bg-emerald-950/20 cursor-pointer transition-colors">
-            <Upload className="w-6 h-6 text-emerald-600 dark:text-emerald-400 mb-1.5" />
+          <label className="flex flex-col items-center justify-center border-2 border-dashed border-emerald-300 dark:border-emerald-800 hover:border-emerald-500 rounded-2xl p-3.5 sm:p-5 bg-emerald-50/40 dark:bg-emerald-950/20 cursor-pointer transition-colors text-center">
+            <Upload className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 dark:text-emerald-400 mb-1" />
             <span className="font-semibold text-slate-800 dark:text-slate-200 text-xs">
               {fileName ? `Loaded: ${fileName}` : 'Click to select your Home_Buget_2026.xlsx file'}
             </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+            <span className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
               Reads all worksheet tabs directly in your browser (Actual Cost &gt; 0 only)
             </span>
             <input
@@ -327,22 +330,24 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
           </label>
 
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 flex items-center gap-2">
+            <div className="p-2.5 sm:p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{errorMsg}</span>
             </div>
           )}
 
           {sheetNames.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  1. Select Excel Worksheet Tab ({sheetNames.length} tabs found)
-                </label>
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 bg-slate-50 dark:bg-slate-800/60 p-2.5 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+              <div className="min-w-0">
+                <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                  <label className="text-[10px] sm:text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                    1. Worksheet Tab ({sheetNames.length})
+                  </label>
+                </div>
                 <select
                   value={selectedSheet}
                   onChange={(e) => handleSheetChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-semibold"
+                  className="w-full h-8 sm:h-9 px-2 sm:px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-semibold text-xs"
                 >
                   {sheetNames.map((name) => (
                     <option key={name} value={name}>
@@ -352,14 +357,16 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                 </select>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  2. Target Period in CapitalFlow ({year})
-                </label>
+              <div className="min-w-0">
+                <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                  <label className="text-[10px] sm:text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                    2. Target Period ({year})
+                  </label>
+                </div>
                 <select
                   value={targetPeriod}
                   onChange={(e) => handlePeriodChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-semibold"
+                  className="w-full h-8 sm:h-9 px-2 sm:px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-semibold text-xs"
                 >
                   {MONTH_NAMES.map((m) => (
                     <option key={m} value={m}>

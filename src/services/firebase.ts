@@ -182,12 +182,28 @@ provider.setCustomParameters({
 
 // Flag to indicate if we are in the middle of a sign-in flow
 let isSigningIn = false;
-// Cache the access token in memory only (NEVER in localStorage/sessionStorage)
-let cachedAccessToken: string | null = null;
-let tokenAcquiredAt: number | null = null;
+const TOKEN_STORAGE_KEY = 'capitalflow_drive_access_token';
+const TOKEN_TIME_STORAGE_KEY = 'capitalflow_drive_token_time';
 
 // Google OAuth access tokens expire after 1 hour (3600s). Treat as expired at 55 minutes (3300s)
 const TOKEN_MAX_AGE_MS = 55 * 60 * 1000;
+
+let cachedAccessToken: string | null = (() => {
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+})();
+
+let tokenAcquiredAt: number | null = (() => {
+  try {
+    const raw = sessionStorage.getItem(TOKEN_TIME_STORAGE_KEY);
+    return raw ? parseInt(raw, 10) : null;
+  } catch {
+    return null;
+  }
+})();
 
 export const isDriveTokenExpired = (): boolean => {
   if (!cachedAccessToken) return true;
@@ -198,6 +214,12 @@ export const isDriveTokenExpired = (): boolean => {
 export const clearCachedToken = () => {
   cachedAccessToken = null;
   tokenAcquiredAt = null;
+  try {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    sessionStorage.removeItem(TOKEN_TIME_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
 };
 
 export const initAuth = (
@@ -231,6 +253,12 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 
     cachedAccessToken = credential.accessToken;
     tokenAcquiredAt = Date.now();
+    try {
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, cachedAccessToken);
+      sessionStorage.setItem(TOKEN_TIME_STORAGE_KEY, String(tokenAcquiredAt));
+    } catch {
+      // Ignore storage errors
+    }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     // If the user cancelled or closed the popup window, handle gracefully
