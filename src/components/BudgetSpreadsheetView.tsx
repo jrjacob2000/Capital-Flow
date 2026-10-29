@@ -2072,8 +2072,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             )}
           </div>
 
-          {/* STICKY OUTFLOW CONTROLS, FILTERS & MINI SUMMARY BAR (Pinned while scrolling Expenses) */}
-          <div className="sticky top-14 sm:top-16 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-200/90 dark:border-slate-800/90 shadow-sm px-3 py-2.5 flex flex-col gap-2">
+          {/* STICKY OUTFLOW CONTROLS, FILTERS & MINI SUMMARY BAR (Pinned on Desktop md+ while scrolling Expenses; static on Mobile to prevent sticky jump/compositor glitch) */}
+          <div className="md:sticky md:top-16 z-30 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800/90 shadow-sm px-3 py-2.5 flex flex-col gap-2 transform-gpu">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
               {/* Left: Status Filter Pills + Compact Period Readout */}
               <div className="flex items-center justify-between lg:justify-start gap-2 overflow-x-auto scrollbar-none">

@@ -66,9 +66,9 @@ export const Header: React.FC<HeaderProps> = ({
         />
       )}
 
-      <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
+      <header className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 transform-gpu">
         <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between min-h-14 sm:h-16 py-1.5 sm:py-0 gap-1.5 sm:gap-4">
+          <div className="flex items-center justify-between h-14 sm:h-16 gap-1.5 sm:gap-4">
             
             {/* Brand & Logo */}
             <div
@@ -422,7 +422,7 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Fixed Bottom Tab Bar for Mobile Users (Thumb-Zone Navigation) */}
       <nav
         aria-label="Mobile Primary Navigation"
-        className="fixed bottom-0 left-0 right-0 z-40 md:hidden bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]"
+        className="fixed bottom-0 left-0 right-0 z-40 md:hidden bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_16px_rgba(0,0,0,0.06)] pb-[env(safe-area-inset-bottom)] transform-gpu will-change-transform after:content-[''] after:absolute after:inset-x-0 after:top-full after:h-24 after:bg-white dark:after:bg-slate-900 after:pointer-events-none"
       >
         <div className="grid grid-cols-5 items-center h-16 px-1">
           <button

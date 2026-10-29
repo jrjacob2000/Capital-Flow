@@ -1,5 +1,51 @@
 @import "tailwindcss";
 
+/* Prevent white horizontal rubber-band overscroll flash & horizontal overflow on mobile */
+html,
+body,
+#root {
+  background-color: #f1f5f9;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  overflow-x: clip;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body,
+  #root {
+    background-color: #020617;
+  }
+}
+
+/* Custom Scrollbar Utilities for Horizontal Tables & Charts */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 5px;
+  width: 5px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+
 /* Normalize iOS Safari / WebKit date input intrinsic width & vertical alignment */
 input[type="date"] {
   -webkit-appearance: none;
@@ -23,4 +69,5 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   margin: 0;
   padding: 0;
 }
+
 

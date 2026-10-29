@@ -2737,11 +2737,11 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100/60 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans flex flex-col antialiased">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans flex flex-col antialiased overflow-x-clip">
       
       {/* Clean Single Drive Sync Toast (Shown only when no modal is open) */}
       {driveStatus.isSyncing && !confirmationModal.isOpen && !conflictModalState.isOpen && (
-        <div className="fixed bottom-20 md:bottom-6 right-4 sm:right-6 z-[90] animate-in slide-in-from-bottom-5 duration-200 pointer-events-none">
+        <div className="fixed bottom-20 md:bottom-6 right-4 sm:right-6 z-[90] transform-gpu pointer-events-none">
           <div className="px-4 py-3 rounded-2xl shadow-xl bg-slate-900 dark:bg-slate-800 border border-slate-700/80 flex items-center gap-2.5 text-xs font-semibold text-white">
             <RefreshCw className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
             <span>{driveStatus.syncMessage || 'Syncing with Google Drive...'}</span>
@@ -2754,8 +2754,8 @@ export default function App() {
         !isSyncReminderDismissed &&
         !driveStatus.isSyncing &&
         !(isDefaultStarterBudget(budget) && isDefaultStarterLedger(ledger)) && (
-        <div className="fixed bottom-20 md:bottom-6 left-3 right-3 sm:left-6 sm:right-auto z-40 max-w-md animate-in slide-in-from-bottom-5 duration-300">
-          <div className="bg-slate-900/95 dark:bg-slate-800/95 backdrop-blur-md text-white rounded-2xl p-3 sm:p-4 shadow-2xl border border-amber-500/40 flex items-center justify-between gap-2.5 sm:gap-3">
+        <div className="fixed bottom-20 md:bottom-6 left-3 right-3 sm:left-6 sm:right-auto z-40 max-w-md transform-gpu">
+          <div className="bg-slate-900 dark:bg-slate-800 text-white rounded-2xl p-3 sm:p-4 shadow-2xl border border-amber-500/40 flex items-center justify-between gap-2.5 sm:gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
                 <Cloud className="w-5 h-5" />
@@ -2812,7 +2812,7 @@ export default function App() {
 
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-24 right-4 sm:bottom-6 sm:right-6 z-50 animate-in slide-in-from-bottom-5 duration-200">
+        <div className="fixed bottom-24 right-4 sm:bottom-6 sm:right-6 z-50 transform-gpu">
           <div
             className={`px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2.5 text-xs font-semibold text-white ${
               toastMessage.type === 'error'
@@ -3289,7 +3289,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800 pt-6 pb-24 md:pb-6 text-center text-xs text-slate-500 dark:text-slate-400">
+      <footer className="bg-slate-100 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 pt-6 pb-24 md:pb-6 text-center text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
             <span className="font-semibold text-slate-700 dark:text-slate-300">CapitalFlow</span>
