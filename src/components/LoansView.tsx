@@ -1284,24 +1284,22 @@ export const LoansView: React.FC<LoansViewProps> = ({
               </div>
 
               {/* Auto-Sync to Budget Template Checkbox */}
-              {!editingLoan && (
-                <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formSyncTemplate}
-                    onChange={(e) => setFormSyncTemplate(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
-                  />
-                  <div className="text-[11px]">
-                    <span className="font-semibold text-slate-900 dark:text-slate-100 block">
-                      Add to Estimate Budget Template ({formDirection === 'borrowed' ? 'Expense → Loans' : 'Income → Other Income'})
-                    </span>
-                    <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
-                      Pre-populates this installment in your Budget Sheet and updates loan balance when marked Paid.
-                    </span>
-                  </div>
-                </label>
-              )}
+              <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSyncTemplate}
+                  onChange={(e) => setFormSyncTemplate(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                />
+                <div className="text-[11px]">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100 block">
+                    Sync with Estimate Budget Template ({formDirection === 'borrowed' ? 'Expense → Loans' : 'Income → Other Income'})
+                  </span>
+                  <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
+                    Pre-populates this installment in your Budget Sheet and updates loan balance when marked Paid.
+                  </span>
+                </div>
+              </label>
 
               {/* Optional Account Deduction for Lent Loans */}
               {formDirection === 'lent' && !editingLoan && ledger.accounts.length > 0 && (

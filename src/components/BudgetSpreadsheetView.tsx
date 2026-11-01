@@ -350,8 +350,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       return !existingInPeriod.some(
         (e) =>
           e.type === t.type &&
-          (e.item?.toLowerCase().trim() === t.item.toLowerCase().trim() ||
-            e.category.toLowerCase().trim() === t.item.toLowerCase().trim())
+          (Boolean(t.loanId && e.loanId === t.loanId) ||
+            (e.item || e.description || '').toLowerCase().trim() === t.item.toLowerCase().trim())
       );
     });
 
@@ -444,7 +444,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         (e) =>
           !usedEntryIds.has(e.id) &&
           e.type === tpl.type &&
-          (e.item || e.description || '').toLowerCase().trim() === tplItemLower
+          (Boolean(tpl.loanId && e.loanId === tpl.loanId) ||
+            (e.item || e.description || '').toLowerCase().trim() === tplItemLower)
       );
       const matchedEntry =
         matchingCandidates.find((e) => (e.actualCost !== undefined ? e.actualCost : e.amount) > 0) ||
@@ -481,8 +482,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         };
 
         if (tpl.type === 'income') {
-          // Non-salary irregular income sources are only displayed if income was actually received (> 0)
-          if (isRegularSalaryIncome(row.item, row.category) || act > 0) {
+          // Non-salary irregular income templates are shown if received (> 0) or manually added/scheduled by the user
+          const isUserManualEntry = matchedEntry.reference !== 'Auto-filled from template';
+          if (isRegularSalaryIncome(row.item, row.category) || act > 0 || isUserManualEntry) {
             incomeRows.push(row);
           }
         } else {
@@ -556,7 +558,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         };
 
         if (entry.type === 'income') {
-          if (isRegularSalaryIncome(row.item, row.category) || act > 0) {
+          const isUserManualEntry = entry.reference !== 'Auto-filled from template';
+          if (isRegularSalaryIncome(row.item, row.category) || act > 0 || est > 0 || isUserManualEntry) {
             incomeRows.push(row);
           }
         } else {
@@ -853,14 +856,31 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     return totals;
   }, [unifiedExpenseRows]);
 
+  const getDefaultDateForPeriod = (period: string, yr: number): string => {
+    const cleanMonth = period.replace(/-P[12]$/i, '');
+    const mIdx = MONTH_NAMES.indexOf(cleanMonth);
+    const today = new Date();
+    if (mIdx >= 0) {
+      const monthStr = String(mIdx + 1).padStart(2, '0');
+      if (today.getFullYear() === yr && today.getMonth() === mIdx) {
+        return today.toISOString().split('T')[0];
+      }
+      const defaultDay = period.endsWith('-P2') ? '16' : '01';
+      return `${yr}-${monthStr}-${defaultDay}`;
+    }
+    return `${yr}-${ new Date().toISOString().slice(5, 10) }`;
+  };
+
   // Open modal for clicking ANY row on the sheet (virtual estimate or recorded)
   // THE ESTIMATE TEXT IS ALREADY POPULATED!
   const handleOpenRow = (row: SheetRowItem) => {
     setIsRowAction(true);
+    setIsCreatingNewSinkingFund(false);
     setModalPeriod(selectedPeriod);
     setModalType(row.type);
     setFormCategory(row.category);
     setFormItem(row.item);
+    setFormDate(row.date || getDefaultDateForPeriod(selectedPeriod, budget.year));
 
     // In entry modal the estimate text should already populated if it has an estimate amount
     const est = row.estimatedCost || getEstimateForItem(row.item, row.category, row.type);
@@ -868,9 +888,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
     if (row.hasActualCost && !row.isVirtualEstimate) {
       setEditingEntryId(row.id);
-      setFormActual(String(row.actualCost));
-      setFormStatus(row.status || 'Paid');
-      setFormReference(row.reference || '');
+      if (row.status !== 'Paid' && row.actualCost === 0 && est > 0) {
+        setFormActual(String(est));
+        setFormStatus('Paid');
+      } else {
+        setFormActual(String(row.actualCost));
+        setFormStatus(row.status || 'Paid');
+      }
+      setFormReference(
+        row.reference === 'Auto-filled from template' ? '' : row.reference || ''
+      );
     } else {
       setEditingEntryId(null);
       // Pre-fill Actual Cost with Estimated Cost for quick recording
@@ -954,6 +981,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       description: row.item || row.category,
       savingAccountId: row.type === 'saving' ? targetAcc?.id : undefined,
       savingAccountName: row.type === 'saving' ? targetAcc?.name : undefined,
+      loanId: matchedTpl?.loanId,
     });
   };
 
@@ -963,6 +991,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setEditingEntryId(null);
     setModalPeriod(selectedPeriod);
     setModalType(type);
+    setFormDate(getDefaultDateForPeriod(selectedPeriod, budget.year));
     setIsSplitPayment(false);
     setFormPaymentBreakdown({
       cash: '',
@@ -989,6 +1018,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setFormEstimated('0');
     setFormActual('');
     setFormPaymentMethod('Bank Transfer');
+    setFormSavingAccountId(accounts[0]?.id || '');
     setFormStatus('Paid');
     setFormReference('');
     setSaveToTemplate(false);
@@ -1099,21 +1129,53 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
     const selectedAcc = accounts.find((a) => a.id === formSavingAccountId);
 
-    const parsedBreakdown =
-      isSplitPayment && modalType !== 'income'
-        ? {
-            cash: parseFloat(formPaymentBreakdown.cash) || 0,
-            creditCard: parseFloat(formPaymentBreakdown.creditCard) || 0,
-            gcashTransfer: parseFloat(formPaymentBreakdown.gcashTransfer) || 0,
-            kathAccount: parseFloat(formPaymentBreakdown.kathAccount) || 0,
-            checkAccount: parseFloat(formPaymentBreakdown.checkAccount) || 0,
-            bankTransfer: parseFloat(formPaymentBreakdown.bankTransfer) || 0,
-          }
-        : undefined;
+    const rawSplitObj = {
+      cash: parseFloat(formPaymentBreakdown.cash) || 0,
+      creditCard: parseFloat(formPaymentBreakdown.creditCard) || 0,
+      gcashTransfer: parseFloat(formPaymentBreakdown.gcashTransfer) || 0,
+      kathAccount: parseFloat(formPaymentBreakdown.kathAccount) || 0,
+      checkAccount: parseFloat(formPaymentBreakdown.checkAccount) || 0,
+      bankTransfer: parseFloat(formPaymentBreakdown.bankTransfer) || 0,
+    };
+    const rawSplitTotal =
+      rawSplitObj.cash +
+      rawSplitObj.creditCard +
+      rawSplitObj.gcashTransfer +
+      rawSplitObj.kathAccount +
+      rawSplitObj.checkAccount +
+      rawSplitObj.bankTransfer;
 
-    const isCashExplicit = formPaymentMethod === 'Cash';
+    const parsedBreakdown =
+      isSplitPayment && modalType !== 'income' && rawSplitTotal > 0 ? rawSplitObj : undefined;
+
+    let resolvedPaymentMethod: PaymentMethod = formPaymentMethod;
+    if (parsedBreakdown) {
+      const splitMethodPairs: Array<{ method: PaymentMethod; val: number }> = [
+        { method: 'Cash', val: parsedBreakdown.cash || 0 },
+        { method: 'Credit Card', val: parsedBreakdown.creditCard || 0 },
+        { method: 'GCash Transfer', val: parsedBreakdown.gcashTransfer || 0 },
+        { method: 'Kath Account', val: parsedBreakdown.kathAccount || 0 },
+        { method: 'Checking Account', val: parsedBreakdown.checkAccount || 0 },
+        { method: 'Bank Transfer', val: parsedBreakdown.bankTransfer || 0 },
+      ];
+      const topPair = splitMethodPairs.reduce((best, cur) => (cur.val > best.val ? cur : best), splitMethodPairs[0]);
+      if (topPair.val > 0) {
+        resolvedPaymentMethod = topPair.method;
+      }
+    }
+
+    const isCashExplicit = !parsedBreakdown && resolvedPaymentMethod === 'Cash';
     const isCashInSplit = Boolean(parsedBreakdown && (parsedBreakdown.cash || 0) > 0);
     const computedToBeWithdrawn = isCashExplicit || isCashInSplit;
+
+    const editingExistingEntry = editingEntryId
+      ? budget.entries.find((ent) => ent.id === editingEntryId)
+      : undefined;
+    const matchedTemplateForLoan = selectedTemplateId
+      ? itemTemplates.find((t) => t.id === selectedTemplateId)
+      : itemTemplates.find(
+          (t) => t.item.toLowerCase() === resolvedFundOrItem.toLowerCase() && t.type === modalType
+        );
 
     const entryPayload = {
       year: budget.year,
@@ -1126,7 +1188,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       estimatedCost: estNum,
       actualCost: actNum,
       amount: actNum,
-      paymentMethod: formPaymentMethod,
+      paymentMethod: resolvedPaymentMethod,
       paymentBreakdown: parsedBreakdown,
       difference: diff,
       status: formStatus,
@@ -1135,10 +1197,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       description: resolvedFundOrItem,
       savingAccountId: modalType === 'saving' ? formSavingAccountId : undefined,
       savingAccountName: modalType === 'saving' ? selectedAcc?.name : undefined,
+      loanId: editingExistingEntry?.loanId || matchedTemplateForLoan?.loanId,
     };
 
     // Auto-save or update personalized Estimate Budget Template if requested or if virtual row estimate was edited directly
-    const trimmedItem = formItem.trim() || formCategory;
+    const trimmedItem = resolvedFundOrItem;
     if (trimmedItem && (saveToTemplate || (isRowAction && selectedTemplateId && estNum > 0))) {
       const existingById = selectedTemplateId
         ? itemTemplates.find((t) => t.id === selectedTemplateId)
@@ -1153,7 +1216,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           saveToTemplate ||
           targetTpl.defaultEstimatedCost !== estNum ||
           targetTpl.category !== formCategory ||
-          targetTpl.item !== trimmedItem
+          targetTpl.item !== trimmedItem ||
+          targetTpl.defaultPaymentMethod !== resolvedPaymentMethod ||
+          (modalType === 'saving' && targetTpl.defaultSavingAccountId !== formSavingAccountId)
         ) {
           const updatedTemplates = itemTemplates.map((t) =>
             t.id === targetTpl.id
@@ -1162,8 +1227,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   category: formCategory,
                   item: trimmedItem,
                   defaultEstimatedCost: estNum,
-                  defaultPaymentMethod: formPaymentMethod,
-                  toBeWithdrawn: formPaymentMethod === 'Cash',
+                  defaultPaymentMethod: resolvedPaymentMethod,
+                  defaultSavingAccountId:
+                    modalType === 'saving' ? formSavingAccountId || t.defaultSavingAccountId : t.defaultSavingAccountId,
+                  toBeWithdrawn: computedToBeWithdrawn,
                 }
               : t
           );
@@ -1176,8 +1243,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           category: formCategory,
           item: trimmedItem,
           defaultEstimatedCost: estNum,
-          defaultPaymentMethod: formPaymentMethod,
-          toBeWithdrawn: formPaymentMethod === 'Cash',
+          frequency: frequency === 'bi-weekly' ? 'bi-weekly' : 'monthly',
+          biweeklyPeriod:
+            frequency === 'bi-weekly'
+              ? modalPeriod.endsWith('-P1')
+                ? 'P1'
+                : modalPeriod.endsWith('-P2')
+                ? 'P2'
+                : 'both'
+              : 'both',
+          defaultPaymentMethod: resolvedPaymentMethod,
+          defaultSavingAccountId: modalType === 'saving' ? formSavingAccountId || undefined : undefined,
+          toBeWithdrawn: computedToBeWithdrawn,
         };
         onUpdateTemplates([...itemTemplates, newTpl]);
       }
@@ -1186,13 +1263,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     if (editingEntryId) {
       onUpdateEntry(editingEntryId, entryPayload);
     } else {
-      // If a zero-amount placeholder entry already exists for this item in the same period, update it instead of creating a duplicate
+      // If a zero-amount or Pending template placeholder entry already exists for this item in the same period, update it instead of creating a duplicate
       const existingZeroEntry = budget.entries.find(
         (en) =>
           en.period === modalPeriod &&
           en.type === modalType &&
           (en.item || en.description || '').toLowerCase().trim() === resolvedFundOrItem.toLowerCase().trim() &&
-          (en.actualCost !== undefined ? en.actualCost : en.amount) === 0
+          ((en.actualCost !== undefined ? en.actualCost : en.amount) === 0 ||
+            (entrySourceMode === 'template' && en.status === 'Pending'))
       );
       if (existingZeroEntry) {
         onUpdateEntry(existingZeroEntry.id, entryPayload);
@@ -3609,7 +3687,37 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           <div className="flex items-center gap-1 shrink-0">
                             <button
                               type="button"
-                              onClick={() => setIsSplitPayment((prev) => !prev)}
+                              onClick={() => {
+                                setIsSplitPayment((prev) => {
+                                  const next = !prev;
+                                  if (next) {
+                                    const currentSum =
+                                      (parseFloat(formPaymentBreakdown.cash) || 0) +
+                                      (parseFloat(formPaymentBreakdown.creditCard) || 0) +
+                                      (parseFloat(formPaymentBreakdown.gcashTransfer) || 0) +
+                                      (parseFloat(formPaymentBreakdown.kathAccount) || 0) +
+                                      (parseFloat(formPaymentBreakdown.checkAccount) || 0) +
+                                      (parseFloat(formPaymentBreakdown.bankTransfer) || 0);
+                                    if (currentSum === 0 && (parseFloat(formActual) || 0) > 0) {
+                                      const methodKeyMap: Record<PaymentMethod, keyof typeof formPaymentBreakdown> = {
+                                        Cash: 'cash',
+                                        'Credit Card': 'creditCard',
+                                        'GCash Transfer': 'gcashTransfer',
+                                        'Kath Account': 'kathAccount',
+                                        'Checking Account': 'checkAccount',
+                                        'Bank Transfer': 'bankTransfer',
+                                        Other: 'bankTransfer',
+                                      };
+                                      const targetKey = methodKeyMap[formPaymentMethod] || 'bankTransfer';
+                                      setFormPaymentBreakdown((b) => ({
+                                        ...b,
+                                        [targetKey]: formActual,
+                                      }));
+                                    }
+                                  }
+                                  return next;
+                                });
+                              }}
                               className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer leading-none"
                             >
                               {isSplitPayment ? 'Single' : 'Split'}
@@ -3875,16 +3983,23 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         onConfirm={() => {
           const currentIndex = periodList.indexOf(selectedPeriod);
           if (currentIndex <= 0 || surplus <= 0) return;
+          const strippedMonth = selectedPeriod.replace(/-P[12]$/i, '');
+          const monthIdx = Math.max(0, MONTH_NAMES.indexOf(strippedMonth));
+          const dayNum = /-P2$/i.test(selectedPeriod) ? 16 : 1;
+          const carryDate = `${budget.year}-${String(monthIdx + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
           onAddEntry({
             year: budget.year,
             period: selectedPeriod,
             periodIndex: currentIndex,
-            date: new Date().toISOString().split('T')[0],
+            date: carryDate,
             type: 'income',
-            category: 'Other',
+            category: 'Other Income',
             item: `Carry-over from ${prevPeriodName}`,
+            estimatedCost: 0,
             amount: surplus,
             actualCost: surplus,
+            difference: surplus,
+            paymentMethod: 'Bank Transfer',
             status: 'Paid',
             description: `Carry-over from ${prevPeriodName}`,
           });

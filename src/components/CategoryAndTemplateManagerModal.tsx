@@ -400,43 +400,51 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     }
   };
 
+  const getMonthlyEquivalentEstimate = (t: BudgetItemTemplate) => {
+    const raw = t.defaultEstimatedCost || 0;
+    return t.frequency === 'bi-weekly' && (!t.biweeklyPeriod || t.biweeklyPeriod === 'both')
+      ? raw * 2
+      : raw;
+  };
+
   const totalEstIncome = templates
     .filter((t) => t.type === 'income')
-    .reduce((s, t) => s + (t.defaultEstimatedCost || 0), 0);
+    .reduce((s, t) => s + getMonthlyEquivalentEstimate(t), 0);
   const totalEstExpense = templates
     .filter((t) => t.type === 'expense')
-    .reduce((s, t) => s + (t.defaultEstimatedCost || 0), 0);
+    .reduce((s, t) => s + getMonthlyEquivalentEstimate(t), 0);
   const totalEstFunds = templates
     .filter((t) => t.type === 'saving')
-    .reduce((s, t) => s + (t.defaultEstimatedCost || 0), 0);
+    .reduce((s, t) => s + getMonthlyEquivalentEstimate(t), 0);
 
   return (
-    <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[90vh]">
+    <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-hidden">
+      <div className="w-full max-w-full sm:max-w-4xl min-w-0 bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[88dvh] sm:max-h-[90vh]">
         
         {/* Header */}
-        <div className="p-3.5 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-2.5">
-          <div className="flex items-start gap-2.5 sm:gap-3 min-w-0">
-            <div className="p-2 sm:p-2.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 rounded-xl sm:rounded-2xl border border-indigo-200 dark:border-indigo-800 shrink-0">
+        <div className="px-3 py-2.5 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex items-center sm:items-start justify-between gap-2 shrink-0 min-w-0">
+          <div className="flex items-center sm:items-start gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="p-1.5 sm:p-2.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 rounded-xl sm:rounded-2xl border border-indigo-200 dark:border-indigo-800 shrink-0">
               <Sliders className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                <h2 className="text-sm sm:text-lg font-bold text-slate-900 dark:text-white">
-                  Personalized Estimate Budget &amp; Categories
+                <h2 className="text-xs sm:text-lg font-bold text-slate-900 dark:text-white truncate">
+                  <span className="sm:hidden">Templates &amp; Categories</span>
+                  <span className="hidden sm:inline">Personalized Estimate Budget &amp; Categories</span>
                 </h2>
                 {budget.isPersonalizedTemplate && templates.length > 0 ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-indigo-800">
-                    <Sparkles className="w-3 h-3" />
+                  <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-indigo-800 shrink-0">
+                    <Sparkles className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                     <span>{templates.length} items</span>
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                    <span>No Template Set Up</span>
+                  <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
+                    <span>No Template</span>
                   </span>
                 )}
               </div>
-              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2 sm:line-clamp-none">
+              <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Customize your recurring income, expenses, and funds estimates.
               </p>
             </div>
@@ -444,130 +452,145 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg shrink-0 cursor-pointer"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg shrink-0 cursor-pointer"
+            aria-label="Close template manager"
           >
             <X className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="px-4 sm:px-6 pt-3 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2 overflow-x-auto text-xs font-semibold shrink-0">
+        {/* Tab Navigation — 4-column fitted grid on mobile, horizontal tabs on sm+ */}
+        <div className="px-2 sm:px-6 pt-1.5 sm:pt-3 border-b border-slate-100 dark:border-slate-800 grid grid-cols-4 sm:flex items-center gap-1 sm:gap-2 text-[11px] sm:text-xs font-semibold shrink-0 min-w-0">
           <button
             onClick={() => setActiveTab('estimates')}
-            className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 sm:pb-3 px-1 sm:px-3 border-b-2 transition-all flex items-center justify-center sm:justify-start gap-1 sm:gap-1.5 min-w-0 cursor-pointer ${
               activeTab === 'estimates'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Monthly Estimated Budget Templates ({templates.length})</span>
+            <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+            <span className="truncate sm:hidden">Items ({templates.length})</span>
+            <span className="hidden sm:inline">Monthly Estimated Budget Templates ({templates.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('expense_cats')}
-            className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 sm:pb-3 px-1 sm:px-3 border-b-2 transition-all flex items-center justify-center sm:justify-start gap-1 sm:gap-1.5 min-w-0 cursor-pointer ${
               activeTab === 'expense_cats'
                 ? 'border-rose-600 text-rose-600 dark:text-rose-400'
                 : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <Receipt className="w-3.5 h-3.5" />
-            <span>Expense Categories ({expenseCats.length})</span>
+            <Receipt className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+            <span className="truncate sm:hidden">Expense ({expenseCats.length})</span>
+            <span className="hidden sm:inline">Expense Categories ({expenseCats.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('income_cats')}
-            className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 sm:pb-3 px-1 sm:px-3 border-b-2 transition-all flex items-center justify-center sm:justify-start gap-1 sm:gap-1.5 min-w-0 cursor-pointer ${
               activeTab === 'income_cats'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>Income Categories ({incomeCats.length})</span>
+            <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+            <span className="truncate sm:hidden">Income ({incomeCats.length})</span>
+            <span className="hidden sm:inline">Income Categories ({incomeCats.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('saving_cats')}
-            className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 sm:pb-3 px-1 sm:px-3 border-b-2 transition-all flex items-center justify-center sm:justify-start gap-1 sm:gap-1.5 min-w-0 cursor-pointer ${
               activeTab === 'saving_cats'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <PiggyBank className="w-3.5 h-3.5" />
-            <span>Funds Categories ({savingCats.length})</span>
+            <PiggyBank className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+            <span className="truncate sm:hidden">Funds ({savingCats.length})</span>
+            <span className="hidden sm:inline">Funds Categories ({savingCats.length})</span>
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-3.5 sm:p-6 overflow-y-auto flex-1 text-xs">
+        <div className="p-2.5 sm:p-6 overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-xs">
           
           {/* TAB 1: ESTIMATED BUDGET ITEMS TEMPLATES */}
           {activeTab === 'estimates' && (
-            <div className="space-y-4">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div>
-                  <h4 className="font-bold text-slate-900 dark:text-white text-sm">
+            <div className="space-y-2.5 sm:space-y-4 min-w-0">
+              <div className="flex items-center justify-between gap-2 sm:gap-3 bg-slate-50 dark:bg-slate-800/60 p-2.5 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-700 min-w-0">
+                <div className="min-w-0 flex-1">
+                  <h4 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm truncate">
                     Personalized Estimated Budget Template
                   </h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                     Set up your template by selecting the default starter template or starting from a blank slate. Only your personalized template items appear in the budget grid.
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={handleOpenAddTemplate}
-                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+                    className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1 sm:gap-1.5 shrink-0 cursor-pointer shadow-xs text-[11px] sm:text-xs"
                   >
-                    <Plus className="w-4 h-4" />
-                    <span>Add Estimated Item</span>
+                    <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    <span className="sm:hidden">Add Item</span>
+                    <span className="hidden sm:inline">Add Estimated Item</span>
                   </button>
                 </div>
               </div>
 
-              {/* Monthly Template Summary Totals */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-800/60 flex items-center justify-between">
-                  <span className="text-slate-600 dark:text-slate-400 font-medium">Est. Monthly Income:</span>
-                  <span className="font-mono font-bold text-sm text-emerald-700 dark:text-emerald-300">
+              {/* Monthly Template Summary Totals — 3 compact columns on mobile & desktop */}
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-3 min-w-0">
+                <div className="p-2 sm:p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 min-w-0">
+                  <span className="text-[10px] sm:text-xs text-slate-600 dark:text-slate-400 font-medium truncate">
+                    <span className="sm:hidden">Est. Income</span>
+                    <span className="hidden sm:inline">Est. Monthly Income:</span>
+                  </span>
+                  <span className="font-mono font-bold text-[11px] sm:text-sm text-emerald-700 dark:text-emerald-300 truncate">
                     {currencySymbol}{formatNumber(totalEstIncome)}
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200/70 dark:border-rose-800/60 flex items-center justify-between">
-                  <span className="text-slate-600 dark:text-slate-400 font-medium">Est. Living Expenses:</span>
-                  <span className="font-mono font-bold text-sm text-rose-700 dark:text-rose-300">
+                <div className="p-2 sm:p-3 rounded-xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200/70 dark:border-rose-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 min-w-0">
+                  <span className="text-[10px] sm:text-xs text-slate-600 dark:text-slate-400 font-medium truncate">
+                    <span className="sm:hidden">Est. Expenses</span>
+                    <span className="hidden sm:inline">Est. Living Expenses:</span>
+                  </span>
+                  <span className="font-mono font-bold text-[11px] sm:text-sm text-rose-700 dark:text-rose-300 truncate">
                     {currencySymbol}{formatNumber(totalEstExpense)}
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-800/60 flex items-center justify-between">
-                  <span className="text-slate-600 dark:text-slate-400 font-medium">Est. Planned Funds:</span>
-                  <span className="font-mono font-bold text-sm text-indigo-700 dark:text-indigo-300">
+                <div className="p-2 sm:p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-0.5 min-w-0">
+                  <span className="text-[10px] sm:text-xs text-slate-600 dark:text-slate-400 font-medium truncate">
+                    <span className="sm:hidden">Est. Funds</span>
+                    <span className="hidden sm:inline">Est. Planned Funds:</span>
+                  </span>
+                  <span className="font-mono font-bold text-[11px] sm:text-sm text-indigo-700 dark:text-indigo-300 truncate">
                     {currencySymbol}{formatNumber(totalEstFunds)}
                   </span>
                 </div>
               </div>
 
-              {/* Template Items Table */}
+              {/* Template Items List / Table */}
               {templates.length === 0 ? (
-                <div className="py-10 px-4 text-center border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl bg-slate-50/50 dark:bg-slate-800/30 space-y-5">
-                  <div className="space-y-1.5">
-                    <Sparkles className="w-8 h-8 text-indigo-500 mx-auto" />
-                    <h5 className="text-sm font-bold text-slate-900 dark:text-white">
+                <div className="py-5 sm:py-10 px-3 sm:px-4 text-center border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl bg-slate-50/50 dark:bg-slate-800/30 space-y-4 sm:space-y-5">
+                  <div className="space-y-1">
+                    <Sparkles className="w-6 h-6 sm:w-8 sm:h-8 text-indigo-500 mx-auto" />
+                    <h5 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
                       Set Up Your Personalized Estimate Budget Template
                     </h5>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 max-w-lg mx-auto">
+                    <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 max-w-lg mx-auto">
                       Choose how you would like to initialize your personalized template. Nothing is shown in the budget grid until you set up your template.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto text-left">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 max-w-2xl mx-auto text-left">
                     {/* Option 1: Select Default Template */}
-                    <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xs flex flex-col justify-between gap-3">
+                    <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xs flex flex-col justify-between gap-2.5 sm:gap-3">
                       <div>
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 mb-2">
+                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 mb-1.5">
                           <Sparkles className="w-3 h-3" />
                           <span>Option 1: Recommended Helper</span>
                         </div>
@@ -581,17 +604,17 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       <button
                         type="button"
                         onClick={handleSelectDefaultTemplate}
-                        className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                        className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors text-xs"
                       >
-                        <Sparkles className="w-3.5 h-3.5" />
+                        <Sparkles className="w-3.5 h-3.5 shrink-0" />
                         <span>Use Default Starter Template</span>
                       </button>
                     </div>
 
                     {/* Option 2: Start from a Blank */}
-                    <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xs flex flex-col justify-between gap-3">
+                    <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xs flex flex-col justify-between gap-2.5 sm:gap-3">
                       <div>
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 mb-2">
+                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 mb-1.5">
                           <Plus className="w-3 h-3" />
                           <span>Option 2: Custom Scratch</span>
                         </div>
@@ -605,26 +628,26 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       <button
                         type="button"
                         onClick={handleStartFromBlank}
-                        className="w-full py-2 px-4 bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                        className="w-full py-2 px-3 bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors text-xs"
                       >
-                        <Plus className="w-3.5 h-3.5" />
+                        <Plus className="w-3.5 h-3.5 shrink-0" />
                         <span>Start from Blank &amp; Add Item</span>
                       </button>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2.5 sm:space-y-3 min-w-0">
                   {/* Sorting & Filter Controls Toolbar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-50 dark:bg-slate-800/40 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-700/70">
-                    <div className="relative flex-1 max-w-xs">
-                      <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50 dark:bg-slate-800/40 p-2 sm:p-2.5 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-700/70 min-w-0">
+                    <div className="relative w-full sm:flex-1 sm:max-w-xs min-w-0">
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                       <input
                         type="text"
                         placeholder="Search items or categories..."
                         value={templateSearchQuery}
                         onChange={(e) => setTemplateSearchQuery(e.target.value)}
-                        className="w-full pl-8 pr-7 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        className="w-full min-w-0 pl-8 pr-7 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                       />
                       {templateSearchQuery && (
                         <button
@@ -637,12 +660,12 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      <span className="text-slate-400 font-semibold mr-1 hidden md:inline">Sort:</span>
+                    <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 text-[10px] sm:text-[11px] min-w-0">
+                      <span className="text-slate-400 font-semibold mr-0.5 hidden md:inline">Sort:</span>
                       <button
                         type="button"
                         onClick={() => handleApplyPresetSort('type', 'asc')}
-                        className={`px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
                           sortField === 'type'
                             ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
                             : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -654,19 +677,19 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       <button
                         type="button"
                         onClick={() => handleApplyPresetSort('category', 'asc')}
-                        className={`px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
                           sortField === 'category'
                             ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
                             : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
                         }`}
                         title="Sort alphabetically by category"
                       >
-                        Category (A-Z)
+                        Category
                       </button>
                       <button
                         type="button"
                         onClick={() => handleApplyPresetSort('item', 'asc')}
-                        className={`px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
                           sortField === 'item'
                             ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
                             : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -678,29 +701,140 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       <button
                         type="button"
                         onClick={() => handleApplyPresetSort('cost', 'desc')}
-                        className={`px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
                           sortField === 'cost'
                             ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
                             : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
                         }`}
                         title="Sort by highest estimated cost first"
                       >
-                        Cost (High&rarr;Low)
+                        Cost (&darr;)
                       </button>
                       {sortField !== 'manual' && (
                         <button
                           type="button"
                           onClick={() => setSortField('manual')}
-                          className="px-2 py-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-[10px] underline cursor-pointer"
+                          className="px-1.5 py-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-[10px] underline cursor-pointer"
                         >
-                          Manual Order
+                          Manual
                         </button>
                       )}
                     </div>
                   </div>
 
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-x-auto shadow-2xs">
-                    <table className="w-full text-left text-xs min-w-[680px]">
+                  {/* MOBILE FITTED LIST VIEW (< 640px) — Zero horizontal overflow */}
+                  <div className="sm:hidden border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
+                    {displayedTemplates.length === 0 ? (
+                      <div className="p-6 text-center text-slate-400 text-xs">
+                        No template items match &ldquo;{templateSearchQuery}&rdquo;.
+                      </div>
+                    ) : (
+                      displayedTemplates.map((tpl) => {
+                        const originalIndex = templates.findIndex((t) => t.id === tpl.id);
+                        const freqLabel =
+                          tpl.frequency === 'bi-weekly'
+                            ? `Bi-Weekly (${tpl.biweeklyPeriod || 'both'})`
+                            : tpl.frequency === 'both'
+                            ? `Both (${tpl.biweeklyPeriod || 'both'})`
+                            : 'Monthly';
+                        const channelLabel =
+                          tpl.type === 'saving'
+                            ? accounts?.find((a) => a.id === tpl.defaultSavingAccountId)?.name || 'Default Fund'
+                            : tpl.defaultPaymentMethod || 'Bank Transfer';
+
+                        return (
+                          <div
+                            key={tpl.id}
+                            className="p-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/40 min-w-0"
+                          >
+                            {/* Order & Up/Down controls */}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="font-mono text-[10px] text-slate-400 w-4 text-right">
+                                {originalIndex + 1}
+                              </span>
+                              <div className="flex flex-col">
+                                <button
+                                  type="button"
+                                  disabled={originalIndex <= 0}
+                                  onClick={() => handleMoveTemplate(originalIndex, 'up')}
+                                  className="p-0.5 text-slate-400 hover:text-indigo-600 disabled:opacity-20 cursor-pointer"
+                                  aria-label="Move item up"
+                                >
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={originalIndex >= templates.length - 1}
+                                  onClick={() => handleMoveTemplate(originalIndex, 'down')}
+                                  className="p-0.5 text-slate-400 hover:text-indigo-600 disabled:opacity-20 cursor-pointer"
+                                  aria-label="Move item down"
+                                >
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Item Name, Type Badge, Category & Frequency */}
+                            <div
+                              onClick={() => handleOpenEditTemplate(tpl)}
+                              className="min-w-0 flex-1 cursor-pointer"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="font-bold text-slate-900 dark:text-white text-xs truncate">
+                                  {tpl.item}
+                                </span>
+                                <span
+                                  className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold uppercase shrink-0 ${
+                                    tpl.type === 'income'
+                                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                      : tpl.type === 'saving'
+                                      ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                                      : 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                                  }`}
+                                >
+                                  {tpl.type === 'saving' ? 'funds' : tpl.type}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                                <span className="truncate">{tpl.category}</span>
+                                <span>&bull;</span>
+                                <span className="shrink-0">{freqLabel}</span>
+                                <span>&bull;</span>
+                                <span className="truncate">{channelLabel}</span>
+                              </div>
+                            </div>
+
+                            {/* Right Side: Cost + Edit/Delete */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="font-mono font-bold text-xs text-slate-900 dark:text-white">
+                                {currencySymbol}{formatNumber(tpl.defaultEstimatedCost)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditTemplate(tpl)}
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg cursor-pointer"
+                                title="Edit template item"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteTemplate(tpl.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                title="Delete template item"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* DESKTOP TABLE VIEW (sm and up) */}
+                  <div className="hidden sm:block border border-slate-200 dark:border-slate-800 rounded-2xl overflow-x-auto shadow-2xs">
+                    <table className="w-full text-left text-xs min-w-[640px]">
                       <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-700 select-none">
                         <tr>
                           <th className="py-2.5 px-3 text-center w-16">
@@ -883,12 +1017,12 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 
           {/* TAB 2, 3, 4: CATEGORY MANAGERS */}
           {activeTab !== 'estimates' && (
-            <div className="space-y-4 max-w-2xl mx-auto">
+            <div className="space-y-3 sm:space-y-4 max-w-2xl mx-auto min-w-0">
               {/* Add category row */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <input
                   type="text"
-                  placeholder={`New ${activeTab.replace('_cats', '')} category name...`}
+                  placeholder={`New ${activeTab.replace('_cats', '')} category...`}
                   value={newCatName}
                   onChange={(e) => setNewCatName(e.target.value)}
                   onKeyDown={(e) => {
@@ -903,7 +1037,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       );
                     }
                   }}
-                  className="flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="flex-1 min-w-0 px-3 sm:px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <button
                   type="button"
@@ -916,10 +1050,11 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         : 'saving'
                     )
                   }
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1 cursor-pointer"
+                  className="px-3 sm:px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1 shrink-0 cursor-pointer"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Category</span>
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span className="sm:hidden">Add</span>
+                  <span className="hidden sm:inline">Add Category</span>
                 </button>
               </div>
 
@@ -933,17 +1068,17 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                 ).map((cat) => (
                   <div
                     key={cat}
-                    className="p-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+                    className="p-2.5 sm:p-3 flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors min-w-0"
                   >
                     {editingCat?.original === cat ? (
-                      <div className="flex items-center gap-2 flex-1 mr-4">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-1 min-w-0">
                         <input
                           type="text"
                           value={editingCat.current}
                           onChange={(e) =>
                             setEditingCat({ ...editingCat, current: e.target.value })
                           }
-                          className="px-3 py-1 bg-white dark:bg-slate-900 border border-indigo-400 rounded-lg flex-1"
+                          className="px-2.5 py-1 bg-white dark:bg-slate-900 border border-indigo-400 rounded-lg flex-1 min-w-0"
                         />
                         <button
                           onClick={() =>
@@ -955,27 +1090,27 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                                 : 'saving'
                             )
                           }
-                          className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                          className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 shrink-0"
                         >
                           <Check className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => setEditingCat(null)}
-                          className="p-1.5 text-slate-400 hover:bg-slate-200 rounded-lg"
+                          className="p-1.5 text-slate-400 hover:bg-slate-200 rounded-lg shrink-0"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" />
+                        <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
                           {cat}
                         </span>
                       </div>
                     )}
 
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => setEditingCat({ original: cat, current: cat })}
                         className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg"
@@ -1009,8 +1144,8 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
         </div>
 
         {/* Modal Footer */}
-        <div className="px-3.5 py-2.5 sm:p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
-          <span className="text-slate-400 text-[11px] truncate">
+        <div className="px-3 py-2 sm:p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs shrink-0 min-w-0">
+          <span className="text-slate-400 text-[10px] sm:text-[11px] truncate min-w-0">
             Synced with <code className="font-mono text-amber-600 dark:text-amber-400">capitalflow_budget_template.json</code>
           </span>
           <button
@@ -1025,9 +1160,9 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 
       {/* SUB-MODAL: COMPACT ADD / EDIT ITEM TEMPLATE */}
       {isTemplateFormOpen && (
-        <div className="fixed inset-0 m-0 z-60 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl text-xs overflow-hidden">
-            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 space-y-2 sm:space-y-0">
+        <div className="fixed inset-0 m-0 z-60 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in overflow-hidden">
+          <div className="w-full max-w-full sm:max-w-md min-w-0 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl text-xs overflow-hidden flex flex-col max-h-[88dvh] sm:max-h-[90vh]">
+            <div className="px-3 py-2.5 sm:px-4 sm:py-3 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 space-y-2 sm:space-y-0 shrink-0">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
                   {tplId ? 'Edit Template Item' : 'New Template Item'}
@@ -1134,7 +1269,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
               </div>
             </div>
 
-            <form onSubmit={handleSaveTemplate} className="p-3 sm:p-4 space-y-2.5 sm:space-y-3.5">
+            <form onSubmit={handleSaveTemplate} className="p-3 sm:p-4 space-y-2.5 sm:space-y-3.5 overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0">
               {!tplId && (
                 <div className="flex items-center gap-2 bg-amber-50/70 dark:bg-amber-950/30 px-2.5 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800/60 min-w-0">
                   <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
@@ -1155,7 +1290,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                 </div>
               )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 sm:gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-2.5">
                 <div className="sm:col-span-7 min-w-0">
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
@@ -1168,7 +1303,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     placeholder="e.g. Electricity, Rent"
                     value={tplItem}
                     onChange={(e) => setTplItem(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
                 <div className="sm:col-span-5 min-w-0">
@@ -1180,7 +1315,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                   <select
                     value={tplCategory}
                     onChange={(e) => setTplCategory(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     {(tplType === 'income'
                       ? incomeCats

@@ -36,6 +36,8 @@ import {
   getAccessToken,
   clearCachedToken,
   isDriveTokenExpired,
+  getBrowserEnvironmentInfo,
+  isMissingInitialStateOrStorageError,
   auth,
 } from './services/firebase';
 import { Header } from './components/Header';
@@ -48,6 +50,7 @@ import { HelpGuideView } from './components/HelpGuideView';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { DriveConflictModal, DriveConflictDetail } from './components/DriveConflictModal';
 import { DriveSessionExpiredModal } from './components/DriveSessionExpiredModal';
+import { InAppBrowserAuthModal } from './components/InAppBrowserAuthModal';
 import {
   getBudgetFileName,
   SAVINGS_LEDGER_FILE_NAME,
@@ -56,7 +59,19 @@ import {
   isSessionExpiredError,
   validateDriveToken,
 } from './services/driveService';
-import { CheckCircle2, AlertCircle, RefreshCw, Calendar, X, Cloud, Download, ShieldAlert } from 'lucide-react';
+import {
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  Calendar,
+  X,
+  Cloud,
+  Download,
+  ShieldAlert,
+  Smartphone,
+  Copy,
+  Sparkles,
+} from 'lucide-react';
 
 export default function App() {
   const [currentYear, setCurrentYear] = useState<number>(2026);
@@ -104,6 +119,13 @@ export default function App() {
 
   // Google Drive Session Expired Modal State
   const [isSessionExpiredModalOpen, setIsSessionExpiredModalOpen] = useState<boolean>(false);
+  // In-App Browser (Messenger / Instagram / FB WebView) Auth Modal & Banner State
+  const [browserEnv] = useState(() => getBrowserEnvironmentInfo());
+  const [isInAppBrowserModalOpen, setIsInAppBrowserModalOpen] = useState<boolean>(false);
+  const [inAppBrowserErrorMsg, setInAppBrowserErrorMsg] = useState<string | null>(null);
+  const [isInAppBannerDismissed, setIsInAppBannerDismissed] = useState<boolean>(false);
+  const [inAppBannerCopied, setInAppBannerCopied] = useState<boolean>(false);
+
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState<boolean>(false);
 
@@ -327,8 +349,16 @@ export default function App() {
     };
   }, [driveStatus.isSignedIn, handleSessionExpired]);
 
-  // Google Sign-In handler with local overwrite protection & conflict check
-  const handleSignInWithGoogle = async () => {
+  // Google Sign-In handler with in-app browser guard, local overwrite protection & conflict check
+  const handleSignInWithGoogle = async (forcePopup?: boolean | React.MouseEvent) => {
+    const isForcedPopup = forcePopup === true;
+    const currentEnv = getBrowserEnvironmentInfo();
+    if ((currentEnv.isInAppBrowser || !currentEnv.isSessionStorageSupported) && !isForcedPopup) {
+      setInAppBrowserErrorMsg(null);
+      setIsInAppBrowserModalOpen(true);
+      return;
+    }
+
     try {
       setDriveStatus((prev) => ({
         ...prev,
@@ -724,8 +754,27 @@ export default function App() {
         syncMessage: null,
         error: err.message || 'Google sign-in was aborted',
       }));
+      if (err?.isBrowserStorageOrInAppError || isMissingInitialStateOrStorageError(err)) {
+        setInAppBrowserErrorMsg(err.message || null);
+        setIsInAppBrowserModalOpen(true);
+        return;
+      }
       showToast(err.message || 'Failed to authenticate with Google', 'error');
     }
+  };
+
+  // Start a clean blank workspace (0 entries, 0 starter templates) for new users
+  const handleStartBlankWorkspace = () => {
+    const {
+      budget: blankBudget,
+      ledger: blankLedger,
+      templateData: blankTemplate,
+    } = FinanceStorageService.startFreshBlankWorkspace(currentYear);
+    setBudget(blankBudget);
+    setLedger(blankLedger);
+    setTemplateData(blankTemplate);
+    setHasUnsavedChanges(false);
+    showToast(`Initialized a blank ${currentYear} budget workspace ready for your own entries or Excel import!`, 'success');
   };
 
   const handleKeepAllLocal = () => {
@@ -915,18 +964,31 @@ export default function App() {
     FinanceStorageService.registerKnownYear(parsedYear);
     const loadedNewYear = FinanceStorageService.loadLocalBudget(parsedYear);
 
-    if (copyTemplatesToNewYear && loadedNewYear.entries.length === 0) {
-      const seededBudget: YearBudgetData = {
-        ...loadedNewYear,
-        customCategories: budget.customCategories
-          ? JSON.parse(JSON.stringify(budget.customCategories))
-          : loadedNewYear.customCategories,
-        itemTemplates: budget.itemTemplates
+    if (loadedNewYear.entries.length === 0) {
+      if (copyTemplatesToNewYear) {
+        const seededTemplates = budget.itemTemplates
           ? JSON.parse(JSON.stringify(budget.itemTemplates))
-          : loadedNewYear.itemTemplates,
-        lastUpdated: new Date().toISOString(),
-      };
-      FinanceStorageService.saveLocalBudget(seededBudget);
+          : loadedNewYear.itemTemplates;
+        const seededBudget: YearBudgetData = {
+          ...loadedNewYear,
+          customCategories: budget.customCategories
+            ? JSON.parse(JSON.stringify(budget.customCategories))
+            : loadedNewYear.customCategories,
+          itemTemplates: seededTemplates,
+          isPersonalizedTemplate: Boolean(seededTemplates && seededTemplates.length > 0),
+          lastUpdated: new Date().toISOString(),
+        };
+        FinanceStorageService.saveLocalBudget(seededBudget);
+      } else {
+        const blankTemplatesBudget: YearBudgetData = {
+          ...loadedNewYear,
+          itemTemplates: [],
+          isPersonalizedTemplate: false,
+          budgets: [],
+          lastUpdated: new Date().toISOString(),
+        };
+        FinanceStorageService.saveLocalBudget(blankTemplatesBudget, { skipTemplateProfileUpdate: true });
+      }
     }
 
     setAvailableYears(FinanceStorageService.getKnownYears());
@@ -1196,15 +1258,28 @@ export default function App() {
 
     // If this transaction is linked to a Budget Sheet saving entry, keep the budget entry synchronized
     if (newTx.budgetEntryId) {
-      const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
+      const targetYear = newTx.year || budget.year;
+      const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
       let budgetChanged = false;
-      currentBudget.entries = currentBudget.entries.map((e) => {
+      targetBudget.entries = targetBudget.entries.map((e) => {
         if (e.id === newTx.budgetEntryId) {
           budgetChanged = true;
+          const est = e.estimatedCost || 0;
+          const updatedFundItem =
+            newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
+              ? newTx.category.trim()
+              : e.item;
           return {
             ...e,
+            item: updatedFundItem,
+            description: updatedFundItem || e.description,
+            category:
+              newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
+                ? normalizeSavingCategoryGroup(newTx.category.trim(), e.category)
+                : e.category,
             amount: newTx.amount,
             actualCost: newTx.amount,
+            difference: est - newTx.amount,
             date: newTx.date,
             savingAccountId: newTx.accountId,
             savingAccountName: newTx.accountName,
@@ -1213,8 +1288,12 @@ export default function App() {
         return e;
       });
       if (budgetChanged) {
-        FinanceStorageService.saveLocalBudget(currentBudget);
-        setBudget({ ...currentBudget });
+        FinanceStorageService.saveLocalBudget(targetBudget, {
+          skipTemplateProfileUpdate: targetYear !== budget.year,
+        });
+        if (targetYear === budget.year) {
+          setBudget({ ...targetBudget });
+        }
       }
     }
 
@@ -1263,15 +1342,20 @@ export default function App() {
 
           // If linked to a budget saving entry, remove that saving entry from the budget sheet as well
           if (targetTx.budgetEntryId) {
-            const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
-            const filteredEntries = currentBudget.entries.filter((e) => e.id !== targetTx.budgetEntryId);
-            if (filteredEntries.length !== currentBudget.entries.length) {
+            const targetYear = targetTx.year || budget.year;
+            const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
+            const filteredEntries = targetBudget.entries.filter((e) => e.id !== targetTx.budgetEntryId);
+            if (filteredEntries.length !== targetBudget.entries.length) {
               const updatedBudget: YearBudgetData = {
-                ...currentBudget,
+                ...targetBudget,
                 entries: filteredEntries,
               };
-              FinanceStorageService.saveLocalBudget(updatedBudget);
-              setBudget(updatedBudget);
+              FinanceStorageService.saveLocalBudget(updatedBudget, {
+                skipTemplateProfileUpdate: targetYear !== budget.year,
+              });
+              if (targetYear === budget.year) {
+                setBudget(updatedBudget);
+              }
             }
           }
 
@@ -1375,7 +1459,7 @@ export default function App() {
       ? currentLedger.accounts.find((a) => a.id === reassignToAccountId)
       : currentLedger.accounts.find((a) => a.id !== accountId);
 
-    // Reassign transactions if target account is found
+    // Reassign transactions and loan payments if target account is found
     if (targetAcc) {
       currentLedger.transactions.forEach((tx) => {
         if (tx.accountId === accountId) {
@@ -1387,11 +1471,20 @@ export default function App() {
           tx.toAccountName = targetAcc.name;
         }
       });
+      if (Array.isArray(currentLedger.loans)) {
+        currentLedger.loans.forEach((ln) => {
+          (ln.payments || []).forEach((p) => {
+            if (p.accountId === accountId) {
+              p.accountId = targetAcc.id;
+            }
+          });
+        });
+      }
       // Transfer balance
       targetAcc.balance += deletingAcc.balance;
     }
 
-    // Also update budget entries pointing to this account
+    // Also update budget entries and itemTemplates pointing to this account
     const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
     let budgetUpdated = false;
     currentBudget.entries.forEach((e) => {
@@ -1406,9 +1499,22 @@ export default function App() {
         budgetUpdated = true;
       }
     });
+    if (currentBudget.itemTemplates) {
+      currentBudget.itemTemplates = currentBudget.itemTemplates.map((t) => {
+        if (t.defaultSavingAccountId === accountId) {
+          budgetUpdated = true;
+          return {
+            ...t,
+            defaultSavingAccountId: targetAcc ? targetAcc.id : undefined,
+          };
+        }
+        return t;
+      });
+    }
     if (budgetUpdated) {
       FinanceStorageService.saveLocalBudget(currentBudget);
       setBudget({ ...currentBudget });
+      setTemplateData(FinanceStorageService.loadLocalTemplateData(currentBudget));
     }
 
     // Remove account
@@ -1740,8 +1846,13 @@ export default function App() {
     entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[],
     options?: { replacePeriod?: string; customExpenseCategories?: string[] }
   ) => {
+    const defaultAcc = ledger.accounts[0];
     const newEntries: BudgetEntry[] = entriesData.map((e, idx) => ({
       ...e,
+      savingAccountId:
+        e.type === 'saving' ? e.savingAccountId || defaultAcc?.id : e.savingAccountId,
+      savingAccountName:
+        e.type === 'saving' ? e.savingAccountName || defaultAcc?.name : e.savingAccountName,
       id: `entry-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
       createdAt: new Date().toISOString(),
     }));
@@ -1882,12 +1993,63 @@ export default function App() {
     const hasMatchingTemplateInBudget = (budget.itemTemplates || []).some(
       (t) => t.loanId === updatedLoan.id || (updatedLoan.linkedTemplateId && t.id === updatedLoan.linkedTemplateId)
     );
+    const shouldSyncTemplate =
+      options?.syncToTemplate !== undefined
+        ? options.syncToTemplate
+        : Boolean(updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget);
 
-    if (options?.syncToTemplate || updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget) {
-      const { updatedBudget, templateId } = syncLoanToBudgetTemplateHelper(updatedLoan, budget);
+    let workingBudget = budget;
+    // If an existing loan was renamed, update any budget entries linked by loanId
+    if (existingIdx >= 0 && loans[existingIdx].name.trim() !== updatedLoan.name.trim()) {
+      const oldLoanNameLower = loans[existingIdx].name.trim().toLowerCase();
+      let entriesChanged = false;
+      const updatedEntries = workingBudget.entries.map((entry) => {
+        if (
+          entry.loanId === updatedLoan.id ||
+          ((entry.category === 'Loans' || entry.category === 'Other Income') &&
+            (entry.item || '').trim().toLowerCase() === oldLoanNameLower)
+        ) {
+          entriesChanged = true;
+          return {
+            ...entry,
+            item: updatedLoan.name,
+            description: updatedLoan.name,
+            loanId: updatedLoan.id,
+          };
+        }
+        return entry;
+      });
+      if (entriesChanged) {
+        workingBudget = {
+          ...workingBudget,
+          entries: updatedEntries,
+          lastUpdated: new Date().toISOString(),
+        };
+        FinanceStorageService.saveLocalBudget(workingBudget);
+      }
+    }
+
+    if (shouldSyncTemplate) {
+      const { updatedBudget, templateId } = syncLoanToBudgetTemplateHelper(updatedLoan, workingBudget);
       updatedLoan.linkedTemplateId = templateId;
       setBudget(updatedBudget);
       setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
+    } else if (options?.syncToTemplate === false && (updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget)) {
+      const filteredTemplates = (workingBudget.itemTemplates || []).filter(
+        (t) => t.loanId !== updatedLoan.id && (!updatedLoan.linkedTemplateId || t.id !== updatedLoan.linkedTemplateId)
+      );
+      updatedLoan.linkedTemplateId = undefined;
+      const unlinkedBudget: YearBudgetData = {
+        ...workingBudget,
+        itemTemplates: filteredTemplates,
+        isPersonalizedTemplate: filteredTemplates.length > 0,
+        lastUpdated: new Date().toISOString(),
+      };
+      FinanceStorageService.saveLocalBudget(unlinkedBudget);
+      setBudget(unlinkedBudget);
+      setTemplateData(FinanceStorageService.loadLocalTemplateData(unlinkedBudget));
+    } else if (workingBudget !== budget) {
+      setBudget(workingBudget);
     }
 
     if (existingIdx >= 0) {
@@ -1970,16 +2132,26 @@ export default function App() {
         FinanceStorageService.saveLocalSavingsLedger(latestLedger);
         setLedger({ ...latestLedger });
 
-        // Also remove any auto-linked recurring template item so deleted loans don't remain as virtual rows on the Budget Sheet
+        // Also remove any auto-linked recurring template item and clear dangling loanId on budget entries
         const currentTemplates = budget.itemTemplates || [];
         const filteredTemplates = currentTemplates.filter(
           (t) => t.loanId !== loanId && (!target.linkedTemplateId || t.id !== target.linkedTemplateId)
         );
-        if (filteredTemplates.length !== currentTemplates.length) {
+        let entriesUnlinked = false;
+        const cleanedEntries = budget.entries.map((e) => {
+          if (e.loanId === loanId) {
+            entriesUnlinked = true;
+            return { ...e, loanId: undefined };
+          }
+          return e;
+        });
+        if (filteredTemplates.length !== currentTemplates.length || entriesUnlinked) {
           const updatedBudget: YearBudgetData = {
             ...budget,
+            entries: cleanedEntries,
             itemTemplates: filteredTemplates,
-            isPersonalizedTemplate: true,
+            isPersonalizedTemplate: filteredTemplates.length > 0,
+            lastUpdated: new Date().toISOString(),
           };
           FinanceStorageService.saveLocalBudget(updatedBudget);
           setBudget(updatedBudget);
@@ -2030,34 +2202,83 @@ export default function App() {
     let linkedBudgetEntryId: string | undefined;
 
     if (paymentData.recordInBudget) {
-      const entryId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-      linkedBudgetEntryId = entryId;
-      const newBudgetEntry: BudgetEntry = {
-        id: entryId,
-        year: parsedYear,
-        period: resolvedPeriod,
-        periodIndex: resolvedPeriodIdx,
-        date: paymentData.date,
-        type: loan.direction === 'borrowed' ? 'expense' : 'income',
-        category: loan.direction === 'borrowed' ? 'Loans' : 'Other Income',
-        item: loan.name,
-        description: paymentData.note || loan.name,
-        amount: paymentData.amount,
-        estimatedCost: loan.installmentAmount || paymentData.amount,
-        actualCost: paymentData.amount,
-        status: 'Paid',
-        paymentMethod: 'Bank Transfer',
-        loanId: loan.id,
-        createdAt: new Date().toISOString(),
-      };
+      const targetBudget =
+        parsedYear === budget.year ? budget : FinanceStorageService.loadLocalBudget(parsedYear);
+      const targetType: EntryType = loan.direction === 'borrowed' ? 'expense' : 'income';
+      const estAmt = loan.installmentAmount || paymentData.amount;
+      const diffAmt =
+        loan.direction === 'borrowed' ? estAmt - paymentData.amount : paymentData.amount - estAmt;
+      const loanNameLower = loan.name.trim().toLowerCase();
+
+      // Check if a Pending or $0 placeholder entry for this loan already exists in this period
+      const existingPlaceholder = targetBudget.entries.find(
+        (e) =>
+          e.period === resolvedPeriod &&
+          e.type === targetType &&
+          (e.loanId === loan.id || (e.item || e.description || '').trim().toLowerCase() === loanNameLower) &&
+          (e.status === 'Pending' || (e.actualCost ?? e.amount ?? 0) === 0)
+      );
+
+      let updatedEntries: BudgetEntry[];
+      if (existingPlaceholder) {
+        linkedBudgetEntryId = existingPlaceholder.id;
+        updatedEntries = targetBudget.entries.map((e) =>
+          e.id === existingPlaceholder.id
+            ? {
+                ...e,
+                date: paymentData.date,
+                item: loan.name,
+                description: paymentData.note || loan.name,
+                amount: paymentData.amount,
+                estimatedCost: e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt,
+                actualCost: paymentData.amount,
+                difference:
+                  loan.direction === 'borrowed'
+                    ? (e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt) - paymentData.amount
+                    : paymentData.amount - (e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt),
+                status: 'Paid',
+                loanId: loan.id,
+              }
+            : e
+        );
+      } else {
+        const entryId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        linkedBudgetEntryId = entryId;
+        const newBudgetEntry: BudgetEntry = {
+          id: entryId,
+          year: parsedYear,
+          period: resolvedPeriod,
+          periodIndex: resolvedPeriodIdx,
+          date: paymentData.date,
+          type: targetType,
+          category: loan.direction === 'borrowed' ? 'Loans' : 'Other Income',
+          item: loan.name,
+          description: paymentData.note || loan.name,
+          amount: paymentData.amount,
+          estimatedCost: estAmt,
+          actualCost: paymentData.amount,
+          difference: diffAmt,
+          status: 'Paid',
+          paymentMethod: 'Bank Transfer',
+          loanId: loan.id,
+          createdAt: new Date().toISOString(),
+        };
+        updatedEntries = [newBudgetEntry, ...targetBudget.entries];
+      }
 
       const updatedBudget: YearBudgetData = {
-        ...budget,
-        entries: [newBudgetEntry, ...budget.entries],
+        ...targetBudget,
+        entries: updatedEntries,
         lastUpdated: new Date().toISOString(),
       };
-      setBudget(updatedBudget);
-      FinanceStorageService.saveLocalBudget(updatedBudget);
+      FinanceStorageService.saveLocalBudget(updatedBudget, {
+        skipTemplateProfileUpdate: parsedYear !== budget.year,
+      });
+      if (parsedYear === budget.year) {
+        setBudget(updatedBudget);
+      } else {
+        setAvailableYears(FinanceStorageService.getKnownYears());
+      }
     }
 
     let linkedLedgerTxId: string | undefined;
@@ -2146,15 +2367,20 @@ export default function App() {
 
     // 2. If this payment was synced with a Budget Sheet entry, remove that Budget Sheet entry as well
     if (targetPay.budgetEntryId) {
-      const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
-      const updatedEntries = currentBudget.entries.filter((e) => e.id !== targetPay.budgetEntryId);
-      if (updatedEntries.length !== currentBudget.entries.length) {
+      const targetYear = targetPay.year || budget.year;
+      const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
+      const updatedEntries = targetBudget.entries.filter((e) => e.id !== targetPay.budgetEntryId);
+      if (updatedEntries.length !== targetBudget.entries.length) {
         const updatedBudget: YearBudgetData = {
-          ...currentBudget,
+          ...targetBudget,
           entries: updatedEntries,
         };
-        FinanceStorageService.saveLocalBudget(updatedBudget);
-        setBudget(updatedBudget);
+        FinanceStorageService.saveLocalBudget(updatedBudget, {
+          skipTemplateProfileUpdate: targetYear !== budget.year,
+        });
+        if (targetYear === budget.year) {
+          setBudget(updatedBudget);
+        }
       }
     }
 
@@ -2864,9 +3090,19 @@ export default function App() {
       <DriveSessionExpiredModal
         isOpen={isSessionExpiredModalOpen}
         userEmail={driveStatus.userEmail}
-        onSignInAgain={handleSignInWithGoogle}
+        onSignInAgain={() => handleSignInWithGoogle(false)}
         onContinueOffline={() => setIsSessionExpiredModalOpen(false)}
         isSigningIn={driveStatus.isSyncing}
+      />
+
+      {/* In-App Browser (Messenger / IG / FB) & Storage Partitioning Auth Guide Modal */}
+      <InAppBrowserAuthModal
+        isOpen={isInAppBrowserModalOpen}
+        browserEnv={browserEnv}
+        errorMessage={inAppBrowserErrorMsg}
+        onClose={() => setIsInAppBrowserModalOpen(false)}
+        onStartBlankLocalWorkspace={isDefaultStarterBudget(budget) ? handleStartBlankWorkspace : undefined}
+        onForceSignInAnyway={() => handleSignInWithGoogle(true)}
       />
 
       {/* Create New Year Modal */}
@@ -2961,7 +3197,7 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         driveStatus={driveStatus}
-        onSignInWithGoogle={handleSignInWithGoogle}
+        onSignInWithGoogle={() => handleSignInWithGoogle(false)}
         onSignOut={handleSignOut}
         onOpenDriveModal={() => setActiveTab('drive')}
         onTriggerSync={triggerSyncAll}
@@ -2970,6 +3206,72 @@ export default function App() {
 
       {/* Body Views */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+        {/* In-App Browser (Messenger / Facebook / Instagram) Proactive Guidance Banner */}
+        {browserEnv.isInAppBrowser && !isInAppBannerDismissed && !driveStatus.isSignedIn && (
+          <div className="mb-4 rounded-2xl border border-indigo-300/80 dark:border-indigo-700/60 bg-indigo-50/95 dark:bg-indigo-950/50 px-3.5 py-2.5 sm:px-4 sm:py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-xs">
+            <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+              <div className="p-1.5 rounded-xl bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5 sm:mt-0">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                    Opened in {browserEnv.browserName} In-App Browser
+                  </span>
+                  <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-indigo-200/70 dark:bg-indigo-900/70 text-indigo-800 dark:text-indigo-300">
+                    Local Mode Ready
+                  </span>
+                </div>
+                <p className="text-[11px] text-indigo-900/90 dark:text-indigo-300/85 mt-0.5 leading-snug">
+                  You can use CapitalFlow right here on your device, or tap <strong>&bull;&bull;&bull; &rarr; Open in external browser</strong> (Safari/Chrome) to sign in with Google Drive.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(browserEnv.appUrl);
+                  } catch {
+                    // Ignore clipboard fallback
+                  }
+                  setInAppBannerCopied(true);
+                  setTimeout(() => setInAppBannerCopied(false), 3000);
+                }}
+                className="h-8 px-2.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                {inAppBannerCopied ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Link Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Link</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsInAppBrowserModalOpen(true)}
+                className="h-8 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+              >
+                <span>How to Open in Browser</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsInAppBannerDismissed(true)}
+                className="p-1.5 rounded-lg text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-200 transition-colors cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Default Starter Sample Data Indicator & Protection Banner */}
         {isDefaultStarterBudget(budget) && (
           <div className="mb-4 rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-amber-50/90 dark:bg-amber-950/40 px-3.5 py-2.5 sm:px-4 sm:py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-xs">
@@ -2987,11 +3289,19 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-[11px] text-amber-800/90 dark:text-amber-300/80 mt-0.5 leading-snug">
-                  You are viewing built-in starter sample numbers. This sample data will not overwrite your saved Google Drive files.
+                  You are viewing built-in sample numbers. New user? Click <strong>Start My Blank Budget</strong> to clear sample data, or sign in to restore an existing Google Drive backup.
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+            <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={handleStartBlankWorkspace}
+                className="h-8 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Start My Blank Budget</span>
+              </button>
               {driveStatus.isSignedIn ? (
                 <button
                   type="button"
@@ -3005,7 +3315,7 @@ export default function App() {
               ) : (
                 <button
                   type="button"
-                  onClick={handleSignInWithGoogle}
+                  onClick={() => handleSignInWithGoogle(false)}
                   disabled={driveStatus.isSyncing}
                   className="h-8 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
                 >
@@ -3176,9 +3486,10 @@ export default function App() {
                   confirmLabel: 'Yes, Overwrite Template',
                   isDestructive: localIsNewer,
                   onConfirm: async () => {
+                    const latestBudget = FinanceStorageService.loadLocalBudget(currentYear);
                     const updatedBudget = FinanceStorageService.applyTemplateDataToBudget(
                       driveRes.template,
-                      budget
+                      latestBudget
                     );
                     setBudget(updatedBudget);
                     setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
@@ -3258,7 +3569,10 @@ export default function App() {
             onAddNewYear={handleAddNewYear}
             onSelectYear={handleSelectYear}
             onImportBudgetJson={(jsonData) => {
-              const { budget: normalizedBudget } = FinanceStorageService.normalizeBudgetTemplates(jsonData);
+              const { budget: normalizedBudget } = FinanceStorageService.normalizeBudgetTemplates({
+                ...jsonData,
+                isDefaultStarterData: false,
+              });
               FinanceStorageService.saveLocalBudget(normalizedBudget);
               FinanceStorageService.registerKnownYear(normalizedBudget.year);
               setAvailableYears(FinanceStorageService.getKnownYears());
@@ -3269,14 +3583,18 @@ export default function App() {
               showToast(`Imported budget for year ${normalizedBudget.year}`);
             }}
             onImportTemplateJson={(tplJson) => {
-              const updatedBudget = FinanceStorageService.applyTemplateDataToBudget(tplJson, budget);
+              const latestBudget = FinanceStorageService.loadLocalBudget(currentYear);
+              const updatedBudget = FinanceStorageService.applyTemplateDataToBudget(tplJson, latestBudget);
               setBudget(updatedBudget);
               setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
               setHasUnsavedChanges(true);
               showToast('Imported personalized Estimate Budget Template JSON');
             }}
             onImportLedgerJson={(ledgerJson) => {
-              FinanceStorageService.saveLocalSavingsLedger(ledgerJson);
+              FinanceStorageService.saveLocalSavingsLedger({
+                ...ledgerJson,
+                isDefaultStarterData: false,
+              });
               const normalizedLedger = FinanceStorageService.loadLocalSavingsLedger();
               setLedger(normalizedLedger);
               setHasUnsavedChanges(true);
@@ -3295,6 +3613,10 @@ export default function App() {
             frequency={frequency}
             onChangeFrequency={setFrequency}
             currencySymbol="₱"
+            isStarterSampleActive={isDefaultStarterBudget(budget)}
+            onStartBlankWorkspace={handleStartBlankWorkspace}
+            onSignInWithGoogle={() => handleSignInWithGoogle(false)}
+            isSignedIn={driveStatus.isSignedIn}
           />
         )}
       </main>

@@ -485,6 +485,7 @@ export class FinanceStorageService {
         customCategories: budget.customCategories,
         itemTemplates: budget.itemTemplates,
         isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
+        isDefaultStarterData: Boolean(budget.isDefaultStarterData),
       });
     }
 
@@ -537,6 +538,57 @@ export class FinanceStorageService {
     localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
 
     return { budget: cleanBudget, ledger: cleanLedger };
+  }
+
+  /**
+   * Initializes a completely blank workspace (0 entries, 0 sample templates) for new users
+   * who want to start their own budget from scratch or import their own Excel sheet without sample data.
+   */
+  static startFreshBlankWorkspace(year: number = 2026): {
+    budget: YearBudgetData;
+    ledger: SavingsLedgerData;
+    templateData: BudgetTemplateData;
+  } {
+    const blankCategories = {
+      expense: [...EXPENSE_CATEGORIES],
+      income: [...INCOME_CATEGORIES],
+      saving: [...SAVING_CATEGORIES],
+    };
+    const nowIso = new Date().toISOString();
+
+    const blankBudget: YearBudgetData = {
+      year,
+      version: '1.0',
+      lastUpdated: nowIso,
+      entryMode: 'monthly',
+      currency: '₱',
+      entries: [],
+      customCategories: blankCategories,
+      itemTemplates: [],
+      isPersonalizedTemplate: false,
+      isDefaultStarterData: false,
+      budgets: [],
+    };
+
+    const blankLedger: SavingsLedgerData = {
+      ...generateInitialSavingsLedger(blankBudget),
+      lastUpdated: nowIso,
+      isDefaultStarterData: false,
+    };
+
+    try {
+      localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
+      localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
+      localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
+    } catch {
+      // Ignore storage errors
+    }
+
+    FinanceStorageService.saveLocalBudget(blankBudget, { isDefaultStarter: false });
+    FinanceStorageService.saveLocalSavingsLedger(blankLedger, { isDefaultStarter: false });
+    const templateData = FinanceStorageService.loadLocalTemplateData(blankBudget);
+
+    return { budget: blankBudget, ledger: blankLedger, templateData };
   }
 
   /**
@@ -637,7 +689,7 @@ export class FinanceStorageService {
 
   static saveLocalBudget(
     budget: YearBudgetData,
-    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean }
+    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean; skipTemplateProfileUpdate?: boolean }
   ): void {
     const isStarter = Boolean(options?.isDefaultStarter);
     budget.isDefaultStarterData = isStarter;
@@ -647,7 +699,7 @@ export class FinanceStorageService {
       ? budget.lastUpdated
       : new Date().toISOString();
     budget.budgets = deriveCategoryBudgetsFromTemplates(budget.itemTemplates || []);
-    if (budget.customCategories && Array.isArray(budget.itemTemplates)) {
+    if (!options?.skipTemplateProfileUpdate && budget.customCategories && Array.isArray(budget.itemTemplates)) {
       FinanceStorageService.saveUserTemplateProfile({
         lastUpdated: budget.lastUpdated,
         customCategories: budget.customCategories,
@@ -828,7 +880,12 @@ export class FinanceStorageService {
 
     let targetLoan: LoanRecord | undefined =
       entry.type !== 'saving' && entry.loanId
-        ? loans.find((ln) => ln.id === entry.loanId)
+        ? loans.find(
+            (ln) =>
+              ln.id === entry.loanId &&
+              ((entry.type === 'expense' && ln.direction === 'borrowed') ||
+                (entry.type === 'income' && ln.direction === 'lent'))
+          )
         : undefined;
 
     if (!targetLoan && itemNameLower) {
@@ -860,10 +917,46 @@ export class FinanceStorageService {
       ln.updatedAt = new Date().toISOString();
     };
 
+    const recalculateRunningCapital = () => {
+      let runningTotal = ledger.initialCapital || 0;
+      const sorted = [...ledger.transactions].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
+      sorted.forEach((tx) => {
+        if (tx.source === 'withdrawal') {
+          runningTotal = Math.max(0, runningTotal - tx.amount);
+        } else if (tx.source !== 'transfer' && tx.source !== 'reallocation') {
+          runningTotal += tx.amount;
+        }
+        tx.runningTotalCapital = runningTotal;
+      });
+      ledger.transactions = sorted;
+    };
+
     let ledgerModified = false;
+    let txModified = false;
 
     // If the entry was previously linked to a different loan, unlinked, or is now deleted/pending/zero, remove from old loan
     if (existingLoan && (!isPaidOrRecorded || !targetLoan || targetLoan.id !== existingLoan.id)) {
+      const removedPayments = (existingLoan.payments || []).filter((p) => p.budgetEntryId === entry.id);
+      removedPayments.forEach((remPay) => {
+        if (remPay.ledgerTransactionId) {
+          const linkedTxIdx = ledger.transactions.findIndex((t) => t.id === remPay.ledgerTransactionId);
+          if (linkedTxIdx >= 0) {
+            const removedTx = ledger.transactions.splice(linkedTxIdx, 1)[0];
+            const acc = ledger.accounts.find((a) => a.id === removedTx.accountId);
+            if (acc) {
+              acc.balance = Math.max(0, acc.balance - removedTx.amount);
+            }
+            txModified = true;
+          } else if (remPay.accountId) {
+            const acc = ledger.accounts.find((a) => a.id === remPay.accountId);
+            if (acc) {
+              acc.balance = Math.max(0, acc.balance - remPay.amount);
+            }
+          }
+        }
+      });
       existingLoan.payments = (existingLoan.payments || []).filter((p) => p.budgetEntryId !== entry.id);
       recalculateLoanStatus(existingLoan);
       ledgerModified = true;
@@ -876,8 +969,9 @@ export class FinanceStorageService {
         activeLoan.payments = [];
       }
       const existingPaymentIdx = activeLoan.payments.findIndex((p) => p.budgetEntryId === entry.id);
+      const prevPayment = existingPaymentIdx >= 0 ? activeLoan.payments[existingPaymentIdx] : undefined;
       const paymentPayload: LoanPayment = {
-        id: existingPaymentIdx >= 0 ? activeLoan.payments[existingPaymentIdx].id : `lpay-${entry.id}`,
+        id: prevPayment ? prevPayment.id : `lpay-${entry.id}`,
         loanId: activeLoan.id,
         date: entry.date,
         year: entry.year,
@@ -885,8 +979,27 @@ export class FinanceStorageService {
         amount: effectiveAmount,
         source: 'budget_sync',
         budgetEntryId: entry.id,
+        accountId: prevPayment?.accountId,
+        ledgerTransactionId: prevPayment?.ledgerTransactionId,
         note: `${entry.period} ${entry.year} Budget (${entry.item || entry.description || activeLoan.name})`,
       };
+
+      // If this payment also had a linked savings ledger deposit transaction, keep its amount and date synchronized
+      if (prevPayment?.ledgerTransactionId) {
+        const linkedTx = ledger.transactions.find((t) => t.id === prevPayment.ledgerTransactionId);
+        if (linkedTx) {
+          const delta = effectiveAmount - linkedTx.amount;
+          linkedTx.amount = effectiveAmount;
+          linkedTx.date = entry.date;
+          linkedTx.year = entry.year;
+          linkedTx.period = entry.period;
+          const acc = ledger.accounts.find((a) => a.id === linkedTx.accountId);
+          if (acc && delta !== 0) {
+            acc.balance = Math.max(0, acc.balance + delta);
+          }
+          txModified = true;
+        }
+      }
 
       if (existingPaymentIdx >= 0) {
         activeLoan.payments[existingPaymentIdx] = paymentPayload;
@@ -895,6 +1008,10 @@ export class FinanceStorageService {
       }
       recalculateLoanStatus(activeLoan);
       ledgerModified = true;
+    }
+
+    if (txModified) {
+      recalculateRunningCapital();
     }
 
     if (ledgerModified) {
@@ -946,6 +1063,7 @@ export class FinanceStorageService {
 
         prev.amount = effectiveAmount;
         prev.date = entry.date;
+        prev.year = entry.year;
         prev.period = entry.period;
         prev.note = entryNote;
         prev.category = canonicalFund;
@@ -985,6 +1103,21 @@ export class FinanceStorageService {
         }
       }
     }
+
+    // Recalculate runningTotalCapital chronologically across all transactions
+    let runningTotal = ledger.initialCapital || 0;
+    const sorted = [...ledger.transactions].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    sorted.forEach((tx) => {
+      if (tx.source === 'withdrawal') {
+        runningTotal = Math.max(0, runningTotal - tx.amount);
+      } else if (tx.source !== 'transfer' && tx.source !== 'reallocation') {
+        runningTotal += tx.amount;
+      }
+      tx.runningTotalCapital = runningTotal;
+    });
+    ledger.transactions = sorted;
 
     FinanceStorageService.saveLocalSavingsLedger(ledger);
     return ledger;
@@ -1040,6 +1173,7 @@ export class FinanceStorageService {
         customCategories: result.budget.customCategories,
         itemTemplates: cleaned,
         isPersonalizedTemplate: Boolean((result.budget.isPersonalizedTemplate ?? true) && cleaned.length > 0),
+        isDefaultStarterData: Boolean(result.budget.isDefaultStarterData),
       });
     }
     FinanceStorageService.saveLocalBudget(result.budget);
@@ -1118,6 +1252,7 @@ export class FinanceStorageService {
       version: raw.version || '1.0.0',
       lastUpdated: raw.lastUpdated || file.modifiedTime || new Date().toISOString(),
       isPersonalizedTemplate: Boolean((raw.isPersonalizedTemplate ?? true) && cleanedTemplates.length > 0),
+      isDefaultStarterData: Boolean(raw.isDefaultStarterData),
       customCategories: {
         expense: Array.isArray(raw.customCategories?.expense)
           ? raw.customCategories.expense

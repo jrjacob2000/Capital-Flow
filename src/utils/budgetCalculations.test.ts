@@ -22,6 +22,17 @@ import {
   stripDefaultStarterTemplates,
 } from '../services/sampleData';
 import { FinanceStorageService } from '../services/storageService';
+import {
+  analyzeAndParseWorksheet,
+  parseUniversalRowsToEntries,
+  detectUniversalColumnMapping,
+  parseCurrencyNumber,
+} from './excelImportParser';
+import {
+  getBrowserEnvironmentInfo,
+  isMissingInitialStateOrStorageError,
+  resolveAuthDomain,
+} from '../services/firebase';
 import { BudgetEntry, BudgetItemTemplate, LoanRecord, SavingsLedgerData } from '../types/finance';
 
 // Set up in-memory localStorage mock for FinanceStorageService unit tests
@@ -477,3 +488,437 @@ describe('8. Storage Service Security & Ledger Synchronization', () => {
     assert.equal(syncedLedger.loans![0].status, 'completed');
   });
 });
+
+describe('9. Universal & Multi-Section Excel / CSV Importer (excelImportParser)', () => {
+  it('auto-detects and parses the classic multi-section budget layout (Home_Buget_2026 style)', () => {
+    const structuredRows = [
+      ['', '', 'Income', 'Estimated', 'Actual'],
+      ['', '', 'Monthly Salary', 40000, 42000],
+      ['', '', 'Total Income', 40000, 42000],
+      [],
+      [
+        '',
+        'Category',
+        'Item',
+        'Estimated Cost',
+        'Actual Cost',
+        'Stay in ATM',
+        'Cash',
+        'Credit Card',
+        'GCash Transfer',
+        'Kath Account',
+        'Check Account',
+        'Bank Transfer',
+        'Difference',
+        'Status',
+        'Reference',
+      ],
+      ['', 'Utilities', 'Meralco Bill', 3500, 3200, 0, 0, 0, 3200, 0, 0, 0, 300, 'Paid', 'Ref-101'],
+      ['', 'Savings', 'Emergency Fund', 5000, 5000, 0, 0, 0, 0, 0, 0, 5000, 0, 'Paid', 'Monthly reserve'],
+      ['', '', 'Expenses Total Summary', 8500, 8200],
+    ];
+
+    const res = analyzeAndParseWorksheet(structuredRows, 2026, 'Oct');
+    assert.equal(res.detectedMode, 'structured');
+    assert.equal(res.entries.length, 3);
+
+    const income = res.entries.find((e) => e.type === 'income')!;
+    assert.equal(income.item, 'Monthly Salary');
+    assert.equal(income.actualCost, 42000);
+
+    const expense = res.entries.find((e) => e.type === 'expense')!;
+    assert.equal(expense.item, 'Meralco Bill');
+    assert.equal(expense.paymentMethod, 'GCash Transfer');
+    assert.equal(expense.actualCost, 3200);
+
+    const saving = res.entries.find((e) => e.type === 'saving')!;
+    assert.equal(saving.item, 'Emergency Fund');
+    assert.equal(saving.actualCost, 5000);
+  });
+
+  it('auto-detects and parses any universal flat table starting in Column A', () => {
+    const universalRows = [
+      ['Date', 'Type', 'Category', 'Description', 'Amount', 'Payment Method', 'Notes'],
+      ['2026-10-01', 'Income', 'Salary & Wages', 'Payroll Credit', '₱45,000.00', 'Bank Transfer', '15th'],
+      ['2026-10-05', 'Expense', 'Utilities', 'Internet Bill', '1,699.00', 'Credit Card', 'Auto'],
+      ['2026-10-10', 'Savings', 'Emergency Fund', 'Emergency Fund', '4,000', 'GCash', 'Save'],
+      ['', '', 'Total', 'Total', '50,699.00', '', ''],
+    ];
+
+    const res = analyzeAndParseWorksheet(universalRows, 2026, 'Oct');
+    assert.equal(res.detectedMode, 'universal');
+    // Total row is automatically skipped
+    assert.equal(res.entries.length, 3);
+    assert.equal(res.entries[0].type, 'income');
+    assert.equal(res.entries[0].actualCost, 45000);
+    assert.equal(res.entries[1].type, 'expense');
+    assert.equal(res.entries[1].item, 'Internet Bill');
+    assert.equal(res.entries[1].paymentMethod, 'Credit Card');
+    assert.equal(res.entries[2].type, 'saving');
+    assert.equal(res.entries[2].paymentMethod, 'GCash Transfer');
+  });
+
+  it('supports custom column mapping for minimal 2-column or headerless spreadsheets', () => {
+    const customRows = [
+      ['Supermarket Groceries', '2,450.50'],
+      ['Water Bill', '680.00'],
+    ];
+
+    const { mapping } = detectUniversalColumnMapping(customRows);
+    const customMapping = {
+      ...mapping,
+      hasHeaderRow: false,
+      itemCol: 0,
+      actualCol: 1,
+      defaultEntryType: 'expense' as const,
+      defaultCategory: 'Budget',
+    };
+
+    const parsed = parseUniversalRowsToEntries(customRows, customMapping, 2026, 'Oct');
+    assert.equal(parsed.entries.length, 2);
+    assert.equal(parsed.entries[0].item, 'Supermarket Groceries');
+    assert.equal(parsed.entries[0].actualCost, 2450.5);
+    assert.equal(parsed.entries[0].category, 'Daily Living & Essentials');
+  });
+
+  it('correctly resolves bi-weekly period index and default date (Oct-P1 and Oct-P2) during Excel import', () => {
+    const rows = [
+      ['Description', 'Amount'],
+      ['Bi-Weekly Payroll', '25,000'],
+      ['Electricity Bill', '1,800'],
+    ];
+
+    const p1Res = analyzeAndParseWorksheet(rows, 2026, 'Oct-P1');
+    assert.equal(p1Res.entries.length, 2);
+    assert.equal(p1Res.entries[0].period, 'Oct-P1');
+    assert.equal(p1Res.entries[0].periodIndex, 18); // Oct is month index 9 -> 9 * 2 = 18
+    assert.equal(p1Res.entries[0].date, '2026-10-01');
+
+    const p2Res = analyzeAndParseWorksheet(rows, 2026, 'Oct-P2');
+    assert.equal(p2Res.entries.length, 2);
+    assert.equal(p2Res.entries[0].period, 'Oct-P2');
+    assert.equal(p2Res.entries[0].periodIndex, 19); // Oct-P2 is index 19
+    assert.equal(p2Res.entries[0].date, '2026-10-16');
+  });
+});
+
+describe('12. In-App Browser (Messenger / WebView) & New User Auth Protection', () => {
+  it('detects Facebook Messenger iOS in-app browser and WKWebView environments', () => {
+    const messengerIosUa =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 [FBAN/MessengerForiOS;FBAV/455.0.0.35.109;FBBV/576875421]';
+    const info1 = getBrowserEnvironmentInfo(messengerIosUa, '');
+    assert.equal(info1.isInAppBrowser, true);
+    assert.equal(info1.browserName, 'Messenger');
+    assert.equal(info1.isIOS, true);
+
+    // Stripped iOS WKWebView inside Messenger (missing Safari/ token)
+    const strippedIosWebViewUa =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
+    const info2 = getBrowserEnvironmentInfo(strippedIosWebViewUa, 'https://l.messenger.com/');
+    assert.equal(info2.isInAppBrowser, true);
+    assert.equal(info2.browserName, 'Messenger');
+
+    // Standard Mobile Safari on iOS should NOT be flagged as an in-app browser
+    const realMobileSafariUa =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
+    const safariInfo = getBrowserEnvironmentInfo(realMobileSafariUa, '');
+    assert.equal(safariInfo.isInAppBrowser, false);
+  });
+
+  it('detects Firebase missing initial state & partitioned sessionStorage errors and resolves same-origin authDomain', () => {
+    const firebaseHandlerErr = new Error(
+      'Unable to process request due to missing initial state. This may happen if browser sessionStorage is inaccessible or accidentally cleared. Some specific scenarios are - 1) Using IDP-Initiated SAML SSO. 2) Using signInWithRedirect in a storage-partitioned browser environment.'
+    );
+    assert.equal(isMissingInitialStateOrStorageError(firebaseHandlerErr), true);
+    assert.equal(isMissingInitialStateOrStorageError({ code: 'auth/missing-initial-state' }), true);
+    assert.equal(isMissingInitialStateOrStorageError({ code: 'auth/user-cancelled' }), false);
+
+    // Same-origin authDomain on .web.app vs .firebaseapp.com
+    assert.equal(
+      resolveAuthDomain('capital-flow-37dfa.firebaseapp.com', 'capital-flow-37dfa', 'capital-flow-37dfa.web.app'),
+      'capital-flow-37dfa.web.app'
+    );
+    assert.equal(
+      resolveAuthDomain('capital-flow-37dfa.firebaseapp.com', 'capital-flow-37dfa', 'example.run.app'),
+      'capital-flow-37dfa.firebaseapp.com'
+    );
+  });
+
+  it('initializes a completely blank workspace for new users via startFreshBlankWorkspace and keeps it blank across reloads and new years', () => {
+    memoryStorage.clear();
+    const { budget, ledger, templateData } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    assert.equal(budget.entries.length, 0);
+    assert.equal(budget.itemTemplates?.length, 0);
+    assert.equal(budget.isDefaultStarterData, false);
+    assert.equal(ledger.transactions.length, 0);
+    assert.equal(templateData.itemTemplates.length, 0);
+
+    // Reloading 2026 from local storage must remain blank
+    const reloaded2026 = FinanceStorageService.loadLocalBudget(2026);
+    assert.equal(reloaded2026.entries.length, 0);
+    assert.equal(reloaded2026.itemTemplates?.length, 0);
+    assert.equal(reloaded2026.isDefaultStarterData, false);
+
+    // Creating a new year (2027) after starting blank must NOT re-populate sample Odiongan/Kath templates
+    const budget2027 = FinanceStorageService.loadLocalBudget(2027);
+    assert.equal(budget2027.entries.length, 0);
+    assert.equal(budget2027.itemTemplates?.length, 0);
+    assert.equal(budget2027.isDefaultStarterData, false);
+    assert.equal(budget2027.customCategories?.expense.includes('Odiongan'), false);
+  });
+
+  it('preserves recorded budget entries when applying a template JSON onto the latest saved budget', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const budgetWithEntries = FinanceStorageService.loadLocalBudget(2026);
+    budgetWithEntries.entries = [
+      makeEntry({
+        id: 'imported-1',
+        year: 2026,
+        period: 'Oct',
+        type: 'expense',
+        category: 'Utilities',
+        item: 'Meralco',
+        actualCost: 3100,
+        amount: 3100,
+      }),
+    ];
+    FinanceStorageService.saveLocalBudget(budgetWithEntries);
+
+    const latestFromDisk = FinanceStorageService.loadLocalBudget(2026);
+    const updated = FinanceStorageService.applyTemplateDataToBudget(
+      {
+        version: '1.0.0',
+        lastUpdated: new Date().toISOString(),
+        isPersonalizedTemplate: true,
+        customCategories: {
+          income: ['Salary & Wages'],
+          expense: ['Utilities', 'Subscriptions'],
+          saving: ['Emergency Fund'],
+        },
+        itemTemplates: [
+          {
+            id: 'tpl-net',
+            type: 'expense',
+            category: 'Subscriptions',
+            item: 'Fiber Internet',
+            defaultEstimatedCost: 1699,
+            defaultPaymentMethod: 'Credit Card',
+          },
+        ],
+      },
+      latestFromDisk
+    );
+
+    assert.equal(updated.entries.length, 1);
+    assert.equal(updated.entries[0].item, 'Meralco');
+    assert.equal(updated.itemTemplates?.length, 1);
+    assert.equal(updated.itemTemplates?.[0].item, 'Fiber Internet');
+  });
+
+  it('parseCurrencyNumber handles currency-prefixed negative amounts and accounting parentheses', () => {
+    assert.equal(parseCurrencyNumber('₱-1,250.50'), -1250.5);
+    assert.equal(parseCurrencyNumber('₱ -500'), -500);
+    assert.equal(parseCurrencyNumber('-₱3,400.00'), -3400);
+    assert.equal(parseCurrencyNumber('(2,100.75)'), -2100.75);
+    assert.equal(parseCurrencyNumber('₱4,500.00'), 4500);
+  });
+});
+
+describe('13. Cross-Module Synchronization (Loans, Funds Ledger & Multi-Year Template Integrity)', () => {
+  it('recalculates runningTotalCapital chronologically when out-of-order saving entries are added, updated, or deleted', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const initialLedger = FinanceStorageService.loadLocalSavingsLedger();
+    initialLedger.initialCapital = 10000;
+    initialLedger.accounts[0].balance = 10000;
+    FinanceStorageService.saveLocalSavingsLedger(initialLedger);
+
+    // 1. Add a later saving entry (Oct 15: +3,000)
+    const octEntry = makeEntry({
+      id: 'sav-oct',
+      year: 2026,
+      period: 'Oct',
+      date: '2026-10-15',
+      type: 'saving',
+      category: 'Emergency Fund',
+      item: 'Emergency Fund',
+      actualCost: 3000,
+      amount: 3000,
+      status: 'Paid',
+      savingAccountId: initialLedger.accounts[0].id,
+      savingAccountName: initialLedger.accounts[0].name,
+    });
+    let ledger = FinanceStorageService.accumulateBudgetSavingToLedger(octEntry, false);
+    assert.equal(ledger.transactions.length, 1);
+    assert.equal(ledger.transactions[0].runningTotalCapital, 13000);
+
+    // 2. Add an earlier saving entry out-of-order (Sep 10: +2,000)
+    const sepEntry = makeEntry({
+      id: 'sav-sep',
+      year: 2026,
+      period: 'Sep',
+      date: '2026-09-10',
+      type: 'saving',
+      category: 'Emergency Fund',
+      item: 'Emergency Fund',
+      actualCost: 2000,
+      amount: 2000,
+      status: 'Paid',
+      savingAccountId: initialLedger.accounts[0].id,
+      savingAccountName: initialLedger.accounts[0].name,
+    });
+    ledger = FinanceStorageService.accumulateBudgetSavingToLedger(sepEntry, false);
+    assert.equal(ledger.transactions.length, 2);
+    // Chronological order: Sep 10 first (10000 + 2000 = 12000), Oct 15 second (12000 + 3000 = 15000)
+    assert.equal(ledger.transactions[0].id, 'tx-sav-sep');
+    assert.equal(ledger.transactions[0].runningTotalCapital, 12000);
+    assert.equal(ledger.transactions[1].id, 'tx-sav-oct');
+    assert.equal(ledger.transactions[1].runningTotalCapital, 15000);
+    assert.equal(ledger.accounts[0].balance, 15000);
+
+    // 3. Update the Sep 10 entry from 2,000 to 4,500
+    ledger = FinanceStorageService.accumulateBudgetSavingToLedger(
+      { ...sepEntry, actualCost: 4500, amount: 4500 },
+      false
+    );
+    assert.equal(ledger.transactions[0].runningTotalCapital, 14500);
+    assert.equal(ledger.transactions[1].runningTotalCapital, 17500);
+    assert.equal(ledger.accounts[0].balance, 17500);
+
+    // 4. Delete the Sep 10 entry
+    ledger = FinanceStorageService.accumulateBudgetSavingToLedger(sepEntry, true);
+    assert.equal(ledger.transactions.length, 1);
+    assert.equal(ledger.transactions[0].id, 'tx-sav-oct');
+    assert.equal(ledger.transactions[0].runningTotalCapital, 13000);
+    assert.equal(ledger.accounts[0].balance, 13000);
+  });
+
+  it('preserves global user template profile when saving another year with skipTemplateProfileUpdate: true', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const budget2026 = FinanceStorageService.loadLocalBudget(2026);
+    budget2026.itemTemplates = [
+      {
+        id: 'tpl-custom-1',
+        type: 'expense',
+        category: 'Utilities & Bills',
+        item: 'Home Fiber 500Mbps',
+        defaultEstimatedCost: 2499,
+        defaultPaymentMethod: 'Credit Card',
+      },
+    ];
+    budget2026.isPersonalizedTemplate = true;
+    FinanceStorageService.saveLocalBudget(budget2026);
+
+    // Initialize a blank 2027 year with skipTemplateProfileUpdate: true
+    const blank2027 = FinanceStorageService.loadLocalBudget(2027);
+    blank2027.itemTemplates = [];
+    blank2027.isPersonalizedTemplate = false;
+    FinanceStorageService.saveLocalBudget(blank2027, { skipTemplateProfileUpdate: true });
+
+    // Global template profile must still contain Home Fiber 500Mbps
+    const savedProfile = FinanceStorageService.loadUserTemplateProfile();
+    assert.equal(savedProfile?.itemTemplates.length, 1);
+    assert.equal(savedProfile?.itemTemplates[0].item, 'Home Fiber 500Mbps');
+  });
+
+  it('synchronizes loan payments, loan status, and linked savings account transactions across Budget Sheet edits and deletions', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    const accId = ledger.accounts[0].id;
+    ledger.initialCapital = 20000;
+    ledger.accounts[0].balance = 20000;
+
+    // Create an active Lent Loan (Receivable) of 10,000 with 5,000 already collected
+    ledger.loans = [
+      {
+        id: 'loan-lent-1',
+        name: 'Personal Receivable - Alex',
+        direction: 'lent',
+        category: 'Personal Receivable',
+        principalAmount: 10000,
+        totalContractAmount: 10000,
+        installmentAmount: 2500,
+        totalInstallments: 4,
+        initialPaidAmount: 5000,
+        initialInstallmentsPaid: 2,
+        frequency: 'monthly',
+        startDate: '2026-08-01',
+        status: 'active',
+        payments: [
+          {
+            id: 'lpay-existing',
+            loanId: 'loan-lent-1',
+            date: '2026-10-05',
+            year: 2026,
+            period: 'Oct',
+            amount: 2500,
+            source: 'budget_sync',
+            budgetEntryId: 'entry-loan-oct',
+            accountId: accId,
+            ledgerTransactionId: 'tx-loan-oct',
+            note: 'Oct collection',
+          },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    ledger.transactions = [
+      {
+        id: 'tx-loan-oct',
+        date: '2026-10-05',
+        year: 2026,
+        period: 'Oct',
+        amount: 2500,
+        accountId: accId,
+        accountName: ledger.accounts[0].name,
+        source: 'manual_deposit',
+        category: 'General Reserves / Starting Capital',
+        note: 'Loan Repayment Collected: Personal Receivable - Alex',
+        runningTotalCapital: 22500,
+      },
+    ];
+    ledger.accounts[0].balance = 22500;
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    // 1. User updates the Oct Budget Sheet entry from 2,500 to 5,000 (which settles the remaining 5,000 of the 10,000 contract!)
+    const updatedOctEntry = makeEntry({
+      id: 'entry-loan-oct',
+      year: 2026,
+      period: 'Oct',
+      date: '2026-10-06',
+      type: 'income',
+      category: 'Other Income',
+      item: 'Personal Receivable - Alex',
+      actualCost: 5000,
+      amount: 5000,
+      status: 'Paid',
+      loanId: 'loan-lent-1',
+    });
+
+    const syncRes1 = FinanceStorageService.syncBudgetLoanPaymentToLedger(updatedOctEntry, false);
+    assert.ok(syncRes1.matchedLoan);
+    assert.equal(syncRes1.matchedLoan?.status, 'completed');
+    assert.equal(syncRes1.matchedLoan?.payments.length, 1);
+    assert.equal(syncRes1.matchedLoan?.payments[0].amount, 5000);
+    // Preserves accountId & ledgerTransactionId and updates the savings account balance (+2,500 delta -> 25,000)
+    assert.equal(syncRes1.matchedLoan?.payments[0].accountId, accId);
+    assert.equal(syncRes1.matchedLoan?.payments[0].ledgerTransactionId, 'tx-loan-oct');
+    assert.equal(syncRes1.ledger.accounts[0].balance, 25000);
+    assert.equal(syncRes1.ledger.transactions[0].amount, 5000);
+    assert.equal(syncRes1.ledger.transactions[0].runningTotalCapital, 25000);
+
+    // 2. User deletes the Oct Budget Sheet entry -> rolls back the loan payment, reverts loan to 'active', and reverses the 5,000 deposit from the savings account
+    const syncRes2 = FinanceStorageService.syncBudgetLoanPaymentToLedger(updatedOctEntry, true);
+    assert.ok(syncRes2.matchedLoan);
+    assert.equal(syncRes2.matchedLoan?.status, 'active');
+    assert.equal(syncRes2.matchedLoan?.payments.length, 0);
+    assert.equal(syncRes2.ledger.transactions.length, 0);
+    assert.equal(syncRes2.ledger.accounts[0].balance, 20000);
+  });
+});
+
+

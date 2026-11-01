@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   PiggyBank,
   Plus,
@@ -235,6 +235,30 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [simYears, setSimYears] = useState(10);
   const [simMonthly, setSimMonthly] = useState(1200);
   const [simRate, setSimRate] = useState(7.5);
+
+  // Keep selected account IDs valid when accounts are added, deleted, or imported
+  useEffect(() => {
+    const firstAcc = ledger.accounts[0]?.id || '';
+    if (!ledger.accounts.some((a) => a.id === depositAccountId)) {
+      setDepositAccountId(firstAcc);
+    }
+    if (!ledger.accounts.some((a) => a.id === withdrawAccountId)) {
+      setWithdrawAccountId(firstAcc);
+    }
+    const validFrom = ledger.accounts.some((a) => a.id === transferFromAccountId)
+      ? transferFromAccountId
+      : firstAcc;
+    if (validFrom !== transferFromAccountId) {
+      setTransferFromAccountId(validFrom);
+    }
+    const validToExists =
+      ledger.accounts.some((a) => a.id === transferToAccountId) &&
+      (ledger.accounts.length <= 1 || transferToAccountId !== validFrom);
+    if (!validToExists) {
+      const other = ledger.accounts.find((a) => a.id !== validFrom);
+      setTransferToAccountId(other ? other.id : firstAcc);
+    }
+  }, [ledger.accounts, depositAccountId, withdrawAccountId, transferFromAccountId, transferToAccountId]);
 
   const handleOpenEditTx = (tx: SavingsTransaction) => {
     setEditingTx(tx);
@@ -2095,7 +2119,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setTransactionMode('transfer')}
+                onClick={() => {
+                  setTransactionMode('transfer');
+                  if (transferFromAccountId === transferToAccountId) {
+                    const other = ledger.accounts.find((a) => a.id !== transferFromAccountId);
+                    if (other) setTransferToAccountId(other.id);
+                  }
+                }}
                 className={`h-8 sm:h-9 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   transactionMode === 'transfer'
                     ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'

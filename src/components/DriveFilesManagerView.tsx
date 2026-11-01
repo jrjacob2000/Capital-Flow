@@ -163,7 +163,16 @@ export const DriveFilesManagerView: React.FC<DriveFilesManagerViewProps> = ({
         }
 
         if (parsed.backupVersion && parsed.budget && parsed.ledger) {
-          onImportBudgetJson(parsed.budget);
+          const mergedBudget: YearBudgetData = parsed.templateData
+            ? {
+                ...parsed.budget,
+                customCategories: parsed.templateData.customCategories || parsed.budget.customCategories,
+                itemTemplates: parsed.templateData.itemTemplates || parsed.budget.itemTemplates,
+                isPersonalizedTemplate:
+                  parsed.templateData.isPersonalizedTemplate ?? parsed.budget.isPersonalizedTemplate,
+              }
+            : parsed.budget;
+          onImportBudgetJson(mergedBudget);
           if (parsed.templateData && onImportTemplateJson) {
             onImportTemplateJson(parsed.templateData);
           }

@@ -10,12 +10,14 @@ import {
 } from 'firebase/auth';
 
 // Optionally load local firebase-applet-config.json if present (e.g. in AI Studio),
-// without failing the build when the file is gitignored in a public repository.
-const localConfigModules = import.meta.glob<{ default: Record<string, string> }>(
-  '../../firebase-applet-config.json',
-  { eager: true }
-);
-const localFileConfig = localConfigModules['../../firebase-applet-config.json']?.default ?? {};
+// without failing the build when the file is gitignored in a public repository or running in Node tests.
+const localConfigModules =
+  typeof (import.meta as any).glob === 'function'
+    ? (import.meta as any).glob('../../firebase-applet-config.json', { eager: true })
+    : {};
+const localFileConfig =
+  (localConfigModules['../../firebase-applet-config.json'] as { default?: Record<string, string> })
+    ?.default ?? {};
 
 // Helper to ignore placeholder values copied from .env.example
 const cleanEnvValue = (val: string | undefined): string => {
@@ -31,31 +33,245 @@ const cleanEnvValue = (val: string | undefined): string => {
   return trimmed;
 };
 
-const envConfig: FirebaseOptions = {
-  apiKey: cleanEnvValue(import.meta.env.VITE_FIREBASE_API_KEY),
-  authDomain: cleanEnvValue(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN),
-  projectId: cleanEnvValue(import.meta.env.VITE_FIREBASE_PROJECT_ID),
-  storageBucket: cleanEnvValue(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET),
-  messagingSenderId: cleanEnvValue(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID),
-  appId: cleanEnvValue(import.meta.env.VITE_FIREBASE_APP_ID),
+export const resolveAuthDomain = (
+  configuredAuthDomain: string | undefined,
+  projectId: string | undefined,
+  currentHostname?: string
+): string => {
+  const cleaned = cleanEnvValue(configuredAuthDomain);
+  const fallback = cleaned || (projectId ? `${projectId}.firebaseapp.com` : '');
+  const host = (
+    currentHostname !== undefined
+      ? currentHostname
+      : typeof window !== 'undefined'
+        ? window.location.hostname
+        : ''
+  ).toLowerCase();
+  if (!host || !projectId) return fallback;
+  const pid = projectId.toLowerCase();
+  // When accessed via Firebase Hosting (.web.app or .firebaseapp.com) for the same project,
+  // use the current hostname as authDomain so /__/auth/handler runs on the exact same origin
+  // and avoids cross-origin sessionStorage partitioning on iOS Safari / mobile browsers.
+  if (host === `${pid}.web.app` || host === `${pid}.firebaseapp.com`) {
+    return host;
+  }
+  return fallback;
 };
 
+const viteEnv = (import.meta as any).env || {};
+const envProjectId = cleanEnvValue(viteEnv.VITE_FIREBASE_PROJECT_ID);
+const envConfig: FirebaseOptions = {
+  apiKey: cleanEnvValue(viteEnv.VITE_FIREBASE_API_KEY),
+  authDomain: resolveAuthDomain(viteEnv.VITE_FIREBASE_AUTH_DOMAIN, envProjectId),
+  projectId: envProjectId,
+  storageBucket: cleanEnvValue(viteEnv.VITE_FIREBASE_STORAGE_BUCKET),
+  messagingSenderId: cleanEnvValue(viteEnv.VITE_FIREBASE_MESSAGING_SENDER_ID),
+  appId: cleanEnvValue(viteEnv.VITE_FIREBASE_APP_ID),
+};
+
+const fileProjectId = localFileConfig.projectId || '';
 const fileConfig: FirebaseOptions = {
   apiKey: localFileConfig.apiKey || '',
-  authDomain: localFileConfig.authDomain || '',
-  projectId: localFileConfig.projectId || '',
+  authDomain: resolveAuthDomain(localFileConfig.authDomain, fileProjectId),
+  projectId: fileProjectId,
   storageBucket: localFileConfig.storageBucket || '',
   messagingSenderId: localFileConfig.messagingSenderId || '',
   appId: localFileConfig.appId || '',
 };
 
+const defaultProjectId = 'capital-flow-37dfa';
 const defaultClientConfig: FirebaseOptions = {
   apiKey: ['AIzaSyDPKtUrI', '_2vG11xYEvQHLfsD', '-Xn3YIsztg'].join(''),
-  authDomain: 'capital-flow-37dfa.firebaseapp.com',
-  projectId: 'capital-flow-37dfa',
+  authDomain: resolveAuthDomain('capital-flow-37dfa.firebaseapp.com', defaultProjectId),
+  projectId: defaultProjectId,
   storageBucket: 'capital-flow-37dfa.firebasestorage.app',
   messagingSenderId: '956386978461',
   appId: '1:956386978461:web:b400e96927be5945b94274',
+};
+
+export interface BrowserEnvironmentInfo {
+  isInAppBrowser: boolean;
+  browserName: string;
+  isIOS: boolean;
+  isAndroid: boolean;
+  isMobile: boolean;
+  isSessionStorageSupported: boolean;
+  appUrl: string;
+  chromeIntentUrl: string | null;
+  safariSchemeUrl: string | null;
+}
+
+export const checkSessionStorageAvailable = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  try {
+    const testKey = '__capitalflow_ss_test__';
+    window.sessionStorage.setItem(testKey, '1');
+    const val = window.sessionStorage.getItem(testKey);
+    window.sessionStorage.removeItem(testKey);
+    return val === '1';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Detects embedded in-app browsers (Facebook Messenger, Facebook, Instagram, TikTok, LINE, WeChat,
+ * Telegram, LinkedIn, X/Twitter, Android WebView, and iOS WKWebView) where Google OAuth popups
+ * and Firebase /__/auth/handler fail with "Unable to process request due to missing initial state"
+ * due to partitioned/cleared sessionStorage and severed window.opener references.
+ */
+export const getBrowserEnvironmentInfo = (
+  customUserAgent?: string,
+  customReferrer?: string
+): BrowserEnvironmentInfo => {
+  const ua =
+    customUserAgent !== undefined
+      ? customUserAgent
+      : typeof navigator !== 'undefined'
+        ? navigator.userAgent || ''
+        : '';
+  const ref =
+    customReferrer !== undefined
+      ? customReferrer
+      : typeof document !== 'undefined'
+        ? document.referrer || ''
+        : '';
+
+  const isIOS =
+    /iPhone|iPad|iPod/i.test(ua) ||
+    (typeof navigator !== 'undefined' &&
+      navigator.platform === 'MacIntel' &&
+      navigator.maxTouchPoints > 1 &&
+      customUserAgent === undefined);
+  const isAndroid = /Android/i.test(ua);
+  const isMobile = isIOS || isAndroid || /Mobile|Tablet/i.test(ua);
+
+  const isStandalone =
+    typeof window !== 'undefined' &&
+    ((window.navigator as any)?.standalone === true ||
+      (typeof window.matchMedia === 'function' &&
+        window.matchMedia('(display-mode: standalone)').matches));
+
+  let isInAppBrowser = false;
+  let browserName = 'Standard Browser';
+
+  if (
+    /MessengerForiOS|MessengerLite|Orca-Android|FB_IAB\/Messenger|\bMessenger\b|LightSpeed/i.test(
+      ua
+    ) ||
+    (/(FBAN|FBAV|FBIOS|FB_IAB|FBBV)/i.test(ua) && /messenger\.com/i.test(ref))
+  ) {
+    isInAppBrowser = true;
+    browserName = 'Messenger';
+  } else if (/(FBAN|FBAV|FBIOS|FB_IAB|FBBV|FB4A)/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'Facebook / Messenger';
+  } else if (/Instagram/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'Instagram';
+  } else if (/TikTok|BytedanceWebview|musical_ly/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'TikTok';
+  } else if (/\bLine\//i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'LINE';
+  } else if (/MicroMessenger|WeChat/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'WeChat';
+  } else if (/LinkedInApp/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'LinkedIn';
+  } else if (/Snapchat/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'Snapchat';
+  } else if (/Twitter|X-Client/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'X (Twitter)';
+  } else if (/Viber/i.test(ua)) {
+    isInAppBrowser = true;
+    browserName = 'Viber';
+  } else if (
+    isAndroid &&
+    (/; wv\)/i.test(ua) || /\bVersion\/[\d.]+ Chrome\/[\d.]+ Mobile Safari\/[\d.]+/i.test(ua))
+  ) {
+    isInAppBrowser = true;
+    browserName = /messenger\.com/i.test(ref)
+      ? 'Messenger'
+      : /facebook\.com/i.test(ref)
+        ? 'Facebook / Messenger'
+        : 'In-App Browser';
+  } else if (
+    isIOS &&
+    /AppleWebKit/i.test(ua) &&
+    !/Safari\//i.test(ua) &&
+    !/(CriOS|FxiOS|EdgiOS|OPiOS)/i.test(ua) &&
+    !isStandalone
+  ) {
+    // iOS WKWebView inside apps (like Messenger when FB tokens are stripped) omits "Safari/"
+    isInAppBrowser = true;
+    browserName = /messenger\.com/i.test(ref)
+      ? 'Messenger'
+      : /facebook\.com/i.test(ref)
+        ? 'Facebook / Messenger'
+        : 'Messenger / In-App Browser';
+  }
+
+  const rawUrl =
+    typeof window !== 'undefined' ? window.location.href : 'https://capital-flow-37dfa.firebaseapp.com';
+  // Strip Facebook click tracking param (?fbclid=...) for a cleaner external link
+  let cleanUrl = rawUrl;
+  try {
+    const parsedUrl = new URL(rawUrl);
+    parsedUrl.searchParams.delete('fbclid');
+    cleanUrl = parsedUrl.toString();
+  } catch {
+    cleanUrl = rawUrl;
+  }
+
+  let chromeIntentUrl: string | null = null;
+  let safariSchemeUrl: string | null = null;
+  try {
+    const parsed = new URL(cleanUrl);
+    const hostAndPath = `${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    if (isAndroid) {
+      chromeIntentUrl = `intent://${hostAndPath}#Intent;scheme=${parsed.protocol.replace(':', '')};package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(cleanUrl)};end`;
+    }
+    if (isIOS) {
+      safariSchemeUrl = `x-safari-${cleanUrl}`;
+    }
+  } catch {
+    // Ignore URL construction errors
+  }
+
+  return {
+    isInAppBrowser,
+    browserName,
+    isIOS,
+    isAndroid,
+    isMobile,
+    isSessionStorageSupported: checkSessionStorageAvailable(),
+    appUrl: cleanUrl,
+    chromeIntentUrl,
+    safariSchemeUrl,
+  };
+};
+
+export const isMissingInitialStateOrStorageError = (error: any): boolean => {
+  if (!error) return false;
+  const code = String(error?.code || '').toLowerCase();
+  const msg = String(error?.message || error || '').toLowerCase();
+  return (
+    code === 'auth/missing-initial-state' ||
+    code === 'auth/web-storage-unsupported' ||
+    code === 'auth/operation-not-supported-in-this-environment' ||
+    code === 'auth/popup-blocked' ||
+    msg.includes('missing initial state') ||
+    msg.includes('sessionstorage is inaccessible') ||
+    msg.includes('storage-partitioned') ||
+    msg.includes('disallowed_useragent') ||
+    msg.includes('popup-blocked') ||
+    msg.includes('unable to establish a connection with the popup')
+  );
 };
 
 const hasEnvConfig = Boolean(envConfig.apiKey && envConfig.projectId);
@@ -72,14 +288,15 @@ const initialConfig: FirebaseOptions = hasEnvConfig
 
 const isFirebaseConfigured = Boolean(initialConfig.apiKey && initialConfig.projectId);
 
-const primaryApp = isFirebaseConfigured
-  ? getApps().length > 0
-    ? getApp()
-    : initializeApp(initialConfig)
-  : null;
+const primaryApp =
+  isFirebaseConfigured && typeof window !== 'undefined'
+    ? getApps().length > 0
+      ? getApp()
+      : initializeApp(initialConfig)
+    : null;
 
 const fallbackApp =
-  isDifferentProject && fileConfig.apiKey && fileConfig.projectId
+  isDifferentProject && fileConfig.apiKey && fileConfig.projectId && typeof window !== 'undefined'
     ? initializeApp(
         fileConfig,
         initialConfig.projectId === fileConfig.projectId ? 'fallback-local' : 'local-applet-config'
@@ -269,6 +486,16 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     ) {
       console.warn('Google sign-in was dismissed by user.');
       return null;
+    }
+    if (isMissingInitialStateOrStorageError(error)) {
+      const envInfo = getBrowserEnvironmentInfo();
+      const browserLabel = envInfo.isInAppBrowser ? envInfo.browserName : 'your current browser';
+      const customErr: any = new Error(
+        `Google Sign-In could not complete in ${browserLabel} because browser sessionStorage is partitioned or popups are restricted ("missing initial state"). Please open this link in Safari or Chrome.`
+      );
+      customErr.code = error?.code || 'auth/missing-initial-state';
+      customErr.isBrowserStorageOrInAppError = true;
+      throw customErr;
     }
     if (error?.code === 'auth/configuration-not-found') {
       if (fallbackApp && activeProjectId !== fileConfig.projectId) {

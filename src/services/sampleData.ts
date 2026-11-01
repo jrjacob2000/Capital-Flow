@@ -1252,11 +1252,10 @@ export function createEmptyYearBudget(
     ...t,
     category: normalizeCategoryWording(t.category),
   }));
-  const isStarterProfile = !userProfile || isDefaultStarterTemplateData(userProfile) || cleanedUserTemplates.length === 0;
-  const activeTemplates =
-    !isStarterProfile && cleanedUserTemplates.length > 0
-      ? cleanedUserTemplates
-      : MIGRATED_2026_ITEM_TEMPLATES.map((t) => ({ ...t }));
+  const isStarterProfile = !userProfile || isDefaultStarterTemplateData(userProfile);
+  const activeTemplates = !isStarterProfile
+    ? cleanedUserTemplates
+    : MIGRATED_2026_ITEM_TEMPLATES.map((t) => ({ ...t }));
   const hasPersonalized = activeTemplates.length > 0;
 
   const baseExpenseCats = (
@@ -1264,11 +1263,13 @@ export function createEmptyYearBudget(
       ? userProfile.customCategories.expense.map(normalizeCategoryWording)
       : [...EXPENSE_CATEGORIES]
   ).filter((cat, idx, arr) => Boolean(cat) && arr.indexOf(cat) === idx);
-  OCT_2026_CUSTOM_EXPENSE_CATEGORIES.forEach((cat) => {
-    if (!baseExpenseCats.includes(cat)) {
-      baseExpenseCats.push(cat);
-    }
-  });
+  if (isStarterProfile) {
+    OCT_2026_CUSTOM_EXPENSE_CATEGORIES.forEach((cat) => {
+      if (!baseExpenseCats.includes(cat)) {
+        baseExpenseCats.push(cat);
+      }
+    });
+  }
 
   const activeCategories = userProfile?.customCategories
     ? {

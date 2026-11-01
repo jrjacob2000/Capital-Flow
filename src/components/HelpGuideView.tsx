@@ -19,6 +19,12 @@ import {
   HelpCircle,
   Layers,
   X,
+  Sparkles,
+  Smartphone,
+  Split,
+  Upload,
+  Compass,
+  Cloud,
 } from 'lucide-react';
 import { EntryFrequency, APP_VERSION } from '../types/finance';
 import {
@@ -36,11 +42,16 @@ interface HelpGuideViewProps {
   frequency: EntryFrequency;
   onChangeFrequency: (freq: EntryFrequency) => void;
   currencySymbol?: string;
+  isStarterSampleActive?: boolean;
+  onStartBlankWorkspace?: () => void;
+  onSignInWithGoogle?: () => void;
+  isSignedIn?: boolean;
 }
 
 type GuideSectionId =
   | 'all'
   | 'quickstart'
+  | 'glossary'
   | 'dashboard'
   | 'budget'
   | 'funds'
@@ -61,36 +72,36 @@ interface FaqItem {
 
 const FAQ_ITEMS: FaqItem[] = [
   {
-    id: 'faq-earmarked',
-    category: 'funds',
-    categoryLabel: 'Funds & Ledger',
-    question: 'What does "Earmarked in Funds" mean on my Savings & Accounts view?',
+    id: 'faq-new-user-blank',
+    category: 'quickstart',
+    categoryLabel: 'New User Setup',
+    question: 'I am a brand-new user. How do I remove the sample numbers and start from zero?',
     answer:
-      'Earmarked represents the portion of your actual bank or wallet money that is already reserved (allocated) for specific Sinking Funds or savings goals (such as Emergency Fund, Travel Fund, or Car Maintenance). Your Unallocated / Available Balance is your Total Account Balance minus Earmarked Funds—showing how much cash is genuinely free without dipping into your dedicated goals.',
+      'When you first open CapitalFlow, it shows sample demo numbers so you can see how the charts and tables look. Whenever you are ready to enter your own real finances, simply click the green "Start My Blank Budget" button on the top banner (or right here in the Quick Start section). That immediately clears all demo entries, categories, accounts, and loans so you start with a clean ₱0 slate.',
     formulaOrExample:
-      'Total Account Balance (₱150,000) − Earmarked in Funds (₱95,000) = Unallocated Cash (₱55,000)',
-    actionLabel: 'Open Funds & Accounts',
-    actionTab: 'savings',
+      'Click "Start My Blank Budget" → Sample data wiped → Ready for your own categories or Excel import',
+    actionLabel: 'Go to Budget Tab',
+    actionTab: 'budget',
   },
   {
-    id: 'faq-cashflow-summary',
-    category: 'dashboard',
-    categoryLabel: 'Dashboard & Cashflow',
-    question: 'How does the "Cashflow Summary (Monthly)" on the Dashboard work? Is it my total annual accumulation?',
+    id: 'faq-excel-import',
+    category: 'budget',
+    categoryLabel: 'Excel & CSV Import',
+    question: 'Can I import my own Excel or CSV spreadsheet even if it uses different column names?',
     answer:
-      'The Cashflow Summary (Monthly) lets you inspect a single selected month (e.g., January or February) at a time using the month selector dropdown, while the Annual Settled summary cards and 12-month bar chart show your full-year accumulation across all 12 months. Only entries marked as "Paid" (Settled) are counted in settled cashflow totals so pending estimates do not inflate your real balance.',
+      'Yes! The Universal Excel & CSV Importer works with any spreadsheet format—whether it is a simple 3-column table (Item, Category, Amount), a downloaded bank/e-wallet statement, or a multi-section budget sheet. If your column headers use custom names, the interactive Column Mapper lets you pick which column represents Item Name, Planned Estimate, Actual Paid, Category, Type, and Status. You can also choose whether to import into Monthly (Jan–Dec) or Bi-Weekly (Jan-P1 to Dec-P2) periods.',
     formulaOrExample:
-      'Monthly Net Cashflow = Settled Monthly Income − (Settled Expenses + Settled Bills + Settled Savings)',
-    actionLabel: 'View Dashboard',
-    actionTab: 'dashboard',
+      'Supported files: .xlsx, .xls, .csv  |  Target periods: Monthly (12) or Bi-Weekly Cutoffs (24)',
+    actionLabel: 'Open Budget & Click Import Excel',
+    actionTab: 'budget',
   },
   {
     id: 'faq-pending-vs-paid',
-    category: 'budget',
-    categoryLabel: 'Budget & Cutoffs',
+    category: 'glossary',
+    categoryLabel: 'Core Rules',
     question: 'Why is an expense or income entry I added not showing up in Dashboard charts or Sinking Funds?',
     answer:
-      'New budget entries start as "Pending" (Planned) until you mark them as "Paid" (Settled). CapitalFlow separates planned projections from settled reality: Dashboard settled metrics, Category Distribution charts, and automatic Sinking Fund deposits only count entries whose status is toggled to Paid.',
+      'New budget entries start as "Pending" (Planned) until you mark them as "Paid" (Settled). CapitalFlow separates your planned budget from settled reality: Dashboard settled totals, Category Distribution charts, Loan installment deductions, and automatic Sinking Fund deposits only count entries whose status is toggled to "Paid".',
     formulaOrExample:
       'Status: Pending → Counted in Planned Budget only  |  Status: Paid → Counted in Settled Actuals & Ledger',
     actionLabel: 'Go to Budget & Entries',
@@ -100,25 +111,49 @@ const FAQ_ITEMS: FaqItem[] = [
     id: 'faq-actual-vs-planned',
     category: 'budget',
     categoryLabel: 'Budget & Cutoffs',
-    question: 'How do "Planned Estimate" and "Actual Paid" amounts work when calculating budget variance?',
+    question: 'What is the difference between "Planned Estimate" and "Actual Paid"?',
     answer:
-      'Every budget entry has a Planned Estimate (your target budget) and an optional Actual Paid amount. When you mark an entry as Paid, if you entered an Actual Paid value (even ₱0 for a waived fee), CapitalFlow uses that exact number. If Actual Paid is left blank, it defaults to your Planned Estimate. Positive variance on outflows means you spent less than planned.',
+      'Think of "Planned Estimate" as your target budget before the bill arrives, and "Actual Paid" as the real receipt amount when you pay it. When you mark an entry as Paid, CapitalFlow uses your Actual Paid number (even if you type 0 for a waived bill). If you leave Actual Paid blank, it automatically uses your Planned Estimate. The difference between the two shows whether you saved money or overspent.',
     formulaOrExample:
       'Outflow Variance = Planned Estimate (₱5,000) − Actual Paid (₱4,650) = +₱350 Saved',
     actionLabel: 'Open Budget Spreadsheet',
     actionTab: 'budget',
   },
   {
+    id: 'faq-split-payment',
+    category: 'budget',
+    categoryLabel: 'Budget & Cutoffs',
+    question: 'How do I split a single bill or expense across two payment methods (e.g., Cash + GCash)?',
+    answer:
+      'When adding or editing an entry in the Budget tab, click the "Split" toggle next to Payment Method. You can then type exact amounts across Cash, Credit Card, GCash Transfer, Kath Account, Checking Account, or Bank Transfer. CapitalFlow automatically sums those split parts into your Actual Paid total and updates the "To Be Withdrawn" breakdown so you know exactly how much money is needed in each account.',
+    formulaOrExample:
+      'Split Example: ₱1,500 Cash + ₱2,000 GCash Transfer = ₱3,500 Total Actual Paid',
+    actionLabel: 'Go to Budget & Entries',
+    actionTab: 'budget',
+  },
+  {
     id: 'faq-biweekly-cutoffs',
     category: 'budget',
     categoryLabel: 'Budget & Cutoffs',
-    question: 'How do Monthly vs. Bi-Weekly (P1 & P2) cutoff modes work with Estimate Templates?',
+    question: 'How do Monthly vs. Bi-Weekly (P1 & P2) cutoff modes work?',
     answer:
-      'In Monthly mode, the year is organized into 12 months (Jan–Dec). In Bi-Weekly mode, each month is split into two payroll cutoffs: P1 (1st–15th) and P2 (16th–End of Month), giving 24 periods. When you configure an Estimate Item Template with schedule "Both (P1 & P2)", its monthly category budget automatically doubles (2 × template amount) and auto-populates into both P1 and P2 cutoffs.',
+      'In Monthly mode, your year has 12 periods (Jan–Dec). In Bi-Weekly mode—ideal if you get paid twice a month—each month is split into two payroll cutoffs: P1 (1st–15th) and P2 (16th–End of Month), giving 24 periods. When setting up Recurring Estimate Templates, setting an item schedule to "Both (P1 & P2)" automatically budgets it for both paydays (2 × template amount per month).',
     formulaOrExample:
       'Template ₱2,500 × Schedule "Both (P1 & P2)" = ₱5,000 Monthly Category Budget (₱2,500 in P1 + ₱2,500 in P2)',
     actionLabel: 'Manage Budget Templates',
     actionTab: 'budget',
+  },
+  {
+    id: 'faq-earmarked',
+    category: 'funds',
+    categoryLabel: 'Funds & Ledger',
+    question: 'What does "Earmarked in Funds" mean on my Savings & Accounts view?',
+    answer:
+      'Earmarked represents the portion of your real bank or e-wallet balance that is already reserved (set aside) for specific Sinking Funds or savings goals (such as Emergency Fund, Travel Fund, or Tuition). Your "Unallocated / Available Balance" is your Total Bank Balance minus Earmarked Funds—showing how much cash is genuinely free without touching your dedicated goals.',
+    formulaOrExample:
+      'Total Account Balance (₱150,000) − Earmarked in Funds (₱95,000) = Unallocated Cash (₱55,000)',
+    actionLabel: 'Open Funds & Accounts',
+    actionTab: 'savings',
   },
   {
     id: 'faq-savings-auto-sync',
@@ -126,27 +161,51 @@ const FAQ_ITEMS: FaqItem[] = [
     categoryLabel: 'Funds & Ledger',
     question: 'How does marking a Savings entry as "Paid" in the Budget update my Funds Ledger?',
     answer:
-      'When you create a Budget entry with Type = "Savings", select a Category (which acts as the Sinking Fund name, e.g., "Emergency Fund"), and choose a Destination Account, marking that entry as "Paid" automatically creates a linked Deposit transaction in your Funds Ledger. Unmarking it back to "Pending" or deleting the entry cleanly removes the auto-generated ledger transaction.',
+      'When you create a Budget entry with Type = "Savings", select a Category (which acts as your Sinking Fund goal, e.g., "Emergency Fund"), and pick a Destination Bank Account, marking that entry as "Paid" automatically creates a linked deposit in your Funds Ledger. If you switch the entry back to "Pending" or delete it, CapitalFlow automatically removes that linked deposit so your balances never double-count.',
     actionLabel: 'Inspect Funds Ledger',
     actionTab: 'savings',
+  },
+  {
+    id: 'faq-cashflow-summary',
+    category: 'dashboard',
+    categoryLabel: 'Dashboard & Cashflow',
+    question: 'How does the "Cashflow Summary (Monthly)" on the Dashboard differ from the Annual totals?',
+    answer:
+      'The Cashflow Summary (Monthly) lets you inspect a single month (e.g., January or March) using the month dropdown, whereas the Annual Settled summary cards and 12-month bar chart combine all 12 months of the year. Only entries marked "Paid" are included in settled cashflow totals so unpaid estimates do not distort your real cash position.',
+    formulaOrExample:
+      'Monthly Net Cashflow = Settled Monthly Income − (Settled Expenses + Settled Bills + Settled Savings)',
+    actionLabel: 'View Dashboard',
+    actionTab: 'dashboard',
   },
   {
     id: 'faq-loan-linking',
     category: 'loans',
     categoryLabel: 'Loans & Debt',
-    question: 'How do I link a Loan or Receivable to my recurring Budget templates?',
+    question: 'How do I link a Loan or Receivable so my monthly budget payments update the loan balance automatically?',
     answer:
-      'In the Loans tab, click "Link to Budget" on any active loan (or link it inside the Estimate Template editor). Once linked, whenever you mark that recurring bill/loan entry as "Paid" in the Budget tab, CapitalFlow automatically logs an installment payment against the loan and reduces its remaining balance.',
+      'In the Loans tab, add your loan (e.g., Car Loan or Credit Card Installment) and click "Link to Budget" (or select the loan inside your Recurring Estimate Template). Once linked, every time you mark that monthly bill as "Paid" in the Budget tab, CapitalFlow automatically records an installment payment on the loan and reduces its remaining balance.',
     actionLabel: 'Open Loans & Receivables',
     actionTab: 'loans',
+  },
+  {
+    id: 'faq-messenger-browser',
+    category: 'drive',
+    categoryLabel: 'Google Drive Sync',
+    question: 'Why do I see "Unable to process request due to missing initial state" when signing in from Messenger or Instagram?',
+    answer:
+      'Apps like Facebook Messenger, Instagram, Telegram, and TikTok open links inside a restricted built-in viewer (WebView) that blocks Google security popups and session storage. You can still use CapitalFlow locally inside Messenger, or tap the three dots (•••) in the top-right corner and choose "Open in External Browser" (Safari or Chrome) to sign in with Google Drive.',
+    formulaOrExample:
+      'In Messenger / Instagram: Tap ••• (top right) → Select "Open in External Browser" (Safari / Chrome)',
+    actionLabel: 'Open Drive Storage',
+    actionTab: 'drive',
   },
   {
     id: 'faq-drive-starter-protection',
     category: 'drive',
     categoryLabel: 'Google Drive Sync',
-    question: 'Why does the app prevent me from saving over Google Drive when "Starter Sample Data" is active?',
+    question: 'Why does the app prevent saving over Google Drive when "Starter Sample Data" is active?',
     answer:
-      'When you open CapitalFlow on a brand-new browser or after clearing local cache, it loads sample demonstration data first. To protect your real cloud backups in Google Drive from being accidentally overwritten by sample data, CapitalFlow blocks automatic cloud overwrites and prompts you to click "Load My Saved Data from Drive" or "Reset Data for Go-Live" first.',
+      'When you open CapitalFlow on a new phone or laptop, it shows sample demo data first. To protect your real cloud backups in Google Drive from being accidentally overwritten by demo data, CapitalFlow blocks cloud uploads until you either click "Load My Saved Data from Drive" or click "Start My Blank Budget".',
     actionLabel: 'Open Drive Storage',
     actionTab: 'drive',
   },
@@ -156,7 +215,7 @@ const FAQ_ITEMS: FaqItem[] = [
     categoryLabel: 'Google Drive Sync',
     question: 'How do multi-year budgets work when moving to a new year (e.g., 2026 to 2027)?',
     answer:
-      'Each year is stored in its own dedicated file (e.g., capitalflow_budget_2026.json), while your Estimate Budget Template (categories & recurring items) and your Funds & Loans Ledger carry across all years. When you add a new year from the top header or Drive tab, you can copy your personalized categories and templates into the new year with a clean slate of entries.',
+      'Each year is saved in its own annual file (e.g., capitalflow_budget_2026.json), while your Estimate Budget Template (categories & recurring items) and your Funds & Loans Ledger carry across all years continuously. When you add a new year from the header or Drive tab, you can carry over your custom categories and recurring templates with one click.',
     actionLabel: 'Manage Annual Files',
     actionTab: 'drive',
   },
@@ -168,13 +227,18 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
   frequency,
   onChangeFrequency,
   currencySymbol = '₱',
+  isStarterSampleActive = false,
+  onStartBlankWorkspace,
+  onSignInWithGoogle,
+  isSignedIn = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeSection, setActiveSection] = useState<GuideSectionId>('all');
   const [expandedFaqs, setExpandedFaqs] = useState<Record<string, boolean>>({
-    'faq-earmarked': true,
-    'faq-cashflow-summary': true,
+    'faq-new-user-blank': true,
+    'faq-excel-import': true,
     'faq-pending-vs-paid': true,
+    'faq-messenger-browser': true,
   });
 
   const toggleFaq = (id: string) => {
@@ -208,12 +272,13 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
 
   const sectionTabs: { id: GuideSectionId; label: string }[] = [
     { id: 'all', label: 'All Topics' },
-    { id: 'quickstart', label: 'Quick Start' },
+    { id: 'quickstart', label: 'New User Start' },
+    { id: 'glossary', label: '5 Golden Rules' },
+    { id: 'budget', label: 'Budget, Excel & Split' },
     { id: 'dashboard', label: 'Dashboard & Cashflow' },
-    { id: 'budget', label: 'Budget & Cutoffs' },
     { id: 'funds', label: 'Funds & Earmarked' },
     { id: 'loans', label: 'Loans & Debt' },
-    { id: 'drive', label: 'Google Drive Sync' },
+    { id: 'drive', label: 'Cloud Sync & Mobile' },
     { id: 'faq', label: `FAQs (${FAQ_ITEMS.length})` },
   ];
 
@@ -223,23 +288,28 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="space-y-2 max-w-2xl">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+            <div className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
               <BookOpen className="w-4 h-4 shrink-0" />
-              <span>CapitalFlow User Guide &amp; Reference &middot; v{APP_VERSION}</span>
+              <span>CapitalFlow User Guide</span>
+              <span aria-hidden="true">&middot;</span>
+              <span className="font-mono tabular-nums">v{APP_VERSION}</span>
+              <span aria-hidden="true">&middot;</span>
+              <span>Beginner Friendly</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
-              How CapitalFlow Works
+              Welcome to CapitalFlow — How Everything Works
             </h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              Complete guide to managing your {currentYear} budget, switching between Monthly and Bi-Weekly (P1/P2)
-              payroll cutoffs, understanding Earmarked Sinking Funds, tracking Loans, and syncing safely with Google Drive.
+              New here? Start with the <strong>3 Starting Paths</strong> and the <strong>5 Golden Rules</strong> below.
+              In under two minutes, you will know how to start a clean {currentYear} budget, import any Excel or CSV sheet,
+              track Monthly or Bi-Weekly (15th/30th) paydays, and sync safely with Google Drive.
             </p>
           </div>
 
           {/* Interactive Search Input */}
           <div className="w-full lg:w-80 shrink-0">
             <label htmlFor="guide-search" className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
-              Search topics, formulas &amp; FAQs
+              Search any feature, rule, or question
             </label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -248,7 +318,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="e.g. earmarked, cashflow, P1/P2, paid..."
+                placeholder="e.g. blank budget, excel, split, messenger..."
                 className="w-full pl-9 pr-9 py-2.5 text-sm bg-slate-50 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-all"
               />
               {searchQuery && (
@@ -287,19 +357,19 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
         </div>
       </section>
 
-      {/* 1. QUICK START WORKFLOW */}
+      {/* 1. NEW USER QUICK START: CHOOSE HOW YOU WANT TO BEGIN */}
       {showSection(
         'quickstart',
-        'quick start workflow setup getting started templates categories entries paid pending funds loans google drive sync'
+        'new user quick start blank budget wipe sample data import excel csv restore google drive step by step workflow getting started'
       ) && (
         <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                Step-by-Step Workflow
+              <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                01. First Time Here?
               </p>
               <h3 className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">
-                4 Steps to Run Your Personal Finance System
+                Choose How You Want to Start (3 Easy Options)
               </h3>
             </div>
             <span className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
@@ -307,120 +377,379 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Step 1 */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">STEP 01</span>
-                  <span>Estimate Template</span>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* Option A: Blank Slate */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">OPTION A &middot; FRESH SLATE</span>
+                  <span>Most Popular</span>
                 </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Configure Categories &amp; Recurring Items
+                <h4 className="text-base font-bold text-slate-900 dark:text-white">
+                  Start with a Clean {currencySymbol}0 Budget
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Define your standard income sources, monthly bills, savings goals, and cutoff schedules (P1, P2, or Both).
-                  Your category budgets automatically calculate from these templates.
+                  By default, CapitalFlow displays sample numbers so you can explore the charts. Ready to enter your own finances? Click below to wipe all sample data and start from zero.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => onNavigateTab('budget')}
-                className="mt-4 w-full py-2 px-3 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <span>Open Budget &amp; Templates</span>
-                <ArrowRight className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-              </button>
+              <div className="mt-5 pt-3 border-t border-slate-200/70 dark:border-slate-700/60">
+                {onStartBlankWorkspace && isStarterSampleActive ? (
+                  <button
+                    type="button"
+                    onClick={onStartBlankWorkspace}
+                    className="w-full py-2.5 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Sparkles className="w-4 h-4 shrink-0" />
+                    <span>Start My Blank Budget Now</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('budget')}
+                    className="w-full py-2.5 px-3.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-emerald-500 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <span>Open My Budget Workspace</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Step 2 */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">STEP 02</span>
-                  <span>Log &amp; Settle</span>
+            {/* Option B: Import Excel or CSV */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">OPTION B &middot; SPREADSHEET</span>
+                  <span>.xlsx / .xls / .csv</span>
                 </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Populate Cutoffs &amp; Mark Entries Paid
+                <h4 className="text-base font-bold text-slate-900 dark:text-white">
+                  Import Your Existing Excel or CSV
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Auto-populate a month or cutoff from your template, enter the Actual Paid amount when settled, and toggle
-                  status from <span className="font-semibold text-amber-600 dark:text-amber-400">Pending</span> to{' '}
-                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">Paid</span>.
+                  Already tracking expenses in Excel, Google Sheets, or a bank CSV export? Open the <strong>Budget</strong> tab and click <strong>Import Excel</strong>. Our Universal Importer maps your columns automatically.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => onNavigateTab('budget')}
-                className="mt-4 w-full py-2 px-3 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <span>Go to Budget &amp; Entries</span>
-                <ArrowRight className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-              </button>
-            </div>
-
-            {/* Step 3 */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">STEP 03</span>
-                  <span>Funds &amp; Loans</span>
-                </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Track Bank Accounts, Earmarks &amp; Debt
-                </h4>
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Paid Savings entries automatically deposit into your linked bank account and earmark funds for that
-                  goal. Paid Loan entries automatically reduce your remaining loan balance.
-                </p>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-5 pt-3 border-t border-slate-200/70 dark:border-slate-700/60">
                 <button
                   type="button"
-                  onClick={() => onNavigateTab('savings')}
-                  className="py-2 px-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  onClick={() => onNavigateTab('budget')}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-500 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <span>Open Funds</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab('loans')}
-                  className="py-2 px-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <span>Open Loans</span>
+                  <span>Go to Budget &rarr; Import Excel</span>
+                  <Upload className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                 </button>
               </div>
             </div>
 
-            {/* Step 4 */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">STEP 04</span>
-                  <span>Cloud Backup</span>
+            {/* Option C: Restore from Google Drive */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono font-bold text-sky-600 dark:text-sky-400">OPTION C &middot; CLOUD BACKUP</span>
+                  <span>Multi-Device</span>
                 </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Sync Safely to Google Drive
+                <h4 className="text-base font-bold text-slate-900 dark:text-white">
+                  Sign In to Restore from Google Drive
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Sign in with Google to save your annual budget, recurring template, and master ledger directly into your
-                  personal <span className="font-mono text-[11px]">/{CAPITALFLOW_DRIVE_FOLDER_NAME}/</span> folder.
+                  Returning user or switching devices? Sign in with Google (using Safari or Chrome) to pull your saved annual budgets, recurring templates, and savings ledger from your personal Drive folder.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => onNavigateTab('drive')}
-                className="mt-4 w-full py-2 px-3 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <span>Open Drive Storage</span>
-                <ArrowRight className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-              </button>
+              <div className="mt-5 pt-3 border-t border-slate-200/70 dark:border-slate-700/60">
+                {!isSignedIn && onSignInWithGoogle ? (
+                  <button
+                    type="button"
+                    onClick={onSignInWithGoogle}
+                    className="w-full py-2.5 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Cloud className="w-4 h-4 shrink-0" />
+                    <span>Sign In with Google Drive</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('drive')}
+                    className="w-full py-2.5 px-3.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-500 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <span>Open Drive Cloud Storage</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 4-Step Routine Strip */}
+          <div className="pt-2">
+            <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-3">
+              Your Monthly / Payday Routine in 4 Simple Steps:
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400">01. Set Up Templates</div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Add your categories and recurring bills once inside <strong>Budget &rarr; Manage Categories &amp; Items</strong>.
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400">02. Auto-Fill Period</div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  At the start of a month or cutoff (P1/P2), click <strong>Populate from Template</strong> or <strong>Carry Over</strong>.
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400">03. Mark Paid as You Go</div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  When a bill is paid or salary arrives, enter the <strong>Actual Paid</strong> cost and switch status to <strong>Paid</strong>.
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400">04. Review &amp; Sync</div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Check your <strong>Dashboard</strong> cashflow, verify your <strong>Funds</strong> &amp; <strong>Loans</strong>, and click <strong>Sync Drive</strong>.
+                </p>
+              </div>
             </div>
           </div>
         </section>
       )}
 
-      {/* 2. DASHBOARD & CASHFLOW SUMMARY EXPLAINED */}
+      {/* 2. THE 5 GOLDEN RULES (PLAIN-ENGLISH GLOSSARY FOR NEW USERS) */}
+      {showSection(
+        'glossary',
+        'golden rules glossary plain english concepts pending vs paid planned estimate actual cost monthly biweekly p1 p2 split payment to be withdrawn earmarked funds'
+      ) && (
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
+                <Compass className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  02. The 5 Golden Rules of CapitalFlow (Plain-English Glossary)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Understand these 5 core concepts and every number in the app will make instant sense
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Rule 1 */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                RULE 01 &middot; STATUS
+              </div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                Pending (Planned) vs. Paid (Settled)
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                New entries start as <strong>Pending</strong> so you can plan future bills without messing up your current cash balance. Only entries marked <strong>Paid</strong> count toward Dashboard charts, Sinking Fund deposits, and Loan deductions.
+              </p>
+            </div>
+
+            {/* Rule 2 */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                RULE 02 &middot; AMOUNTS
+              </div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                Planned Estimate vs. Actual Paid
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                <strong>Planned Estimate</strong> is what you expect a bill to cost (e.g., {currencySymbol}4,000 electricity). <strong>Actual Paid</strong> is what the receipt actually charged (e.g., {currencySymbol}3,750). If a fee was waived, type <code className="font-mono">0</code> in Actual Paid!
+              </p>
+            </div>
+
+            {/* Rule 3 */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                RULE 03 &middot; PAYDAYS
+              </div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                Monthly (12) vs. Bi-Weekly P1/P2 (24)
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Budget once a month (<code className="font-mono">Jan–Dec</code>) or switch to <strong>Bi-Weekly</strong> in the top bar to split every month into two paydays: <strong>P1</strong> (1st–15th) and <strong>P2</strong> (16th–End of Month).
+              </p>
+            </div>
+
+            {/* Rule 4 */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                RULE 04 &middot; PAYMENT CHANNELS
+              </div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                &ldquo;To Be Withdrawn&rdquo; &amp; Split Payments
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Assign each expense a channel (<em>Cash, Credit Card, GCash, Kath Account, Check, Bank Transfer</em>) or toggle <strong>Split</strong> to divide one bill across multiple accounts. The summary shows how much cash to prepare per channel.
+              </p>
+            </div>
+
+            {/* Rule 5 */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2 md:col-span-2 lg:col-span-2">
+              <div className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                RULE 05 &middot; SAVINGS &amp; SINKING FUNDS
+              </div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                Bank Account Balance (Where It Lives) vs. Earmarked Funds (What It Is For)
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Your physical bank account might hold {currencySymbol}150,000 total, but {currencySymbol}95,000 of that is <strong>Earmarked</strong> (reserved) for specific goals like your <em>Emergency Fund</em> or <em>Travel Fund</em>. CapitalFlow subtracts Earmarked funds from your Total Balance so you always see your true <strong>Available / Unallocated Cash</strong> ({currencySymbol}55,000).
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* 3. BUDGET, EXCEL IMPORT, SPLIT PAYMENTS & BI-WEEKLY CUTOFFS */}
+      {showSection(
+        'budget',
+        'budget entries spreadsheet monthly bi-weekly biweekly p1 p2 both cutoffs payroll planned estimate actual paid variance templates auto populate categories import excel csv column mapper split payment breakdown to be withdrawn'
+      ) && (
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-100 dark:border-emerald-900 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  03. Budget Spreadsheet, Excel Import &amp; Split Payments
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Managing Planned vs. Actual amounts, importing spreadsheets, and splitting bills across payment accounts
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onChangeFrequency(frequency === 'monthly' ? 'bi-weekly' : 'monthly')}
+                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
+                <span>Switch to {frequency === 'monthly' ? 'Bi-Weekly' : 'Monthly'} View</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('budget')}
+                className="px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <span>Open Budget</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* Card 1: Pending vs Paid */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                <span>Pending vs. Paid Status</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Every entry starts as <strong>Pending</strong> so you can plan your entire month or year ahead of time. Once money actually leaves or enters your account, click the status button to mark it <strong>Paid</strong>.
+              </p>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-500 dark:text-slate-400 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span>Pending:</span>
+                  <span>Forecast / Planned Table</span>
+                </div>
+                <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400 font-semibold">
+                  <span>Paid:</span>
+                  <span>Dashboard + Funds + Loans</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 2: Bi-Weekly Cutoffs (P1 & P2) */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
+                <Clock className="w-4 h-4 text-indigo-500 shrink-0" />
+                <span>Bi-Weekly Payroll Cutoffs (P1 &amp; P2)</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                If you receive salary twice a month, switch to <strong>Bi-Weekly</strong> mode in the header. Each month is divided into two cutoffs so you can match bills to the exact paycheck that covers them:
+              </p>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300 space-y-1 tabular-nums">
+                <div className="flex items-center justify-between">
+                  <span>Cutoff P1:</span>
+                  <span>1st – 15th of the Month</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Cutoff P2:</span>
+                  <span>16th – End of the Month</span>
+                </div>
+                <div className="flex items-center justify-between text-indigo-600 dark:text-indigo-400 font-semibold">
+                  <span>Both (P1 &amp; P2):</span>
+                  <span>2× Per Month (e.g., Groceries)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 3: Estimate Templates */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
+                <Layers className="w-4 h-4 text-amber-500 shrink-0" />
+                <span>Recurring Estimate Templates</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Instead of typing the same items every month, add them to your <strong>Estimate Budget Template</strong>. Category monthly budgets are automatically derived from the sum of templates in each category.
+              </p>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-500 dark:text-slate-400 space-y-1 tabular-nums">
+                <div className="flex items-center justify-between">
+                  <span>Schedule P1 or P2:</span>
+                  <span>1 × Template Amount / mo</span>
+                </div>
+                <div className="flex items-center justify-between text-amber-600 dark:text-amber-400 font-semibold">
+                  <span>Schedule Both:</span>
+                  <span>2 × Template Amount / mo</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Universal Excel Importer + Split Payments 2-Column Highlight */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
+                <Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>Universal Excel &amp; CSV Importer (Any Format)</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Click <strong>Import Excel</strong> in the Budget tab to upload any <code className="font-mono">.xlsx</code>, <code className="font-mono">.xls</code>, or <code className="font-mono">.csv</code> file:
+              </p>
+              <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-1 list-disc list-inside">
+                <li>Works with simple 3-column tables, bank CSV exports, or multi-section personal templates.</li>
+                <li>Import into <strong>Monthly</strong> (<code className="font-mono">Jan–Dec</code>) or <strong>Bi-Weekly</strong> (<code className="font-mono">Jan-P1</code> to <code className="font-mono">Dec-P2</code>) periods.</li>
+                <li>Includes an interactive <strong>Column Mapper</strong> and a downloadable <strong>Sample Excel Template</strong>.</li>
+              </ul>
+            </div>
+
+            <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
+                <Split className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                <span>Split Payments Across Multiple Accounts</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Paying a single bill using two different payment methods? Toggle <strong>Split</strong> inside the Add/Edit Entry form:
+              </p>
+              <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-1 list-disc list-inside">
+                <li>Divide any expense across <em>Cash, Credit Card, GCash Transfer, Kath Account, Check,</em> or <em>Bank Transfer</em>.</li>
+                <li>Automatically calculates the combined <strong>Actual Paid</strong> total from your non-zero split channels.</li>
+                <li>Updates the <strong>To Be Withdrawn</strong> summary table accurately for every payment method.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* 4. DASHBOARD & CASHFLOW SUMMARY EXPLAINED */}
       {showSection(
         'dashboard',
         'dashboard cashflow summary monthly annual accumulation income outflows expenses bills savings net cashflow savings rate settled paid pending'
@@ -433,7 +762,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Dashboard &amp; Cashflow Summary Explained
+                  04. Dashboard &amp; Cashflow Summary Explained
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   How Monthly Cashflow vs. Annual Settled Totals are calculated
@@ -548,118 +877,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
         </section>
       )}
 
-      {/* 3. BUDGET, TEMPLATES & BI-WEEKLY CUTOFFS */}
-      {showSection(
-        'budget',
-        'budget entries spreadsheet monthly bi-weekly biweekly p1 p2 both cutoffs payroll planned estimate actual paid variance templates auto populate categories'
-      ) && (
-        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-100 dark:border-emerald-900 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
-                <FileSpreadsheet className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Budget Spreadsheet, Cutoffs (P1/P2) &amp; Estimate Templates
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Managing Planned vs. Actual amounts across Monthly (12) or Bi-Weekly (24) periods
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onChangeFrequency(frequency === 'monthly' ? 'bi-weekly' : 'monthly')}
-                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Switch to {frequency === 'monthly' ? 'Bi-Weekly' : 'Monthly'} View</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigateTab('budget')}
-                className="px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <span>Open Budget</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {/* Card 1: Pending vs Paid */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                <span>Pending vs. Paid Status</span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                Every entry starts as <strong>Pending</strong> so you can plan your entire month or year ahead of time. Once money actually leaves or enters your account, click the status button to mark it <strong>Paid</strong>.
-              </p>
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-500 dark:text-slate-400 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span>Pending:</span>
-                  <span>Forecast / Planned Table</span>
-                </div>
-                <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400 font-semibold">
-                  <span>Paid:</span>
-                  <span>Dashboard + Funds + Loans</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 2: Bi-Weekly Cutoffs (P1 & P2) */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
-                <Clock className="w-4 h-4 text-indigo-500 shrink-0" />
-                <span>Bi-Weekly Payroll Cutoffs (P1 &amp; P2)</span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                If you receive salary twice a month, switch to <strong>Bi-Weekly</strong> mode in the header. Each month is divided into two cutoffs so you can match bills to the exact paycheck that covers them:
-              </p>
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300 space-y-1 tabular-nums">
-                <div className="flex items-center justify-between">
-                  <span>Cutoff P1:</span>
-                  <span>1st – 15th of the Month</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>Cutoff P2:</span>
-                  <span>16th – End of the Month</span>
-                </div>
-                <div className="flex items-center justify-between text-indigo-600 dark:text-indigo-400 font-semibold">
-                  <span>Both (P1 &amp; P2):</span>
-                  <span>2× Per Month (e.g., Groceries)</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 3: Estimate Templates */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
-                <Layers className="w-4 h-4 text-amber-500 shrink-0" />
-                <span>Recurring Estimate Templates</span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                Instead of typing the same items every month, add them to your <strong>Estimate Budget Template</strong>. Category monthly budgets are automatically derived from the sum of templates in each category.
-              </p>
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-500 dark:text-slate-400 space-y-1 tabular-nums">
-                <div className="flex items-center justify-between">
-                  <span>Schedule P1 or P2:</span>
-                  <span>1 × Template Amount / mo</span>
-                </div>
-                <div className="flex items-center justify-between text-amber-600 dark:text-amber-400 font-semibold">
-                  <span>Schedule Both:</span>
-                  <span>2 × Template Amount / mo</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* 4. FUNDS, ACCOUNTS & "EARMARKED" EXPLAINED */}
+      {/* 5. FUNDS, ACCOUNTS & "EARMARKED" EXPLAINED */}
       {showSection(
         'funds',
         'funds savings accounts earmarked allocated unallocated available balance sinking funds goals emergency fund ledger deposit withdrawal transfer'
@@ -672,7 +890,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Funds, Bank Accounts &amp; What &ldquo;Earmarked&rdquo; Means
+                  05. Funds, Bank Accounts &amp; What &ldquo;Earmarked&rdquo; Means
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   How physical Bank/Wallet Accounts connect to purpose-driven Sinking Funds
@@ -749,7 +967,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
                   When you mark that entry as <strong>Paid</strong>, CapitalFlow automatically logs a deposit into that Bank Account and increases the <strong>Earmarked</strong> balance of your <em>Emergency Fund</em>.
                 </li>
                 <li>
-                  You can also record direct deposits, withdrawals, interest earned, or account-to-account transfers directly inside the <strong>Funds</strong> tab.
+                  If you later edit the amount or switch it back to <strong>Pending</strong>, the linked ledger transaction updates or removes itself automatically.
                 </li>
               </ol>
             </div>
@@ -757,7 +975,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
         </section>
       )}
 
-      {/* 5. LOANS PAYABLE & RECEIVABLES */}
+      {/* 6. LOANS PAYABLE & RECEIVABLES */}
       {showSection(
         'loans',
         'loans debt receivables i owe owed to me installments principal contract amount payment history link to budget'
@@ -770,7 +988,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Loans Payable (I Owe) &amp; Receivables (Owed to Me)
+                  06. Loans Payable (I Owe) &amp; Receivables (Owed to Me)
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   Amortization tracking, installment counters, and automatic budget payment syncing
@@ -794,7 +1012,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
                 <span className="text-xs font-mono text-rose-600 dark:text-rose-400 font-semibold">Liabilities &amp; Installments</span>
               </div>
               <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                Track mortgages, auto loans, credit card installments, or personal loans. Specify the <strong>Principal</strong>, <strong>Total Contract Amount</strong> (principal + interest), and total installment count. Link a loan to a recurring Budget Template so marking your monthly bill as <strong>Paid</strong> automatically records the loan payment.
+                Track mortgages, auto loans, credit card installments, or personal loans. Specify the <strong>Principal</strong>, <strong>Total Contract Amount</strong> (principal + interest), and total installment count. Link a loan to a recurring Budget Template so marking your monthly bill as <strong>Paid</strong> automatically records the loan payment and updates remaining installments.
               </p>
             </div>
 
@@ -811,10 +1029,10 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
         </section>
       )}
 
-      {/* 6. GOOGLE DRIVE STORAGE & CONFLICT PROTECTION */}
+      {/* 7. GOOGLE DRIVE STORAGE, CONFLICT PROTECTION & MESSENGER / MOBILE BROWSER GUIDE */}
       {showSection(
         'drive',
-        'google drive storage cloud sync backup json csv conflict protection starter sample data go live reset multi-year'
+        'google drive storage cloud sync backup json csv conflict protection starter sample data go live reset multi-year messenger instagram facebook in-app browser missing initial state'
       ) && (
         <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
@@ -824,7 +1042,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Google Drive Cloud Sync &amp; Data Protection
+                  07. Google Drive Cloud Sync &amp; Mobile Browser Tips
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   Private client-side storage in your own Google Drive folder: <span className="font-mono">/{CAPITALFLOW_DRIVE_FOLDER_NAME}/</span>
@@ -879,7 +1097,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
             <div className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800">
               <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
               <div className="space-y-1">
@@ -887,7 +1105,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
                   Starter Data Overwrite Protection
                 </h5>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  If your browser is currently holding default starter sample data, CapitalFlow blocks automatic uploads to Google Drive so you never overwrite your real cloud backups on a new device.
+                  If your browser is holding default sample data, CapitalFlow blocks automatic uploads to Google Drive so you never overwrite your real cloud backups on a new device.
                 </p>
               </div>
             </div>
@@ -899,7 +1117,19 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
                   Timestamp Conflict Detection
                 </h5>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Before syncing, CapitalFlow compares local and Google Drive modification timestamps. If Drive has newer edits from another device, a conflict modal lets you choose whether to Pull from Drive or Push Local.
+                  Before syncing, CapitalFlow compares local and Google Drive timestamps. If Drive has newer edits from another device, a conflict prompt lets you choose whether to Pull or Push.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/70">
+              <Smartphone className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                  Opening from Messenger or Instagram?
+                </h5>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  In-app browsers block Google sign-in popups (<em>&ldquo;missing initial state&rdquo;</em>). Tap <strong>&bull;&bull;&bull; &rarr; Open in External Browser</strong> (Safari or Chrome) to sign in with Google Drive.
                 </p>
               </div>
             </div>
@@ -907,17 +1137,17 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
         </section>
       )}
 
-      {/* 7. INTERACTIVE FAQ ACCORDION */}
+      {/* 8. INTERACTIVE FAQ ACCORDION */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
           <div className="flex items-center gap-2.5">
             <HelpCircle className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
             <div>
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                Frequently Asked Questions
+                Frequently Asked Questions ({filteredFaqs.length})
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Answers to common questions about calculations, earmarked funds, and cloud syncing
+                Quick answers for new users, Excel imports, split payments, earmarked funds, and mobile sign-in
               </p>
             </div>
           </div>
@@ -952,7 +1182,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
               No guide topics or FAQs matched &ldquo;{searchQuery}&rdquo;
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Try searching for terms like <span className="font-mono">earmarked</span>, <span className="font-mono">cashflow</span>, <span className="font-mono">P1</span>, <span className="font-mono">paid</span>, or <span className="font-mono">drive</span>.
+              Try searching for terms like <span className="font-mono">blank</span>, <span className="font-mono">excel</span>, <span className="font-mono">split</span>, <span className="font-mono">earmarked</span>, <span className="font-mono">P1</span>, or <span className="font-mono">messenger</span>.
             </p>
             <button
               type="button"

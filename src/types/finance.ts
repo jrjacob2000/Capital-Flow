@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.15.0';
+export const APP_VERSION = '1.16.8';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
