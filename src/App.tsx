@@ -51,6 +51,7 @@ import { ConfirmationModal } from './components/ConfirmationModal';
 import { DriveConflictModal, DriveConflictDetail } from './components/DriveConflictModal';
 import { DriveSessionExpiredModal } from './components/DriveSessionExpiredModal';
 import { InAppBrowserAuthModal } from './components/InAppBrowserAuthModal';
+import { PullToRefresh } from './components/PullToRefresh';
 import {
   getBudgetFileName,
   SAVINGS_LEDGER_FILE_NAME,
@@ -1132,173 +1133,45 @@ export default function App() {
     });
   };
 
-  // Helper to recalculate runningTotalCapital across all ledger transactions chronologically
-  const recalculateLedgerRunningCapital = (targetLedger: SavingsLedgerData) => {
-    let runningTotal = targetLedger.initialCapital || 0;
-    const sorted = [...targetLedger.transactions].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
-    sorted.forEach((tx) => {
-      if (tx.source === 'withdrawal') {
-        runningTotal = Math.max(0, runningTotal - tx.amount);
-      } else if (tx.source === 'transfer' || tx.source === 'reallocation') {
-        // Internal transfer between accounts or virtual category reallocation does not change total net capital
-      } else {
-        runningTotal += tx.amount;
-      }
-      tx.runningTotalCapital = runningTotal;
-    });
-    targetLedger.transactions = sorted;
-  };
-
   // Add direct ledger transaction (yield, deposit, withdrawal, transfer, reallocation)
   const handleAddLedgerTransaction = (txData: Omit<SavingsTransaction, 'id' | 'runningTotalCapital'>) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const newTx: SavingsTransaction = {
-      ...txData,
-      id: `tx-manual-${Date.now()}`,
-    };
-
-    currentLedger.transactions.push(newTx);
-    const currSym = currentLedger.currency || '₱';
+    const { ledger: updatedLedger } = FinanceStorageService.addLedgerTransaction(txData);
+    const currSym = updatedLedger.currency || '₱';
+    setLedger({ ...updatedLedger });
+    setHasUnsavedChanges(true);
 
     if (txData.source === 'withdrawal') {
-      const acc = currentLedger.accounts.find((a) => a.id === txData.accountId);
-      if (acc) {
-        acc.balance = Math.max(0, acc.balance - txData.amount);
-      }
-      recalculateLedgerRunningCapital(currentLedger);
-      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-      setLedger({ ...currentLedger });
-      setHasUnsavedChanges(true);
+      const acc = updatedLedger.accounts.find((a) => a.id === txData.accountId);
       showToast(`Recorded withdrawal of ${currSym}${txData.amount.toLocaleString()} from ${acc?.name || 'account'}`);
     } else if (txData.source === 'transfer') {
-      const fromAcc = currentLedger.accounts.find((a) => a.id === txData.accountId);
-      const toAcc = currentLedger.accounts.find((a) => a.id === txData.toAccountId);
-      if (fromAcc) {
-        fromAcc.balance = Math.max(0, fromAcc.balance - txData.amount);
-      }
-      if (toAcc) {
-        toAcc.balance += txData.amount;
-      }
-      recalculateLedgerRunningCapital(currentLedger);
-      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-      setLedger({ ...currentLedger });
-      setHasUnsavedChanges(true);
+      const fromAcc = updatedLedger.accounts.find((a) => a.id === txData.accountId);
+      const toAcc = updatedLedger.accounts.find((a) => a.id === txData.toAccountId);
       showToast(
         `Transferred ${currSym}${txData.amount.toLocaleString()} from ${fromAcc?.name || 'account'} to ${toAcc?.name || 'account'}`
       );
     } else if (txData.source === 'reallocation') {
-      // Virtual category reallocation: physical account balances and total net capital remain unchanged
-      recalculateLedgerRunningCapital(currentLedger);
-      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-      setLedger({ ...currentLedger });
-      setHasUnsavedChanges(true);
       showToast(
         `Reallocated ${currSym}${txData.amount.toLocaleString()} from ${txData.category || 'Reserves'} to ${txData.toCategory || 'Category Fund'}`
       );
     } else {
-      const acc = currentLedger.accounts.find((a) => a.id === txData.accountId);
-      if (acc) {
-        acc.balance += txData.amount;
-      }
-      recalculateLedgerRunningCapital(currentLedger);
-      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-      setLedger({ ...currentLedger });
-      setHasUnsavedChanges(true);
+      const acc = updatedLedger.accounts.find((a) => a.id === txData.accountId);
       showToast(
         `Recorded ${txData.source === 'interest_yield' ? 'interest payout' : 'deposit'} of ${currSym}${txData.amount.toLocaleString()} to ${acc?.name || 'account'}`
       );
     }
   };
 
-  // Helper to reverse or apply a transaction's balance effect on accounts
-  const applyTxBalanceEffect = (
-    accounts: SavingsAccount[],
-    tx: SavingsTransaction,
-    reverse: boolean
-  ) => {
-    const sign = reverse ? -1 : 1;
-    if (tx.source === 'withdrawal') {
-      const acc = accounts.find((a) => a.id === tx.accountId);
-      if (acc) acc.balance = Math.max(0, acc.balance - sign * tx.amount);
-    } else if (tx.source === 'transfer') {
-      const fromAcc = accounts.find((a) => a.id === tx.accountId);
-      const toAcc = accounts.find((a) => a.id === tx.toAccountId);
-      if (fromAcc) fromAcc.balance = Math.max(0, fromAcc.balance - sign * tx.amount);
-      if (toAcc) toAcc.balance = Math.max(0, toAcc.balance + sign * tx.amount);
-    } else if (tx.source === 'reallocation') {
-      // Category reallocation only shifts virtual envelope allocations; physical account balances remain unchanged
-      return;
-    } else {
-      const acc = accounts.find((a) => a.id === tx.accountId);
-      if (acc) acc.balance = Math.max(0, acc.balance + sign * tx.amount);
-    }
-  };
-
   // Update direct ledger transaction
   const handleUpdateLedgerTransaction = (txId: string, updated: Partial<SavingsTransaction>) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const txIndex = currentLedger.transactions.findIndex((t) => t.id === txId);
-    if (txIndex === -1) return;
-
-    const oldTx = currentLedger.transactions[txIndex];
-    // Reverse old balance effect
-    applyTxBalanceEffect(currentLedger.accounts, oldTx, true);
-
-    const newTx: SavingsTransaction = {
-      ...oldTx,
-      ...updated,
-    };
-    currentLedger.transactions[txIndex] = newTx;
-
-    // Apply new balance effect
-    applyTxBalanceEffect(currentLedger.accounts, newTx, false);
-    recalculateLedgerRunningCapital(currentLedger);
-
-    // If this transaction is linked to a Budget Sheet saving entry, keep the budget entry synchronized
-    if (newTx.budgetEntryId) {
-      const targetYear = newTx.year || budget.year;
-      const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
-      let budgetChanged = false;
-      targetBudget.entries = targetBudget.entries.map((e) => {
-        if (e.id === newTx.budgetEntryId) {
-          budgetChanged = true;
-          const est = e.estimatedCost || 0;
-          const updatedFundItem =
-            newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
-              ? newTx.category.trim()
-              : e.item;
-          return {
-            ...e,
-            item: updatedFundItem,
-            description: updatedFundItem || e.description,
-            category:
-              newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
-                ? normalizeSavingCategoryGroup(newTx.category.trim(), e.category)
-                : e.category,
-            amount: newTx.amount,
-            actualCost: newTx.amount,
-            difference: est - newTx.amount,
-            date: newTx.date,
-            savingAccountId: newTx.accountId,
-            savingAccountName: newTx.accountName,
-          };
-        }
-        return e;
-      });
-      if (budgetChanged) {
-        FinanceStorageService.saveLocalBudget(targetBudget, {
-          skipTemplateProfileUpdate: targetYear !== budget.year,
-        });
-        if (targetYear === budget.year) {
-          setBudget({ ...targetBudget });
-        }
-      }
+    const { ledger: updatedLedger, updatedBudget } = FinanceStorageService.updateLedgerTransaction(
+      txId,
+      updated,
+      budget.year
+    );
+    if (updatedBudget && updatedBudget.year === budget.year) {
+      setBudget({ ...updatedBudget });
     }
-
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
     showToast('Updated Funds ledger transaction');
   };
@@ -1322,49 +1195,14 @@ export default function App() {
       confirmLabel: 'Yes, Delete Transaction',
       isDestructive: true,
       onConfirm: async () => {
-        const latestLedger = FinanceStorageService.loadLocalSavingsLedger();
-        const targetTx = latestLedger.transactions.find((t) => t.id === txId);
-        if (targetTx) {
-          applyTxBalanceEffect(latestLedger.accounts, targetTx, true);
-          latestLedger.transactions = latestLedger.transactions.filter((t) => t.id !== txId);
-
-          // Unlink any loan payment that referenced this ledger transaction
-          if (Array.isArray(latestLedger.loans)) {
-            latestLedger.loans.forEach((ln) => {
-              (ln.payments || []).forEach((p) => {
-                if (p.ledgerTransactionId === txId) {
-                  delete p.ledgerTransactionId;
-                  delete p.accountId;
-                }
-              });
-            });
-          }
-
-          // If linked to a budget saving entry, remove that saving entry from the budget sheet as well
-          if (targetTx.budgetEntryId) {
-            const targetYear = targetTx.year || budget.year;
-            const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
-            const filteredEntries = targetBudget.entries.filter((e) => e.id !== targetTx.budgetEntryId);
-            if (filteredEntries.length !== targetBudget.entries.length) {
-              const updatedBudget: YearBudgetData = {
-                ...targetBudget,
-                entries: filteredEntries,
-              };
-              FinanceStorageService.saveLocalBudget(updatedBudget, {
-                skipTemplateProfileUpdate: targetYear !== budget.year,
-              });
-              if (targetYear === budget.year) {
-                setBudget(updatedBudget);
-              }
-            }
-          }
-
-          recalculateLedgerRunningCapital(latestLedger);
-          FinanceStorageService.saveLocalSavingsLedger(latestLedger);
-          setLedger({ ...latestLedger });
-          setHasUnsavedChanges(true);
-          showToast('Deleted transaction from Funds ledger');
+        const { ledger: updatedLedger, updatedBudget } =
+          FinanceStorageService.deleteLedgerTransaction(txId, budget.year);
+        if (updatedBudget && updatedBudget.year === budget.year) {
+          setBudget({ ...updatedBudget });
         }
+        setLedger({ ...updatedLedger });
+        setHasUnsavedChanges(true);
+        showToast('Deleted transaction from Funds ledger');
         setConfirmationModal((m) => ({ ...m, isOpen: false }));
       },
     });
@@ -1372,74 +1210,22 @@ export default function App() {
 
   // Add new account to savings ledger
   const handleAddSavingsAccount = (accountData: Omit<SavingsAccount, 'id'>) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const newAccount: SavingsAccount = {
-      ...accountData,
-      id: `acc-${Date.now()}`,
-    };
-
-    currentLedger.accounts.push(newAccount);
-    if (newAccount.balance > 0) {
-      currentLedger.initialCapital = Math.max(0, (currentLedger.initialCapital || 0) + newAccount.balance);
-      recalculateLedgerRunningCapital(currentLedger);
-    }
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    const { ledger: updatedLedger, newAccount } =
+      FinanceStorageService.addSavingsAccount(accountData);
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
     showToast(`Added account "${newAccount.name}"`);
   };
 
   // Update/Rename account in savings ledger
   const handleUpdateSavingsAccount = (accountId: string, updates: Partial<SavingsAccount>) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const accIndex = currentLedger.accounts.findIndex((a) => a.id === accountId);
-    if (accIndex === -1) return;
-
-    const oldName = currentLedger.accounts[accIndex].name;
-    const oldBalance = currentLedger.accounts[accIndex].balance || 0;
-    const newName = updates.name?.trim() || oldName;
-
-    currentLedger.accounts[accIndex] = {
-      ...currentLedger.accounts[accIndex],
-      ...updates,
-      name: newName,
-    };
-
-    // If balance was manually adjusted, keep initialCapital and runningTotalCapital synchronized
-    if (updates.balance !== undefined && updates.balance !== oldBalance) {
-      const balanceDelta = updates.balance - oldBalance;
-      currentLedger.initialCapital = Math.max(0, (currentLedger.initialCapital || 0) + balanceDelta);
-      recalculateLedgerRunningCapital(currentLedger);
+    const { ledger: updatedLedger, updatedBudget, newName } =
+      FinanceStorageService.updateSavingsAccount(accountId, updates, budget.year);
+    if (!newName) return;
+    if (updatedBudget) {
+      setBudget({ ...updatedBudget });
     }
-
-    // If name changed, update transaction accountName for consistency
-    if (updates.name && updates.name.trim() !== oldName) {
-      currentLedger.transactions.forEach((tx) => {
-        if (tx.accountId === accountId) {
-          tx.accountName = newName;
-        }
-        if (tx.toAccountId === accountId) {
-          tx.toAccountName = newName;
-        }
-      });
-
-      // Also update in current budget entries if savingAccountId matches
-      const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
-      let budgetUpdated = false;
-      currentBudget.entries.forEach((e) => {
-        if (e.savingAccountId === accountId) {
-          e.savingAccountName = newName;
-          budgetUpdated = true;
-        }
-      });
-      if (budgetUpdated) {
-        FinanceStorageService.saveLocalBudget(currentBudget);
-        setBudget({ ...currentBudget });
-      }
-    }
-
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
     showToast(`Updated account "${newName}"`);
   };
@@ -1452,77 +1238,26 @@ export default function App() {
       return;
     }
 
-    const deletingAcc = currentLedger.accounts.find((a) => a.id === accountId);
-    if (!deletingAcc) return;
+    const {
+      deleted,
+      ledger: updatedLedger,
+      updatedBudget,
+      deletedAccountName,
+      targetAccountName,
+    } = FinanceStorageService.deleteSavingsAccount(accountId, reassignToAccountId, budget.year);
+    if (!deleted || !deletedAccountName) return;
 
-    const targetAcc = reassignToAccountId
-      ? currentLedger.accounts.find((a) => a.id === reassignToAccountId)
-      : currentLedger.accounts.find((a) => a.id !== accountId);
-
-    // Reassign transactions and loan payments if target account is found
-    if (targetAcc) {
-      currentLedger.transactions.forEach((tx) => {
-        if (tx.accountId === accountId) {
-          tx.accountId = targetAcc.id;
-          tx.accountName = targetAcc.name;
-        }
-        if (tx.toAccountId === accountId) {
-          tx.toAccountId = targetAcc.id;
-          tx.toAccountName = targetAcc.name;
-        }
-      });
-      if (Array.isArray(currentLedger.loans)) {
-        currentLedger.loans.forEach((ln) => {
-          (ln.payments || []).forEach((p) => {
-            if (p.accountId === accountId) {
-              p.accountId = targetAcc.id;
-            }
-          });
-        });
-      }
-      // Transfer balance
-      targetAcc.balance += deletingAcc.balance;
+    if (updatedBudget) {
+      setBudget({ ...updatedBudget });
+      setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
     }
-
-    // Also update budget entries and itemTemplates pointing to this account
-    const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
-    let budgetUpdated = false;
-    currentBudget.entries.forEach((e) => {
-      if (e.savingAccountId === accountId) {
-        if (targetAcc) {
-          e.savingAccountId = targetAcc.id;
-          e.savingAccountName = targetAcc.name;
-        } else {
-          delete e.savingAccountId;
-          delete e.savingAccountName;
-        }
-        budgetUpdated = true;
-      }
-    });
-    if (currentBudget.itemTemplates) {
-      currentBudget.itemTemplates = currentBudget.itemTemplates.map((t) => {
-        if (t.defaultSavingAccountId === accountId) {
-          budgetUpdated = true;
-          return {
-            ...t,
-            defaultSavingAccountId: targetAcc ? targetAcc.id : undefined,
-          };
-        }
-        return t;
-      });
-    }
-    if (budgetUpdated) {
-      FinanceStorageService.saveLocalBudget(currentBudget);
-      setBudget({ ...currentBudget });
-      setTemplateData(FinanceStorageService.loadLocalTemplateData(currentBudget));
-    }
-
-    // Remove account
-    currentLedger.accounts = currentLedger.accounts.filter((a) => a.id !== accountId);
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
-    showToast(`Deleted account "${deletingAcc.name}"${targetAcc ? ` (transferred to ${targetAcc.name})` : ''}`);
+    showToast(
+      `Deleted account "${deletedAccountName}"${
+        targetAccountName ? ` (transferred to ${targetAccountName})` : ''
+      }`
+    );
   };
 
   // Update Custom Categories (and propagate category renames if applicable)
@@ -1620,132 +1355,22 @@ export default function App() {
     const oldClean = oldFundName.trim();
     const newClean = newFundName.trim();
     if (!oldClean || !newClean) return;
-    const oldLower = oldClean.toLowerCase();
-    const newLower = newClean.toLowerCase();
-    const resolvedCategory = normalizeSavingCategoryGroup(newClean, newSavingCategory);
 
-    // 1. Update Ledger Transactions
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    let ledgerChanged = false;
-    currentLedger.transactions = currentLedger.transactions
-      .map((tx) => {
-        const updated = { ...tx };
-        if ((tx.category || '').trim().toLowerCase() === oldLower) {
-          updated.category = newClean;
-          ledgerChanged = true;
-        }
-        if ((tx.toCategory || '').trim().toLowerCase() === oldLower) {
-          updated.toCategory = newClean;
-          ledgerChanged = true;
-        }
-        const cleanNote = tx.note
-          .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
-          .trim();
-        if (cleanNote.toLowerCase() === oldLower) {
-          updated.note = tx.note.replace(new RegExp(oldClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), newClean);
-          ledgerChanged = true;
-        }
-        return updated;
-      })
-      .filter((tx) => {
-        if (
-          tx.source === 'reallocation' &&
-          (tx.category || '').trim().toLowerCase() === (tx.toCategory || '').trim().toLowerCase()
-        ) {
-          ledgerChanged = true;
-          return false;
-        }
-        return true;
-      });
+    const { budget: updatedBudget, ledger: updatedLedger } =
+      FinanceStorageService.renameOrMergeSinkingFund(
+        budget,
+        oldClean,
+        newClean,
+        newMonthlyTarget,
+        newSavingCategory
+      );
 
-    if (ledgerChanged) {
-      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-      setLedger({ ...currentLedger });
-    }
-
-    // 2. Update Budget Saving Entries & Saving Item Templates
-    const currentTemplates = [...(budget.itemTemplates || [])];
-    let matchedSavingTemplate = false;
-    const deduplicatedTemplates: BudgetItemTemplate[] = [];
-
-    currentTemplates.forEach((tpl) => {
-      if (
-        tpl.type === 'saving' &&
-        (tpl.item.trim().toLowerCase() === oldLower || tpl.item.trim().toLowerCase() === newLower)
-      ) {
-        if (!matchedSavingTemplate) {
-          matchedSavingTemplate = true;
-          const isBiweeklyBoth =
-            tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both');
-          deduplicatedTemplates.push({
-            ...tpl,
-            item: newClean,
-            category: newSavingCategory
-              ? resolvedCategory
-              : normalizeSavingCategoryGroup(newClean, tpl.category),
-            defaultEstimatedCost:
-              newMonthlyTarget !== undefined
-                ? isBiweeklyBoth
-                  ? newMonthlyTarget / 2
-                  : newMonthlyTarget
-                : tpl.defaultEstimatedCost,
-          });
-        } else if (newMonthlyTarget === undefined && tpl.defaultEstimatedCost > 0) {
-          const existingIdx = deduplicatedTemplates.findIndex(
-            (d) => d.type === 'saving' && d.item.trim().toLowerCase() === newLower
-          );
-          if (existingIdx >= 0 && deduplicatedTemplates[existingIdx].defaultEstimatedCost === 0) {
-            deduplicatedTemplates[existingIdx].defaultEstimatedCost = tpl.defaultEstimatedCost;
-          }
-        }
-      } else {
-        deduplicatedTemplates.push(tpl);
-      }
-    });
-
-    if (!matchedSavingTemplate && ((newMonthlyTarget !== undefined && newMonthlyTarget > 0) || newSavingCategory)) {
-      deduplicatedTemplates.push({
-        id: `tpl-sav-${Date.now()}`,
-        type: 'saving',
-        category: resolvedCategory,
-        item: newClean,
-        defaultEstimatedCost: newMonthlyTarget || 0,
-        frequency: 'monthly',
-        biweeklyPeriod: 'both',
-        defaultPaymentMethod: 'Bank Transfer',
-      });
-    }
-
-    const updatedEntries = budget.entries.map((e) => {
-      if (
-        e.type === 'saving' &&
-        ((e.item || '').trim().toLowerCase() === oldLower ||
-          (e.description || '').trim().toLowerCase() === oldLower)
-      ) {
-        return {
-          ...e,
-          item: newClean,
-          description: newClean,
-          category: newSavingCategory ? resolvedCategory : e.category,
-        };
-      }
-      return e;
-    });
-
-    const updatedBudget: YearBudgetData = {
-      ...budget,
-      entries: updatedEntries,
-      itemTemplates: deduplicatedTemplates,
-      isPersonalizedTemplate: deduplicatedTemplates.length > 0,
-      lastUpdated: new Date().toISOString(),
-    };
-
+    setLedger({ ...updatedLedger });
     setBudget(updatedBudget);
-    FinanceStorageService.saveLocalBudget(updatedBudget);
     setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
     setHasUnsavedChanges(true);
     showToast(
-      oldLower !== newLower
+      oldClean.toLowerCase() !== newClean.toLowerCase()
         ? `Merged / renamed fund "${oldClean}" into "${newClean}"`
         : `Updated sinking fund "${newClean}"`
     );
@@ -1753,85 +1378,16 @@ export default function App() {
 
   // Delete a Sinking Fund and optionally reassign its balance to another fund or General Reserves
   const handleDeleteFund = (fundName: string, reassignToFund?: string) => {
-    const targetLower = fundName.trim().toLowerCase();
-    if (!targetLower) return;
+    if (!fundName.trim()) return;
+    const {
+      budget: updatedBudget,
+      ledger: updatedLedger,
+      destination,
+    } = FinanceStorageService.deleteSinkingFund(budget, fundName, reassignToFund);
 
-    const destination = (reassignToFund || 'General Reserves / Starting Capital').trim();
     const isDestUnallocated = destination.toLowerCase() === 'general reserves / starting capital';
-
-    // 1. Update Ledger Transactions
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    let ledgerChanged = false;
-
-    currentLedger.transactions = currentLedger.transactions
-      .map((tx) => {
-        const catLower = (tx.category || '').trim().toLowerCase();
-        const toCatLower = (tx.toCategory || '').trim().toLowerCase();
-        if (catLower === targetLower || toCatLower === targetLower) {
-          ledgerChanged = true;
-          const updated = { ...tx };
-          if (catLower === targetLower) {
-            updated.category = destination;
-          }
-          if (toCatLower === targetLower) {
-            updated.toCategory = destination;
-          }
-          return updated;
-        }
-        return tx;
-      })
-      .filter((tx) => {
-        if (
-          tx.source === 'reallocation' &&
-          (tx.category || '').trim().toLowerCase() === (tx.toCategory || '').trim().toLowerCase()
-        ) {
-          ledgerChanged = true;
-          return false;
-        }
-        return true;
-      });
-
-    if (ledgerChanged) {
-      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-      setLedger({ ...currentLedger });
-    }
-
-    // 2. Remove from Budget Saving Templates
-    const filteredTemplates = (budget.itemTemplates || []).filter(
-      (tpl) => !(tpl.type === 'saving' && tpl.item.trim().toLowerCase() === targetLower)
-    );
-
-    const updatedEntries = budget.entries.map((e) => {
-      if (
-        e.type === 'saving' &&
-        ((e.item || '').trim().toLowerCase() === targetLower ||
-          (e.description || '').trim().toLowerCase() === targetLower)
-      ) {
-        return { ...e, item: destination, description: destination };
-      }
-      return e;
-    });
-
-    const updatedSavingCats = (budget.customCategories?.saving || []).filter(
-      (c) => c.trim().toLowerCase() !== targetLower
-    );
-
-    const updatedBudget: YearBudgetData = {
-      ...budget,
-      entries: updatedEntries,
-      itemTemplates: filteredTemplates,
-      customCategories: budget.customCategories
-        ? {
-            ...budget.customCategories,
-            saving: updatedSavingCats,
-          }
-        : undefined,
-      isPersonalizedTemplate: filteredTemplates.length > 0,
-      lastUpdated: new Date().toISOString(),
-    };
-
+    setLedger({ ...updatedLedger });
     setBudget(updatedBudget);
-    FinanceStorageService.saveLocalBudget(updatedBudget);
     setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
     setHasUnsavedChanges(true);
     showToast(
@@ -1846,68 +1402,13 @@ export default function App() {
     entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[],
     options?: { replacePeriod?: string; customExpenseCategories?: string[] }
   ) => {
-    const defaultAcc = ledger.accounts[0];
-    const newEntries: BudgetEntry[] = entriesData.map((e, idx) => ({
-      ...e,
-      savingAccountId:
-        e.type === 'saving' ? e.savingAccountId || defaultAcc?.id : e.savingAccountId,
-      savingAccountName:
-        e.type === 'saving' ? e.savingAccountName || defaultAcc?.name : e.savingAccountName,
-      id: `entry-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
-      createdAt: new Date().toISOString(),
-    }));
-
-    // If replacing an existing period, roll back any previous saving & loan entries from that period in the ledger first
-    const removedPeriodEntries = options?.replacePeriod
-      ? budget.entries.filter((e) => e.period === options.replacePeriod)
-      : [];
-    const removedPeriodSavings = removedPeriodEntries.filter((e) => e.type === 'saving');
-
-    const baseEntries = options?.replacePeriod
-      ? budget.entries.filter((e) => e.period !== options.replacePeriod)
-      : budget.entries;
-
-    const currentCustomCats = budget.customCategories || {
-      expense: [],
-      income: [],
-      saving: [],
-    };
-    const mergedExpenseCats = options?.customExpenseCategories?.length
-      ? Array.from(new Set([...currentCustomCats.expense, ...options.customExpenseCategories]))
-      : currentCustomCats.expense;
-
-    const updatedBudget: YearBudgetData = {
-      ...budget,
-      entries: [...newEntries, ...baseEntries],
-      customCategories: {
-        ...currentCustomCats,
-        expense: mergedExpenseCats,
-      },
-      lastUpdated: new Date().toISOString(),
-    };
+    const {
+      budget: updatedBudget,
+      ledger: updatedLedger,
+      newEntries,
+    } = FinanceStorageService.addMultipleBudgetEntries(budget, entriesData, options);
 
     setBudget(updatedBudget);
-    FinanceStorageService.saveLocalBudget(updatedBudget);
-
-    // Sync any saving & loan entries to ledger (rolling back replaced period entries first)
-    let updatedLedger = ledger;
-    removedPeriodSavings.forEach((oldSaving) => {
-      updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldSaving, true);
-    });
-    removedPeriodEntries.forEach((oldEntry) => {
-      if (oldEntry.type !== 'saving') {
-        const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(oldEntry, true);
-        updatedLedger = res.ledger;
-      }
-    });
-    newEntries.forEach((entry) => {
-      if (entry.type === 'saving' && entry.status !== 'Pending' && (entry.actualCost ?? entry.amount ?? 0) > 0) {
-        updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, false);
-      } else if (entry.type !== 'saving') {
-        const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(entry, false);
-        updatedLedger = res.ledger;
-      }
-    });
     setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
     showToast(
@@ -1919,64 +1420,6 @@ export default function App() {
 
   // --- LOANS & RECEIVABLES HANDLERS ---
 
-  const syncLoanToBudgetTemplateHelper = (
-    loan: LoanRecord,
-    currentBudget: YearBudgetData
-  ): { updatedBudget: YearBudgetData; templateId: string } => {
-    const templates = [...(currentBudget.itemTemplates || [])];
-    const targetType: EntryType = loan.direction === 'borrowed' ? 'expense' : 'income';
-    const targetCat = loan.direction === 'borrowed' ? 'Loans' : 'Other Income';
-
-    const existingIdx = templates.findIndex(
-      (t) =>
-        (loan.linkedTemplateId && t.id === loan.linkedTemplateId) ||
-        (t.loanId && t.loanId === loan.id) ||
-        (t.type === targetType && t.item.trim().toLowerCase() === loan.name.trim().toLowerCase())
-    );
-
-    const templateId = existingIdx >= 0 ? templates[existingIdx].id : `tpl-loan-${loan.id}`;
-    const tplPayload: BudgetItemTemplate = {
-      id: templateId,
-      type: targetType,
-      category: existingIdx >= 0 ? templates[existingIdx].category : targetCat,
-      item: loan.name,
-      defaultEstimatedCost: loan.installmentAmount,
-      frequency: loan.frequency,
-      biweeklyPeriod: loan.biweeklyPeriod || 'both',
-      defaultPaymentMethod: existingIdx >= 0 ? templates[existingIdx].defaultPaymentMethod : 'Bank Transfer',
-      loanId: loan.id,
-    };
-
-    if (existingIdx >= 0) {
-      templates[existingIdx] = tplPayload;
-    } else {
-      templates.push(tplPayload);
-    }
-
-    const customCats = currentBudget.customCategories
-      ? {
-          expense: [...currentBudget.customCategories.expense],
-          income: [...currentBudget.customCategories.income],
-          saving: [...currentBudget.customCategories.saving],
-        }
-      : { expense: ['Loans'], income: ['Other Income'], saving: [] };
-
-    if (targetType === 'expense' && !customCats.expense.includes('Loans')) {
-      customCats.expense.push('Loans');
-    }
-
-    const updatedBudget: YearBudgetData = {
-      ...currentBudget,
-      itemTemplates: templates,
-      customCategories: customCats,
-      isPersonalizedTemplate: templates.length > 0,
-      lastUpdated: new Date().toISOString(),
-    };
-
-    FinanceStorageService.saveLocalBudget(updatedBudget);
-    return { updatedBudget, templateId };
-  };
-
   const handleSaveLoan = (
     loan: LoanRecord,
     options?: {
@@ -1984,128 +1427,26 @@ export default function App() {
       disburseFromAccountId?: string;
     }
   ) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const loans = [...(currentLedger.loans || [])];
-    const existingIdx = loans.findIndex((l) => l.id === loan.id);
+    const {
+      ledger: updatedLedger,
+      budget: updatedBudget,
+      isUpdate,
+      disbursedAccountName,
+      disbursedAmount,
+    } = FinanceStorageService.saveLoanContract(loan, budget, frequency, options);
 
-    let updatedLoan = { ...loan };
-
-    const hasMatchingTemplateInBudget = (budget.itemTemplates || []).some(
-      (t) => t.loanId === updatedLoan.id || (updatedLoan.linkedTemplateId && t.id === updatedLoan.linkedTemplateId)
-    );
-    const shouldSyncTemplate =
-      options?.syncToTemplate !== undefined
-        ? options.syncToTemplate
-        : Boolean(updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget);
-
-    let workingBudget = budget;
-    // If an existing loan was renamed, update any budget entries linked by loanId
-    if (existingIdx >= 0 && loans[existingIdx].name.trim() !== updatedLoan.name.trim()) {
-      const oldLoanNameLower = loans[existingIdx].name.trim().toLowerCase();
-      let entriesChanged = false;
-      const updatedEntries = workingBudget.entries.map((entry) => {
-        if (
-          entry.loanId === updatedLoan.id ||
-          ((entry.category === 'Loans' || entry.category === 'Other Income') &&
-            (entry.item || '').trim().toLowerCase() === oldLoanNameLower)
-        ) {
-          entriesChanged = true;
-          return {
-            ...entry,
-            item: updatedLoan.name,
-            description: updatedLoan.name,
-            loanId: updatedLoan.id,
-          };
-        }
-        return entry;
-      });
-      if (entriesChanged) {
-        workingBudget = {
-          ...workingBudget,
-          entries: updatedEntries,
-          lastUpdated: new Date().toISOString(),
-        };
-        FinanceStorageService.saveLocalBudget(workingBudget);
-      }
-    }
-
-    if (shouldSyncTemplate) {
-      const { updatedBudget, templateId } = syncLoanToBudgetTemplateHelper(updatedLoan, workingBudget);
-      updatedLoan.linkedTemplateId = templateId;
-      setBudget(updatedBudget);
-      setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
-    } else if (options?.syncToTemplate === false && (updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget)) {
-      const filteredTemplates = (workingBudget.itemTemplates || []).filter(
-        (t) => t.loanId !== updatedLoan.id && (!updatedLoan.linkedTemplateId || t.id !== updatedLoan.linkedTemplateId)
-      );
-      updatedLoan.linkedTemplateId = undefined;
-      const unlinkedBudget: YearBudgetData = {
-        ...workingBudget,
-        itemTemplates: filteredTemplates,
-        isPersonalizedTemplate: filteredTemplates.length > 0,
-        lastUpdated: new Date().toISOString(),
-      };
-      FinanceStorageService.saveLocalBudget(unlinkedBudget);
-      setBudget(unlinkedBudget);
-      setTemplateData(FinanceStorageService.loadLocalTemplateData(unlinkedBudget));
-    } else if (workingBudget !== budget) {
-      setBudget(workingBudget);
-    }
-
-    if (existingIdx >= 0) {
-      loans[existingIdx] = updatedLoan;
-    } else {
-      loans.unshift(updatedLoan);
-    }
-
-    // Optional: If lending money out and user selected an account to disburse from, deduct the principal
-    let disbursedAccountName: string | undefined;
-    let disbursedAmount = 0;
-    if (existingIdx === -1 && options?.disburseFromAccountId && updatedLoan.direction === 'lent') {
-      const targetAcc = currentLedger.accounts.find((a) => a.id === options.disburseFromAccountId);
-      disbursedAmount = updatedLoan.principalAmount || updatedLoan.totalContractAmount;
-      if (targetAcc && disbursedAmount > 0) {
-        targetAcc.balance = Math.max(0, targetAcc.balance - disbursedAmount);
-        disbursedAccountName = targetAcc.name;
-
-        const dateParts = (updatedLoan.startDate || '').split('-').map((n) => parseInt(n, 10));
-        const parsedYear =
-          dateParts.length === 3 && !isNaN(dateParts[0]) ? dateParts[0] : budget.year;
-        const parsedMonthIdx =
-          dateParts.length === 3 && !isNaN(dateParts[1]) ? Math.max(0, Math.min(11, dateParts[1] - 1)) : new Date().getMonth();
-        const monthName = MONTH_NAMES[parsedMonthIdx] || 'Jan';
-        const dayOfMonth = dateParts.length === 3 && !isNaN(dateParts[2]) ? dateParts[2] : new Date().getDate();
-        const resolvedPeriod =
-          frequency === 'bi-weekly'
-            ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
-            : monthName;
-
-        currentLedger.transactions.push({
-          id: `tx-disburse-${Date.now()}`,
-          date: updatedLoan.startDate || new Date().toISOString().split('T')[0],
-          year: parsedYear,
-          period: resolvedPeriod,
-          amount: disbursedAmount,
-          accountId: targetAcc.id,
-          accountName: targetAcc.name,
-          source: 'withdrawal',
-          category: 'General Reserves / Starting Capital',
-          note: `Disbursed Lent Loan: ${updatedLoan.name}${updatedLoan.counterparty ? ` to ${updatedLoan.counterparty}` : ''}`,
-        });
-        recalculateLedgerRunningCapital(currentLedger);
-      }
-    }
-
-    currentLedger.loans = loans;
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    setBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
-    const currSym = currentLedger.currency || '₱';
+    const currSym = updatedLedger.currency || '₱';
     showToast(
-      existingIdx >= 0
-        ? `Updated loan "${updatedLoan.name}"`
-        : `Added ${updatedLoan.direction === 'borrowed' ? 'borrowed loan' : 'receivable'} "${updatedLoan.name}"${
-            disbursedAccountName ? ` (${currSym}${disbursedAmount.toLocaleString()} deducted from ${disbursedAccountName})` : ''
+      isUpdate
+        ? `Updated loan "${loan.name}"`
+        : `Added ${loan.direction === 'borrowed' ? 'borrowed loan' : 'receivable'} "${loan.name}"${
+            disbursedAccountName
+              ? ` (${currSym}${disbursedAmount.toLocaleString()} deducted from ${disbursedAccountName})`
+              : ''
           }`
     );
   };
@@ -2127,37 +1468,11 @@ export default function App() {
       confirmLabel: 'Yes, Delete Loan',
       isDestructive: true,
       onConfirm: async () => {
-        const latestLedger = FinanceStorageService.loadLocalSavingsLedger();
-        latestLedger.loans = (latestLedger.loans || []).filter((l) => l.id !== loanId);
-        FinanceStorageService.saveLocalSavingsLedger(latestLedger);
-        setLedger({ ...latestLedger });
-
-        // Also remove any auto-linked recurring template item and clear dangling loanId on budget entries
-        const currentTemplates = budget.itemTemplates || [];
-        const filteredTemplates = currentTemplates.filter(
-          (t) => t.loanId !== loanId && (!target.linkedTemplateId || t.id !== target.linkedTemplateId)
-        );
-        let entriesUnlinked = false;
-        const cleanedEntries = budget.entries.map((e) => {
-          if (e.loanId === loanId) {
-            entriesUnlinked = true;
-            return { ...e, loanId: undefined };
-          }
-          return e;
-        });
-        if (filteredTemplates.length !== currentTemplates.length || entriesUnlinked) {
-          const updatedBudget: YearBudgetData = {
-            ...budget,
-            entries: cleanedEntries,
-            itemTemplates: filteredTemplates,
-            isPersonalizedTemplate: filteredTemplates.length > 0,
-            lastUpdated: new Date().toISOString(),
-          };
-          FinanceStorageService.saveLocalBudget(updatedBudget);
-          setBudget(updatedBudget);
-          setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
-        }
-
+        const { ledger: updatedLedger, budget: updatedBudget } =
+          FinanceStorageService.deleteLoanContract(loanId, budget);
+        setLedger({ ...updatedLedger });
+        setBudget(updatedBudget);
+        setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
         setHasUnsavedChanges(true);
         showToast(`Removed loan "${target.name}"`);
         setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -2175,159 +1490,22 @@ export default function App() {
       depositToAccountId?: string;
     }
   ) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const loans = [...(currentLedger.loans || [])];
-    const loanIdx = loans.findIndex((l) => l.id === loanId);
-    if (loanIdx === -1) return;
+    const {
+      ledger: updatedLedger,
+      updatedActiveBudget,
+      loan,
+      linkedBudgetEntryId,
+      resolvedPeriod,
+    } = FinanceStorageService.recordLoanPayment(loanId, paymentData, budget, frequency);
+    if (!loan) return;
 
-    const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
-    // Parse YYYY-MM-DD in local time without UTC-midnight shift
-    const dateParts = (paymentData.date || '').split('-').map((n) => parseInt(n, 10));
-    const parsedYear =
-      dateParts.length === 3 && !isNaN(dateParts[0]) ? dateParts[0] : budget.year;
-    const parsedMonthIdx =
-      dateParts.length === 3 && !isNaN(dateParts[1]) ? Math.max(0, Math.min(11, dateParts[1] - 1)) : new Date().getMonth();
-    const dayOfMonth =
-      dateParts.length === 3 && !isNaN(dateParts[2]) ? dateParts[2] : new Date().getDate();
-    const monthName = MONTH_NAMES[parsedMonthIdx] || 'Oct';
-    const resolvedPeriod =
-      frequency === 'bi-weekly'
-        ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
-        : monthName;
-    const resolvedPeriodIdx =
-      frequency === 'bi-weekly'
-        ? Math.max(0, BIWEEKLY_PERIODS.findIndex((p) => p.id === resolvedPeriod))
-        : parsedMonthIdx;
-
-    let linkedBudgetEntryId: string | undefined;
-
-    if (paymentData.recordInBudget) {
-      const targetBudget =
-        parsedYear === budget.year ? budget : FinanceStorageService.loadLocalBudget(parsedYear);
-      const targetType: EntryType = loan.direction === 'borrowed' ? 'expense' : 'income';
-      const estAmt = loan.installmentAmount || paymentData.amount;
-      const diffAmt =
-        loan.direction === 'borrowed' ? estAmt - paymentData.amount : paymentData.amount - estAmt;
-      const loanNameLower = loan.name.trim().toLowerCase();
-
-      // Check if a Pending or $0 placeholder entry for this loan already exists in this period
-      const existingPlaceholder = targetBudget.entries.find(
-        (e) =>
-          e.period === resolvedPeriod &&
-          e.type === targetType &&
-          (e.loanId === loan.id || (e.item || e.description || '').trim().toLowerCase() === loanNameLower) &&
-          (e.status === 'Pending' || (e.actualCost ?? e.amount ?? 0) === 0)
-      );
-
-      let updatedEntries: BudgetEntry[];
-      if (existingPlaceholder) {
-        linkedBudgetEntryId = existingPlaceholder.id;
-        updatedEntries = targetBudget.entries.map((e) =>
-          e.id === existingPlaceholder.id
-            ? {
-                ...e,
-                date: paymentData.date,
-                item: loan.name,
-                description: paymentData.note || loan.name,
-                amount: paymentData.amount,
-                estimatedCost: e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt,
-                actualCost: paymentData.amount,
-                difference:
-                  loan.direction === 'borrowed'
-                    ? (e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt) - paymentData.amount
-                    : paymentData.amount - (e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt),
-                status: 'Paid',
-                loanId: loan.id,
-              }
-            : e
-        );
-      } else {
-        const entryId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-        linkedBudgetEntryId = entryId;
-        const newBudgetEntry: BudgetEntry = {
-          id: entryId,
-          year: parsedYear,
-          period: resolvedPeriod,
-          periodIndex: resolvedPeriodIdx,
-          date: paymentData.date,
-          type: targetType,
-          category: loan.direction === 'borrowed' ? 'Loans' : 'Other Income',
-          item: loan.name,
-          description: paymentData.note || loan.name,
-          amount: paymentData.amount,
-          estimatedCost: estAmt,
-          actualCost: paymentData.amount,
-          difference: diffAmt,
-          status: 'Paid',
-          paymentMethod: 'Bank Transfer',
-          loanId: loan.id,
-          createdAt: new Date().toISOString(),
-        };
-        updatedEntries = [newBudgetEntry, ...targetBudget.entries];
-      }
-
-      const updatedBudget: YearBudgetData = {
-        ...targetBudget,
-        entries: updatedEntries,
-        lastUpdated: new Date().toISOString(),
-      };
-      FinanceStorageService.saveLocalBudget(updatedBudget, {
-        skipTemplateProfileUpdate: parsedYear !== budget.year,
-      });
-      if (parsedYear === budget.year) {
-        setBudget(updatedBudget);
-      } else {
-        setAvailableYears(FinanceStorageService.getKnownYears());
-      }
+    if (updatedActiveBudget) {
+      setBudget(updatedActiveBudget);
+    } else if (paymentData.recordInBudget) {
+      setAvailableYears(FinanceStorageService.getKnownYears());
     }
 
-    let linkedLedgerTxId: string | undefined;
-    if (paymentData.depositToAccountId) {
-      const targetAcc = currentLedger.accounts.find((a) => a.id === paymentData.depositToAccountId);
-      if (targetAcc) {
-        linkedLedgerTxId = `tx-loan-${Date.now()}`;
-        targetAcc.balance += paymentData.amount;
-        currentLedger.transactions.push({
-          id: linkedLedgerTxId,
-          date: paymentData.date,
-          year: parsedYear,
-          period: resolvedPeriod,
-          amount: paymentData.amount,
-          accountId: targetAcc.id,
-          accountName: targetAcc.name,
-          source: 'manual_deposit',
-          category: 'General Reserves / Starting Capital',
-          note: `Loan Repayment Collected: ${loan.name}`,
-        });
-      }
-    }
-
-    const newPayment: LoanPayment = {
-      id: `lpay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      loanId: loan.id,
-      date: paymentData.date,
-      year: parsedYear,
-      period: resolvedPeriod,
-      amount: paymentData.amount,
-      source: linkedBudgetEntryId ? 'budget_sync' : 'manual_payment',
-      budgetEntryId: linkedBudgetEntryId,
-      accountId: paymentData.depositToAccountId,
-      ledgerTransactionId: linkedLedgerTxId,
-      note: paymentData.note,
-    };
-
-    loan.payments.push(newPayment);
-    const totalPaid =
-      (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
-    loan.status =
-      loan.totalContractAmount > 0 && totalPaid + 0.005 >= loan.totalContractAmount ? 'completed' : 'active';
-    loan.updatedAt = new Date().toISOString();
-
-    loans[loanIdx] = loan;
-    currentLedger.loans = loans;
-    recalculateLedgerRunningCapital(currentLedger);
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
     showToast(
       `Recorded ₱${paymentData.amount.toLocaleString()} for "${loan.name}"${
@@ -2337,71 +1515,27 @@ export default function App() {
   };
 
   const handleDeleteLoanPayment = (loanId: string, paymentId: string) => {
-    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
-    const loans = [...(currentLedger.loans || [])];
-    const loanIdx = loans.findIndex((l) => l.id === loanId);
-    if (loanIdx === -1) return;
+    const {
+      ledger: updatedLedger,
+      updatedActiveBudget,
+      loan,
+      removedPayment,
+    } = FinanceStorageService.deleteLoanPayment(loanId, paymentId, budget);
+    if (!loan || !removedPayment) return;
 
-    const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
-    const targetPay = loan.payments.find((p) => p.id === paymentId);
-    if (!targetPay) return;
-
-    // 1. If this payment deposited money into a savings account, reverse the account balance and remove its ledger transaction
-    if (targetPay.ledgerTransactionId) {
-      const linkedTx = currentLedger.transactions.find((t) => t.id === targetPay.ledgerTransactionId);
-      if (linkedTx) {
-        applyTxBalanceEffect(currentLedger.accounts, linkedTx, true);
-        currentLedger.transactions = currentLedger.transactions.filter((t) => t.id !== targetPay.ledgerTransactionId);
-      } else if (targetPay.accountId) {
-        const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
-        if (acc) {
-          acc.balance = Math.max(0, acc.balance - targetPay.amount);
-        }
-      }
-    } else if (targetPay.accountId) {
-      const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
-      if (acc) {
-        acc.balance = Math.max(0, acc.balance - targetPay.amount);
-      }
+    if (updatedActiveBudget) {
+      setBudget(updatedActiveBudget);
     }
-
-    // 2. If this payment was synced with a Budget Sheet entry, remove that Budget Sheet entry as well
-    if (targetPay.budgetEntryId) {
-      const targetYear = targetPay.year || budget.year;
-      const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
-      const updatedEntries = targetBudget.entries.filter((e) => e.id !== targetPay.budgetEntryId);
-      if (updatedEntries.length !== targetBudget.entries.length) {
-        const updatedBudget: YearBudgetData = {
-          ...targetBudget,
-          entries: updatedEntries,
-        };
-        FinanceStorageService.saveLocalBudget(updatedBudget, {
-          skipTemplateProfileUpdate: targetYear !== budget.year,
-        });
-        if (targetYear === budget.year) {
-          setBudget(updatedBudget);
-        }
-      }
-    }
-
-    loan.payments = loan.payments.filter((p) => p.id !== paymentId);
-    const totalPaid =
-      (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
-    loan.status =
-      loan.totalContractAmount > 0 && totalPaid + 0.005 >= loan.totalContractAmount ? 'completed' : 'active';
-    loan.updatedAt = new Date().toISOString();
-
-    loans[loanIdx] = loan;
-    currentLedger.loans = loans;
-    recalculateLedgerRunningCapital(currentLedger);
-    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
-    setLedger({ ...currentLedger });
+    setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
-    showToast(`Removed payment of ₱${targetPay.amount.toLocaleString()} from "${loan.name}"`);
+    showToast(`Removed payment of ₱${removedPayment.amount.toLocaleString()} from "${loan.name}"`);
   };
 
   const handleLinkLoanToTemplate = (loan: LoanRecord) => {
-    const { updatedBudget, templateId } = syncLoanToBudgetTemplateHelper(loan, budget);
+    const { updatedBudget, templateId } = FinanceStorageService.syncLoanToBudgetTemplate(
+      loan,
+      budget
+    );
     setBudget(updatedBudget);
     setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
 
@@ -2963,8 +2097,45 @@ export default function App() {
     });
   };
 
+  // Mobile Pull-to-Refresh handler (soft in-app refresh)
+  const handleSoftRefresh = useCallback(async () => {
+    try {
+      const freshBudget = FinanceStorageService.loadLocalBudget(currentYear);
+      const freshLedger = FinanceStorageService.loadLocalSavingsLedger();
+      const freshTemplate = FinanceStorageService.loadLocalTemplateData(freshBudget);
+      const knownYears = FinanceStorageService.getKnownYears();
+
+      setBudget(freshBudget);
+      setLedger(freshLedger);
+      setTemplateData(freshTemplate);
+      setAvailableYears(knownYears);
+
+      if (driveStatus.isSignedIn) {
+        const token = await getAccessToken();
+        if (token) {
+          try {
+            const files = await FinanceStorageService.fetchDriveFiles(token);
+            setDriveFiles(files);
+            setDriveStatus((prev) => ({
+              ...prev,
+              lastSynced: new Date(),
+            }));
+          } catch {
+            // Keep existing drive files if offline or token check fails
+          }
+        }
+      }
+
+      showToast('Data refreshed');
+    } catch (err: any) {
+      console.warn('Soft refresh failed:', err);
+      showToast('Refresh complete');
+    }
+  }, [currentYear, driveStatus.isSignedIn]);
+
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans flex flex-col antialiased overflow-x-clip">
+    <PullToRefresh onRefresh={handleSoftRefresh}>
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans flex flex-col antialiased overflow-x-clip">
       
       {/* Clean Single Drive Sync Toast (Shown only when no modal is open) */}
       {driveStatus.isSyncing && !confirmationModal.isOpen && !conflictModalState.isOpen && (
@@ -3667,6 +2838,7 @@ export default function App() {
         </div>
       </footer>
 
-    </div>
+      </div>
+    </PullToRefresh>
   );
 }

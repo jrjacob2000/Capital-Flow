@@ -62,15 +62,18 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
     setSelectedPeriodFilter(p);
   }, []);
 
-  // Sync default period when frequency changes
+  // Sync default period when frequency changes while preserving the active month
   useEffect(() => {
     if (frequency === 'monthly') {
       if (!MONTH_NAMES.includes(selectedPeriodFilter) && selectedPeriodFilter !== 'all') {
-        setSelectedPeriodFilter(currentMonthName);
+        const stripped = selectedPeriodFilter.replace(/-P[12]$/i, '');
+        setSelectedPeriodFilter(MONTH_NAMES.includes(stripped) ? stripped : currentMonthName);
       }
     } else {
       if (!BIWEEKLY_PERIODS.some((p) => p.id === selectedPeriodFilter) && selectedPeriodFilter !== 'all') {
-        setSelectedPeriodFilter(currentBiWeeklyPeriod);
+        setSelectedPeriodFilter(
+          MONTH_NAMES.includes(selectedPeriodFilter) ? `${selectedPeriodFilter}-P1` : currentBiWeeklyPeriod
+        );
       }
     }
   }, [frequency, currentMonthName, currentBiWeeklyPeriod, selectedPeriodFilter]);

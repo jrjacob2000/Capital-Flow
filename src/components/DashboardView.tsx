@@ -76,7 +76,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     1,
     new Set(
       activeEntries
-        .filter((e) => e.type === 'expense' && (e.actualCost ?? e.amount ?? 0) > 0)
+        .filter((e) => e.type === 'expense' && e.status !== 'Pending' && (e.actualCost ?? e.amount ?? 0) > 0)
         .map((e) => e.period.replace(/-P[12]$/i, ''))
     ).size
   );

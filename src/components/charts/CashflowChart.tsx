@@ -51,7 +51,7 @@ export const CashflowChart: React.FC<CashflowChartProps> = ({
           <h3 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
             <span>Budget Performance &amp; Cash Flow</span>
             <span className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              {frequency === 'monthly' ? '12 Months' : '26 Pay Periods'}
+              {frequency === 'monthly' ? '12 Months' : '24 Cutoffs'}
             </span>
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">

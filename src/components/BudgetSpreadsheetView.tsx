@@ -49,6 +49,7 @@ import {
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
 import { CarryOverModal } from './CarryOverModal';
 import { ExcelImportModal } from './ExcelImportModal';
+import { buildAutoFillPeriodEntries } from '../utils/budgetCalculations';
 
 export interface SheetRowItem {
   id: string;
@@ -252,13 +253,23 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     [currentMonthName]
   );
 
-  // Ensure selectedPeriod matches frequency
+  // Ensure selectedPeriod matches frequency while preserving the active month
   useEffect(() => {
     const validList = frequency === 'monthly' ? MONTH_NAMES : BIWEEKLY_PERIODS.map((p) => p.id);
     if (!validList.includes(selectedPeriod)) {
-      const fallback = frequency === 'monthly' ? currentMonthName : currentBiWeeklyPeriod;
-      if (selectedPeriod !== fallback) {
-        onSelectPeriod(fallback);
+      if (frequency === 'monthly') {
+        const stripped = selectedPeriod.replace(/-P[12]$/i, '');
+        const fallback = MONTH_NAMES.includes(stripped) ? stripped : currentMonthName;
+        if (selectedPeriod !== fallback) {
+          onSelectPeriod(fallback);
+        }
+      } else {
+        const fallback = MONTH_NAMES.includes(selectedPeriod)
+          ? `${selectedPeriod}-P1`
+          : currentBiWeeklyPeriod;
+        if (selectedPeriod !== fallback) {
+          onSelectPeriod(fallback);
+        }
       }
     }
   }, [frequency, selectedPeriod, currentMonthName, currentBiWeeklyPeriod, onSelectPeriod]);
@@ -331,13 +342,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   };
 
   const handleAutoFillPeriodFromTemplates = () => {
-    const validTemplates = itemTemplates.filter(
-      (t) =>
-        isTemplateValidForPeriod(t, frequency, selectedPeriod) &&
-        (t.type !== 'income' || isRegularSalaryIncome(t.item, t.category))
+    const { validTemplatesCount, newEntries } = buildAutoFillPeriodEntries(
+      itemTemplates,
+      budget.entries,
+      budget.year,
+      selectedPeriod,
+      frequency,
+      accounts,
+      isTemplateValidForPeriod
     );
 
-    if (validTemplates.length === 0) {
+    if (validTemplatesCount === 0) {
       setAutoFillMessage(
         `No estimate templates found for ${selectedPeriod}. Click "Estimates & Categories" to create your templates first.`
       );
@@ -345,71 +360,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       return;
     }
 
-    const existingInPeriod = budget.entries.filter((e) => e.period === selectedPeriod);
-    const unpopulated = validTemplates.filter((t) => {
-      return !existingInPeriod.some(
-        (e) =>
-          e.type === t.type &&
-          (Boolean(t.loanId && e.loanId === t.loanId) ||
-            (e.item || e.description || '').toLowerCase().trim() === t.item.toLowerCase().trim())
-      );
-    });
-
-    if (unpopulated.length === 0) {
+    if (newEntries.length === 0) {
       setAutoFillMessage(
-        `All ${validTemplates.length} planned items from your template are already recorded in ${selectedPeriod}!`
+        `All ${validTemplatesCount} planned items from your template are already recorded in ${selectedPeriod}!`
       );
       setTimeout(() => setAutoFillMessage(null), 4000);
       return;
     }
-
-    let periodIndex = 0;
-    let periodDate = `${budget.year}-01-01`;
-    if (frequency === 'monthly') {
-      periodIndex = Math.max(0, MONTH_NAMES.indexOf(selectedPeriod));
-      periodDate = `${budget.year}-${String(periodIndex + 1).padStart(2, '0')}-01`;
-    } else {
-      const bwIdx = BIWEEKLY_PERIODS.findIndex((p) => p.id === selectedPeriod);
-      periodIndex = bwIdx >= 0 ? bwIdx : 0;
-      const bw = BIWEEKLY_PERIODS[periodIndex];
-      const mIdx = Math.max(0, MONTH_NAMES.indexOf(bw?.approxMonth || 'Jan'));
-      const isP2 = bw?.id.endsWith('-P2');
-      periodDate = `${budget.year}-${String(mIdx + 1).padStart(2, '0')}-${isP2 ? '16' : '01'}`;
-    }
-
-    const defaultAcc = accounts[0];
-    const newEntries: Omit<BudgetEntry, 'id' | 'createdAt'>[] = unpopulated.map((t) => {
-      const targetAcc = t.defaultSavingAccountId
-        ? accounts.find((a) => a.id === t.defaultSavingAccountId) || defaultAcc
-        : defaultAcc;
-
-      return {
-        year: budget.year,
-        period: selectedPeriod,
-        periodIndex,
-        date: periodDate,
-        type: t.type,
-        category: t.category,
-        item: t.item,
-        estimatedCost: t.defaultEstimatedCost,
-        actualCost: t.type === 'saving' ? t.defaultEstimatedCost : 0,
-        amount: t.type === 'saving' ? t.defaultEstimatedCost : 0,
-        paymentMethod: t.defaultPaymentMethod || 'Bank Transfer',
-        difference:
-          t.type === 'saving'
-            ? 0
-            : t.type === 'income'
-            ? -t.defaultEstimatedCost
-            : t.defaultEstimatedCost,
-        status: (t.type === 'saving' ? 'Paid' : 'Pending') as 'Paid' | 'Pending',
-        reference: 'Auto-filled from template',
-        toBeWithdrawn: Boolean(t.toBeWithdrawn),
-        description: t.item || t.category,
-        savingAccountId: t.type === 'saving' ? targetAcc?.id : undefined,
-        savingAccountName: t.type === 'saving' ? targetAcc?.name : undefined,
-        loanId: t.loanId,
-      };
-    });
 
     if (onAddMultipleEntries) {
       onAddMultipleEntries(newEntries);
@@ -623,17 +580,25 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
   const currentRemainingPaid = hasAnyIncomeRecorded
     ? totalIncomeActual - totalExpensePaid
+    : hasAnyExpenseRecorded
+    ? totalIncomeEstimated - totalExpensePaid
     : remainingExtraEstimated;
 
-  const projectedRemainingAll = hasAnyIncomeRecorded
-    ? totalIncomeActual - totalExpenseActual
-    : remainingExtraEstimated;
+  const projectedIncomeTotal = unifiedIncomeRows.reduce(
+    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : r.estimatedCost),
+    0
+  );
+  const projectedExpenseTotal = unifiedExpenseRows.reduce(
+    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : r.estimatedCost),
+    0
+  );
+  const projectedRemainingAll = projectedIncomeTotal - projectedExpenseTotal;
 
   const { surplus, hasBeenCarriedOver, prevPeriodName } = useMemo(() => {
     const currentIndex = periodList.indexOf(selectedPeriod);
     if (currentIndex <= 0) return { surplus: 0, hasBeenCarriedOver: true, prevPeriodName: '' };
     const prevPeriod = periodList[currentIndex - 1];
-    const prevEntries = budget.entries.filter((e) => e.period === prevPeriod && e.status !== 'Pending');
+    const prevEntries = budget.entries.filter((e) => e.period === prevPeriod && e.status === 'Paid');
     const incAct = prevEntries
       .filter((e) => e.type === 'income')
       .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
@@ -1069,7 +1034,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       }
     }
     const tpl = itemTemplates.find(
-      (t) => t.item.toLowerCase() === newItemName.trim().toLowerCase()
+      (t) => t.type === modalType && t.item.toLowerCase() === newItemName.trim().toLowerCase()
     );
     if (tpl) {
       setFormCategory(tpl.category);
@@ -1212,14 +1177,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       const targetTpl = existingById || existingByName;
 
       if (targetTpl) {
-        if (
-          saveToTemplate ||
-          targetTpl.defaultEstimatedCost !== estNum ||
-          targetTpl.category !== formCategory ||
-          targetTpl.item !== trimmedItem ||
-          targetTpl.defaultPaymentMethod !== resolvedPaymentMethod ||
-          (modalType === 'saving' && targetTpl.defaultSavingAccountId !== formSavingAccountId)
-        ) {
+        if (saveToTemplate) {
           const updatedTemplates = itemTemplates.map((t) =>
             t.id === targetTpl.id
               ? {
@@ -1231,6 +1189,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   defaultSavingAccountId:
                     modalType === 'saving' ? formSavingAccountId || t.defaultSavingAccountId : t.defaultSavingAccountId,
                   toBeWithdrawn: computedToBeWithdrawn,
+                }
+              : t
+          );
+          onUpdateTemplates(updatedTemplates);
+        } else if (isRowAction && targetTpl.defaultEstimatedCost !== estNum && estNum > 0) {
+          const updatedTemplates = itemTemplates.map((t) =>
+            t.id === targetTpl.id
+              ? {
+                  ...t,
+                  defaultEstimatedCost: estNum,
                 }
               : t
           );
@@ -1484,7 +1452,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
                   }`}
                 >
-                  Bi-Weekly (26)
+                  Bi-Weekly (24)
                 </button>
               </div>
             </div>

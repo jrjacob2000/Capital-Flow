@@ -59,13 +59,25 @@ export function aggregateCashflowByPeriod(
   const periodLabels =
     frequency === 'monthly' ? MONTH_NAMES : BIWEEKLY_PERIODS.map((p) => p.id);
 
+  const isBiWeeklyPeriod = (p: string) => p.includes('-P1') || p.includes('-P2');
+  const hasMonthlyEntries = entries.some((e) => !isBiWeeklyPeriod(e.period) && e.status !== 'Pending');
+  const hasBiWeeklyEntries = entries.some((e) => isBiWeeklyPeriod(e.period) && e.status !== 'Pending');
+
   return periodLabels.map((label, idx) => {
     let income = 0;
     let expense = 0;
     let saving = 0;
 
     entries.forEach((entry) => {
-      if (entry.period === label && entry.status !== 'Pending') {
+      if (entry.status === 'Pending') return;
+      const matchesDirectly = entry.period === label;
+      const matchesMonthlyRollup =
+        frequency === 'monthly' &&
+        !hasMonthlyEntries &&
+        hasBiWeeklyEntries &&
+        entry.period.replace(/-P[12]$/i, '') === label;
+
+      if (matchesDirectly || matchesMonthlyRollup) {
         const amt = entry.actualCost ?? entry.amount ?? 0;
         if (entry.type === 'income') income += amt;
         if (entry.type === 'expense') expense += amt;
@@ -306,3 +318,96 @@ export function parseDateToYearAndPeriod(
     periodIndex,
   };
 }
+
+/**
+ * Generates Pending placeholder budget entries for a target period from all valid recurring
+ * templates that have not yet been recorded in that period.
+ * Irregular income templates are excluded unless they are regular Salary/Paycheck templates.
+ */
+export function buildAutoFillPeriodEntries(
+  itemTemplates: BudgetItemTemplate[],
+  existingEntries: BudgetEntry[],
+  year: number,
+  selectedPeriod: string,
+  frequency: EntryFrequency,
+  accounts: Array<{ id: string; name: string }>,
+  isTemplateValidFn: (
+    tpl: BudgetItemTemplate,
+    freq: EntryFrequency,
+    period: string
+  ) => boolean
+): {
+  validTemplatesCount: number;
+  newEntries: Omit<BudgetEntry, 'id' | 'createdAt'>[];
+} {
+  const validTemplates = itemTemplates.filter(
+    (t) =>
+      isTemplateValidFn(t, frequency, selectedPeriod) &&
+      (t.type !== 'income' || isRegularSalaryIncome(t.item, t.category))
+  );
+
+  if (validTemplates.length === 0) {
+    return { validTemplatesCount: 0, newEntries: [] };
+  }
+
+  const existingInPeriod = existingEntries.filter((e) => e.period === selectedPeriod);
+  const unpopulated = validTemplates.filter((t) => {
+    return !existingInPeriod.some(
+      (e) =>
+        e.type === t.type &&
+        (Boolean(t.loanId && e.loanId === t.loanId) ||
+          (e.item || e.description || '').toLowerCase().trim() === t.item.toLowerCase().trim())
+    );
+  });
+
+  if (unpopulated.length === 0) {
+    return { validTemplatesCount: validTemplates.length, newEntries: [] };
+  }
+
+  let periodIndex = 0;
+  let periodDate = `${year}-01-01`;
+  if (frequency === 'monthly') {
+    periodIndex = Math.max(0, MONTH_NAMES.indexOf(selectedPeriod));
+    periodDate = `${year}-${String(periodIndex + 1).padStart(2, '0')}-01`;
+  } else {
+    const bwIdx = BIWEEKLY_PERIODS.findIndex((p) => p.id === selectedPeriod);
+    periodIndex = bwIdx >= 0 ? bwIdx : 0;
+    const bw = BIWEEKLY_PERIODS[periodIndex];
+    const mIdx = Math.max(0, MONTH_NAMES.indexOf(bw?.approxMonth || 'Jan'));
+    const isP2 = bw?.id.endsWith('-P2');
+    periodDate = `${year}-${String(mIdx + 1).padStart(2, '0')}-${isP2 ? '16' : '01'}`;
+  }
+
+  const defaultAcc = accounts[0];
+  const newEntries: Omit<BudgetEntry, 'id' | 'createdAt'>[] = unpopulated.map((t) => {
+    const targetAcc = t.defaultSavingAccountId
+      ? accounts.find((a) => a.id === t.defaultSavingAccountId) || defaultAcc
+      : defaultAcc;
+    const estCost = t.defaultEstimatedCost || 0;
+
+    return {
+      year,
+      period: selectedPeriod,
+      periodIndex,
+      date: periodDate,
+      type: t.type,
+      category: t.category,
+      item: t.item,
+      estimatedCost: estCost,
+      actualCost: 0,
+      amount: 0,
+      paymentMethod: t.defaultPaymentMethod || 'Bank Transfer',
+      difference: t.type === 'income' ? -estCost : estCost,
+      status: 'Pending',
+      reference: 'Auto-filled from template',
+      toBeWithdrawn: Boolean(t.toBeWithdrawn),
+      description: t.item || t.category,
+      savingAccountId: t.type === 'saving' ? targetAcc?.id : undefined,
+      savingAccountName: t.type === 'saving' ? targetAcc?.name : undefined,
+      loanId: t.loanId,
+    };
+  });
+
+  return { validTemplatesCount: validTemplates.length, newEntries };
+}
+

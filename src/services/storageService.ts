@@ -4,6 +4,9 @@ import {
   BudgetTemplateData,
   BudgetEntry,
   SavingsTransaction,
+  SavingsAccount,
+  EntryType,
+  EntryFrequency,
   DriveFileInfo,
   BudgetItemTemplate,
   LoanRecord,
@@ -26,6 +29,8 @@ import {
   generateInitial2026Budget,
   generateInitialSavingsLedger,
   createEmptyYearBudget,
+  MONTH_NAMES,
+  BIWEEKLY_PERIODS,
   EXPENSE_CATEGORIES,
   INCOME_CATEGORIES,
   SAVING_CATEGORIES,
@@ -499,7 +504,15 @@ export class FinanceStorageService {
   static checkAndPerformAutoClean(): void {
     try {
       if (typeof window !== 'undefined' && localStorage.getItem(LIVE_CLEAN_STORAGE_KEY) !== 'true') {
-        FinanceStorageService.resetAllDataForGoLive();
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('capitalflow_')) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach((key) => localStorage.removeItem(key));
+        localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
       }
     } catch (e) {
       console.warn('Auto clean check encountered an error:', e);
@@ -509,7 +522,8 @@ export class FinanceStorageService {
   /**
    * Complete reset: deletes all local data stored in localStorage (all annual budgets,
    * personalized estimate budget templates, custom categories, and savings ledger records)
-   * to provide a completely clean local state.
+   * to provide a completely clean local state with 0 entries, 0 templates, and ₱0 balances
+   * while preserving starter-data flags so Google Drive backups remain protected.
    */
   static resetAllDataForGoLive(): { budget: YearBudgetData; ledger: SavingsLedgerData } {
     try {
@@ -528,14 +542,30 @@ export class FinanceStorageService {
       console.warn('Error clearing localStorage during reset:', e);
     }
 
-    const cleanBudget = createEmptyYearBudget(2026);
+    const cleanBudget: YearBudgetData = {
+      ...createEmptyYearBudget(2026),
+      entries: [],
+      customCategories: {
+        expense: [...EXPENSE_CATEGORIES],
+        income: [...INCOME_CATEGORIES],
+        saving: [...SAVING_CATEGORIES],
+      },
+      itemTemplates: [],
+      isPersonalizedTemplate: false,
+      isDefaultStarterData: true,
+      budgets: [],
+    };
+
+    localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
+    localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
+    localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
+
     FinanceStorageService.saveLocalBudget(cleanBudget, { isDefaultStarter: true });
 
     const cleanLedger = generateInitialSavingsLedger(cleanBudget);
     FinanceStorageService.saveLocalSavingsLedger(cleanLedger, { isDefaultStarter: true });
 
     localStorage.setItem(LOCAL_STORAGE_KEY_YEARS, JSON.stringify([2026]));
-    localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
 
     return { budget: cleanBudget, ledger: cleanLedger };
   }
@@ -708,6 +738,7 @@ export class FinanceStorageService {
         isDefaultStarterData: isStarter,
       });
     }
+    localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
     localStorage.setItem(`${LOCAL_STORAGE_KEY_PREFIX}${budget.year}`, JSON.stringify(budget));
     FinanceStorageService.registerKnownYear(budget.year);
   }
@@ -845,6 +876,7 @@ export class FinanceStorageService {
       tx.runningTotalCapital = running;
     });
     ledger.transactions = sorted;
+    localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
     localStorage.setItem(LOCAL_STORAGE_KEY_LEDGER, JSON.stringify(ledger));
   }
 
@@ -1121,6 +1153,1174 @@ export class FinanceStorageService {
 
     FinanceStorageService.saveLocalSavingsLedger(ledger);
     return ledger;
+  }
+
+  /**
+   * Reverses or applies a SavingsTransaction's balance effect on accounts
+   */
+  static applyTxBalanceEffect(
+    accounts: SavingsAccount[],
+    tx: SavingsTransaction,
+    reverse: boolean
+  ): void {
+    const sign = reverse ? -1 : 1;
+    if (tx.source === 'withdrawal') {
+      const acc = accounts.find((a) => a.id === tx.accountId);
+      if (acc) acc.balance = Math.max(0, acc.balance - sign * tx.amount);
+    } else if (tx.source === 'transfer') {
+      const fromAcc = accounts.find((a) => a.id === tx.accountId);
+      const toAcc = accounts.find((a) => a.id === tx.toAccountId);
+      if (fromAcc) fromAcc.balance = Math.max(0, fromAcc.balance - sign * tx.amount);
+      if (toAcc) toAcc.balance = Math.max(0, toAcc.balance + sign * tx.amount);
+    } else if (tx.source === 'reallocation') {
+      // Category reallocation only shifts virtual envelope allocations; physical account balances remain unchanged
+      return;
+    } else {
+      const acc = accounts.find((a) => a.id === tx.accountId);
+      if (acc) acc.balance = Math.max(0, acc.balance + sign * tx.amount);
+    }
+  }
+
+  /**
+   * Adds a direct transaction (yield, deposit, withdrawal, transfer, reallocation) to the Funds ledger
+   */
+  static addLedgerTransaction(
+    txData: Omit<SavingsTransaction, 'id' | 'runningTotalCapital'>
+  ): { ledger: SavingsLedgerData; newTx: SavingsTransaction } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const newTx: SavingsTransaction = {
+      ...txData,
+      id: `tx-manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    };
+    currentLedger.transactions.push(newTx);
+    FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, newTx, false);
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return { ledger: currentLedger, newTx };
+  }
+
+  /**
+   * Updates an existing transaction in the Funds ledger and synchronizes any linked Budget Sheet entry or Loan Payment
+   */
+  static updateLedgerTransaction(
+    txId: string,
+    updated: Partial<SavingsTransaction>,
+    activeYear: number = 2026
+  ): { ledger: SavingsLedgerData; updatedBudget?: YearBudgetData } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const txIndex = currentLedger.transactions.findIndex((t) => t.id === txId);
+    if (txIndex === -1) return { ledger: currentLedger };
+
+    const oldTx = currentLedger.transactions[txIndex];
+    FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, oldTx, true);
+
+    const newTx: SavingsTransaction = {
+      ...oldTx,
+      ...updated,
+    };
+    currentLedger.transactions[txIndex] = newTx;
+    FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, newTx, false);
+
+    // If this transaction is linked to a loan payment (e.g. receivable collection deposit), keep accountId/amount/date in sync
+    if (Array.isArray(currentLedger.loans)) {
+      currentLedger.loans.forEach((ln) => {
+        (ln.payments || []).forEach((p) => {
+          if (p.ledgerTransactionId === txId) {
+            p.accountId = newTx.accountId;
+            p.amount = newTx.amount;
+            p.date = newTx.date;
+          }
+        });
+      });
+    }
+
+    let updatedBudget: YearBudgetData | undefined;
+    if (newTx.budgetEntryId) {
+      const targetYear = newTx.year || activeYear;
+      const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
+      let budgetChanged = false;
+      targetBudget.entries = targetBudget.entries.map((e) => {
+        if (e.id === newTx.budgetEntryId) {
+          budgetChanged = true;
+          const est = e.estimatedCost || 0;
+          const updatedFundItem =
+            newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
+              ? newTx.category.trim()
+              : e.item;
+          return {
+            ...e,
+            item: updatedFundItem,
+            description: updatedFundItem || e.description,
+            category:
+              newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
+                ? normalizeSavingCategoryGroup(newTx.category.trim(), e.category)
+                : e.category,
+            amount: newTx.amount,
+            actualCost: newTx.amount,
+            difference: est - newTx.amount,
+            date: newTx.date,
+            savingAccountId: newTx.accountId,
+            savingAccountName: newTx.accountName,
+          };
+        }
+        return e;
+      });
+      if (budgetChanged) {
+        FinanceStorageService.saveLocalBudget(targetBudget, {
+          skipTemplateProfileUpdate: targetYear !== activeYear,
+        });
+        updatedBudget = targetBudget;
+      }
+    }
+
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return { ledger: currentLedger, updatedBudget };
+  }
+
+  /**
+   * Deletes a transaction from the Funds ledger, reversing its account balance effect and unlinking/removing linked records
+   */
+  static deleteLedgerTransaction(
+    txId: string,
+    activeYear: number = 2026
+  ): { ledger: SavingsLedgerData; updatedBudget?: YearBudgetData } {
+    const latestLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const targetTx = latestLedger.transactions.find((t) => t.id === txId);
+    if (!targetTx) return { ledger: latestLedger };
+
+    FinanceStorageService.applyTxBalanceEffect(latestLedger.accounts, targetTx, true);
+    latestLedger.transactions = latestLedger.transactions.filter((t) => t.id !== txId);
+
+    if (Array.isArray(latestLedger.loans)) {
+      latestLedger.loans.forEach((ln) => {
+        (ln.payments || []).forEach((p) => {
+          if (p.ledgerTransactionId === txId) {
+            delete p.ledgerTransactionId;
+            delete p.accountId;
+          }
+        });
+      });
+    }
+
+    let updatedBudget: YearBudgetData | undefined;
+    if (targetTx.budgetEntryId) {
+      const targetYear = targetTx.year || activeYear;
+      const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
+      const filteredEntries = targetBudget.entries.filter((e) => e.id !== targetTx.budgetEntryId);
+      if (filteredEntries.length !== targetBudget.entries.length) {
+        updatedBudget = {
+          ...targetBudget,
+          entries: filteredEntries,
+        };
+        FinanceStorageService.saveLocalBudget(updatedBudget, {
+          skipTemplateProfileUpdate: targetYear !== activeYear,
+        });
+      }
+    }
+
+    FinanceStorageService.saveLocalSavingsLedger(latestLedger);
+    return { ledger: latestLedger, updatedBudget };
+  }
+
+  /**
+   * Adds a new savings account to the Funds ledger
+   */
+  static addSavingsAccount(
+    accountData: Omit<SavingsAccount, 'id'>
+  ): { ledger: SavingsLedgerData; newAccount: SavingsAccount } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const newAccount: SavingsAccount = {
+      ...accountData,
+      id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    };
+    currentLedger.accounts.push(newAccount);
+    if (newAccount.balance > 0) {
+      currentLedger.initialCapital = Math.max(
+        0,
+        (currentLedger.initialCapital || 0) + newAccount.balance
+      );
+    }
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return { ledger: currentLedger, newAccount };
+  }
+
+  /**
+   * Updates/renames a savings account and propagates changes to ledger transactions and budget entries
+   */
+  static updateSavingsAccount(
+    accountId: string,
+    updates: Partial<SavingsAccount>,
+    activeYear: number = 2026
+  ): { ledger: SavingsLedgerData; updatedBudget?: YearBudgetData; newName?: string } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const accIndex = currentLedger.accounts.findIndex((a) => a.id === accountId);
+    if (accIndex === -1) return { ledger: currentLedger };
+
+    const oldName = currentLedger.accounts[accIndex].name;
+    const oldBalance = currentLedger.accounts[accIndex].balance || 0;
+    const newName = updates.name?.trim() || oldName;
+
+    currentLedger.accounts[accIndex] = {
+      ...currentLedger.accounts[accIndex],
+      ...updates,
+      name: newName,
+    };
+
+    if (updates.balance !== undefined && updates.balance !== oldBalance) {
+      const balanceDelta = updates.balance - oldBalance;
+      currentLedger.initialCapital = Math.max(
+        0,
+        (currentLedger.initialCapital || 0) + balanceDelta
+      );
+    }
+
+    let updatedBudget: YearBudgetData | undefined;
+    if (updates.name && updates.name.trim() !== oldName) {
+      currentLedger.transactions.forEach((tx) => {
+        if (tx.accountId === accountId) {
+          tx.accountName = newName;
+        }
+        if (tx.toAccountId === accountId) {
+          tx.toAccountName = newName;
+        }
+      });
+
+      const currentBudget = FinanceStorageService.loadLocalBudget(activeYear);
+      let budgetUpdated = false;
+      currentBudget.entries.forEach((e) => {
+        if (e.savingAccountId === accountId) {
+          e.savingAccountName = newName;
+          budgetUpdated = true;
+        }
+      });
+      if (budgetUpdated) {
+        FinanceStorageService.saveLocalBudget(currentBudget);
+        updatedBudget = currentBudget;
+      }
+    }
+
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return { ledger: currentLedger, updatedBudget, newName };
+  }
+
+  /**
+   * Deletes a savings account (preventing deletion of the last account) and reassigns balances, transactions, loan payments, and budget entries/templates
+   */
+  static deleteSavingsAccount(
+    accountId: string,
+    reassignToAccountId?: string,
+    activeYear: number = 2026
+  ): {
+    deleted: boolean;
+    ledger: SavingsLedgerData;
+    updatedBudget?: YearBudgetData;
+    deletedAccountName?: string;
+    targetAccountName?: string;
+  } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    if (currentLedger.accounts.length <= 1) {
+      return { deleted: false, ledger: currentLedger };
+    }
+
+    const deletingAcc = currentLedger.accounts.find((a) => a.id === accountId);
+    if (!deletingAcc) {
+      return { deleted: false, ledger: currentLedger };
+    }
+
+    const targetAcc = reassignToAccountId
+      ? currentLedger.accounts.find((a) => a.id === reassignToAccountId)
+      : currentLedger.accounts.find((a) => a.id !== accountId);
+
+    if (targetAcc) {
+      currentLedger.transactions.forEach((tx) => {
+        if (tx.accountId === accountId) {
+          tx.accountId = targetAcc.id;
+          tx.accountName = targetAcc.name;
+        }
+        if (tx.toAccountId === accountId) {
+          tx.toAccountId = targetAcc.id;
+          tx.toAccountName = targetAcc.name;
+        }
+      });
+      if (Array.isArray(currentLedger.loans)) {
+        currentLedger.loans.forEach((ln) => {
+          (ln.payments || []).forEach((p) => {
+            if (p.accountId === accountId) {
+              p.accountId = targetAcc.id;
+            }
+          });
+        });
+      }
+      targetAcc.balance += deletingAcc.balance;
+    }
+
+    let updatedBudget: YearBudgetData | undefined;
+    const currentBudget = FinanceStorageService.loadLocalBudget(activeYear);
+    let budgetUpdated = false;
+    currentBudget.entries.forEach((e) => {
+      if (e.savingAccountId === accountId) {
+        if (targetAcc) {
+          e.savingAccountId = targetAcc.id;
+          e.savingAccountName = targetAcc.name;
+        } else {
+          delete e.savingAccountId;
+          delete e.savingAccountName;
+        }
+        budgetUpdated = true;
+      }
+    });
+    if (currentBudget.itemTemplates) {
+      currentBudget.itemTemplates = currentBudget.itemTemplates.map((t) => {
+        if (t.defaultSavingAccountId === accountId) {
+          budgetUpdated = true;
+          return {
+            ...t,
+            defaultSavingAccountId: targetAcc ? targetAcc.id : undefined,
+          };
+        }
+        return t;
+      });
+    }
+    if (budgetUpdated) {
+      FinanceStorageService.saveLocalBudget(currentBudget);
+      updatedBudget = currentBudget;
+    }
+
+    currentLedger.accounts = currentLedger.accounts.filter((a) => a.id !== accountId);
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return {
+      deleted: true,
+      ledger: currentLedger,
+      updatedBudget,
+      deletedAccountName: deletingAcc.name,
+      targetAccountName: targetAcc?.name,
+    };
+  }
+
+  /**
+   * Renames, merges, or updates a Sinking Fund across ledger transactions, budget entries, and templates
+   */
+  static renameOrMergeSinkingFund(
+    budget: YearBudgetData,
+    oldFundName: string,
+    newFundName: string,
+    newMonthlyTarget?: number,
+    newSavingCategory?: string
+  ): { budget: YearBudgetData; ledger: SavingsLedgerData; ledgerChanged: boolean } {
+    const oldClean = oldFundName.trim();
+    const newClean = newFundName.trim();
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    if (!oldClean || !newClean) {
+      return { budget, ledger: currentLedger, ledgerChanged: false };
+    }
+    const oldLower = oldClean.toLowerCase();
+    const newLower = newClean.toLowerCase();
+    const resolvedCategory = normalizeSavingCategoryGroup(newClean, newSavingCategory);
+
+    let ledgerChanged = false;
+    currentLedger.transactions = currentLedger.transactions
+      .map((tx) => {
+        const updated = { ...tx };
+        if ((tx.category || '').trim().toLowerCase() === oldLower) {
+          updated.category = newClean;
+          ledgerChanged = true;
+        }
+        if ((tx.toCategory || '').trim().toLowerCase() === oldLower) {
+          updated.toCategory = newClean;
+          ledgerChanged = true;
+        }
+        const cleanNote = (tx.note || '')
+          .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+          .trim();
+        if (cleanNote.toLowerCase() === oldLower) {
+          updated.note = tx.note.replace(
+            new RegExp(oldClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+            newClean
+          );
+          ledgerChanged = true;
+        }
+        return updated;
+      })
+      .filter((tx) => {
+        if (
+          tx.source === 'reallocation' &&
+          (tx.category || '').trim().toLowerCase() === (tx.toCategory || '').trim().toLowerCase()
+        ) {
+          ledgerChanged = true;
+          return false;
+        }
+        return true;
+      });
+
+    if (ledgerChanged) {
+      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    }
+
+    const currentTemplates = [...(budget.itemTemplates || [])];
+    let matchedSavingTemplate = false;
+    const deduplicatedTemplates: BudgetItemTemplate[] = [];
+
+    currentTemplates.forEach((tpl) => {
+      if (
+        tpl.type === 'saving' &&
+        (tpl.item.trim().toLowerCase() === oldLower || tpl.item.trim().toLowerCase() === newLower)
+      ) {
+        if (!matchedSavingTemplate) {
+          matchedSavingTemplate = true;
+          const isBiweeklyBoth =
+            tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both');
+          deduplicatedTemplates.push({
+            ...tpl,
+            item: newClean,
+            category: newSavingCategory
+              ? resolvedCategory
+              : normalizeSavingCategoryGroup(newClean, tpl.category),
+            defaultEstimatedCost:
+              newMonthlyTarget !== undefined
+                ? isBiweeklyBoth
+                  ? newMonthlyTarget / 2
+                  : newMonthlyTarget
+                : tpl.defaultEstimatedCost,
+          });
+        } else if (newMonthlyTarget === undefined && tpl.defaultEstimatedCost > 0) {
+          const existingIdx = deduplicatedTemplates.findIndex(
+            (d) => d.type === 'saving' && d.item.trim().toLowerCase() === newLower
+          );
+          if (existingIdx >= 0 && deduplicatedTemplates[existingIdx].defaultEstimatedCost === 0) {
+            deduplicatedTemplates[existingIdx].defaultEstimatedCost = tpl.defaultEstimatedCost;
+          }
+        }
+      } else {
+        deduplicatedTemplates.push(tpl);
+      }
+    });
+
+    if (
+      !matchedSavingTemplate &&
+      ((newMonthlyTarget !== undefined && newMonthlyTarget > 0) || newSavingCategory)
+    ) {
+      deduplicatedTemplates.push({
+        id: `tpl-sav-${Date.now()}`,
+        type: 'saving',
+        category: resolvedCategory,
+        item: newClean,
+        defaultEstimatedCost: newMonthlyTarget || 0,
+        frequency: 'monthly',
+        biweeklyPeriod: 'both',
+        defaultPaymentMethod: 'Bank Transfer',
+      });
+    }
+
+    const updatedEntries = budget.entries.map((e) => {
+      if (
+        e.type === 'saving' &&
+        ((e.item || '').trim().toLowerCase() === oldLower ||
+          (e.description || '').trim().toLowerCase() === oldLower)
+      ) {
+        return {
+          ...e,
+          item: newClean,
+          description: newClean,
+          category: newSavingCategory ? resolvedCategory : e.category,
+        };
+      }
+      return e;
+    });
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: updatedEntries,
+      itemTemplates: deduplicatedTemplates,
+      isPersonalizedTemplate: deduplicatedTemplates.length > 0,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    return { budget: updatedBudget, ledger: currentLedger, ledgerChanged };
+  }
+
+  /**
+   * Deletes a Sinking Fund and reassigns its balance/transactions to another fund or General Reserves
+   */
+  static deleteSinkingFund(
+    budget: YearBudgetData,
+    fundName: string,
+    reassignToFund?: string
+  ): { budget: YearBudgetData; ledger: SavingsLedgerData; destination: string } {
+    const targetLower = fundName.trim().toLowerCase();
+    const destination = (reassignToFund || 'General Reserves / Starting Capital').trim();
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    if (!targetLower) {
+      return { budget, ledger: currentLedger, destination };
+    }
+
+    let ledgerChanged = false;
+    currentLedger.transactions = currentLedger.transactions
+      .map((tx) => {
+        const catLower = (tx.category || '').trim().toLowerCase();
+        const toCatLower = (tx.toCategory || '').trim().toLowerCase();
+        if (catLower === targetLower || toCatLower === targetLower) {
+          ledgerChanged = true;
+          const updated = { ...tx };
+          if (catLower === targetLower) {
+            updated.category = destination;
+          }
+          if (toCatLower === targetLower) {
+            updated.toCategory = destination;
+          }
+          return updated;
+        }
+        return tx;
+      })
+      .filter((tx) => {
+        if (
+          tx.source === 'reallocation' &&
+          (tx.category || '').trim().toLowerCase() === (tx.toCategory || '').trim().toLowerCase()
+        ) {
+          ledgerChanged = true;
+          return false;
+        }
+        return true;
+      });
+
+    if (ledgerChanged) {
+      FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    }
+
+    const filteredTemplates = (budget.itemTemplates || []).filter(
+      (tpl) => !(tpl.type === 'saving' && tpl.item.trim().toLowerCase() === targetLower)
+    );
+
+    const updatedEntries = budget.entries.map((e) => {
+      if (
+        e.type === 'saving' &&
+        ((e.item || '').trim().toLowerCase() === targetLower ||
+          (e.description || '').trim().toLowerCase() === targetLower)
+      ) {
+        return { ...e, item: destination, description: destination };
+      }
+      return e;
+    });
+
+    const updatedSavingCats = (budget.customCategories?.saving || []).filter(
+      (c) => c.trim().toLowerCase() !== targetLower
+    );
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: updatedEntries,
+      itemTemplates: filteredTemplates,
+      customCategories: budget.customCategories
+        ? {
+            ...budget.customCategories,
+            saving: updatedSavingCats,
+          }
+        : undefined,
+      isPersonalizedTemplate: filteredTemplates.length > 0,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    return { budget: updatedBudget, ledger: currentLedger, destination };
+  }
+
+  /**
+   * Batch adds or replaces a period's budget entries (e.g. Auto-Fill or Excel Import) and synchronizes Savings & Loans in the Ledger
+   */
+  static addMultipleBudgetEntries(
+    budget: YearBudgetData,
+    entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[],
+    options?: { replacePeriod?: string; customExpenseCategories?: string[] }
+  ): {
+    budget: YearBudgetData;
+    ledger: SavingsLedgerData;
+    newEntries: BudgetEntry[];
+  } {
+    let updatedLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const defaultAcc = updatedLedger.accounts[0];
+    const newEntries: BudgetEntry[] = entriesData.map((e, idx) => ({
+      ...e,
+      savingAccountId:
+        e.type === 'saving' ? e.savingAccountId || defaultAcc?.id : e.savingAccountId,
+      savingAccountName:
+        e.type === 'saving' ? e.savingAccountName || defaultAcc?.name : e.savingAccountName,
+      id: `entry-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: new Date().toISOString(),
+    }));
+
+    const removedPeriodEntries = options?.replacePeriod
+      ? budget.entries.filter((e) => e.period === options.replacePeriod)
+      : [];
+    const removedPeriodSavings = removedPeriodEntries.filter((e) => e.type === 'saving');
+
+    const baseEntries = options?.replacePeriod
+      ? budget.entries.filter((e) => e.period !== options.replacePeriod)
+      : budget.entries;
+
+    const currentCustomCats = budget.customCategories || {
+      expense: [],
+      income: [],
+      saving: [],
+    };
+    const mergedExpenseCats = options?.customExpenseCategories?.length
+      ? Array.from(new Set([...currentCustomCats.expense, ...options.customExpenseCategories]))
+      : currentCustomCats.expense;
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: [...newEntries, ...baseEntries],
+      customCategories: {
+        ...currentCustomCats,
+        expense: mergedExpenseCats,
+      },
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+
+    removedPeriodSavings.forEach((oldSaving) => {
+      updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldSaving, true);
+    });
+    removedPeriodEntries.forEach((oldEntry) => {
+      if (oldEntry.type !== 'saving') {
+        const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(oldEntry, true);
+        updatedLedger = res.ledger;
+      }
+    });
+    newEntries.forEach((entry) => {
+      if (
+        entry.type === 'saving' &&
+        entry.status !== 'Pending' &&
+        (entry.actualCost ?? entry.amount ?? 0) > 0
+      ) {
+        updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, false);
+      } else if (entry.type !== 'saving') {
+        const res = FinanceStorageService.syncBudgetLoanPaymentToLedger(entry, false);
+        updatedLedger = res.ledger;
+      }
+    });
+
+    return { budget: updatedBudget, ledger: updatedLedger, newEntries };
+  }
+
+  /**
+   * Synchronizes a LoanRecord to a recurring BudgetItemTemplate in YearBudgetData
+   */
+  static syncLoanToBudgetTemplate(
+    loan: LoanRecord,
+    currentBudget: YearBudgetData
+  ): { updatedBudget: YearBudgetData; templateId: string } {
+    const templates = [...(currentBudget.itemTemplates || [])];
+    const targetType: EntryType = loan.direction === 'borrowed' ? 'expense' : 'income';
+    const targetCat = loan.direction === 'borrowed' ? 'Loans' : 'Other Income';
+
+    const existingIdx = templates.findIndex(
+      (t) =>
+        (loan.linkedTemplateId && t.id === loan.linkedTemplateId) ||
+        (t.loanId && t.loanId === loan.id) ||
+        (t.type === targetType && t.item.trim().toLowerCase() === loan.name.trim().toLowerCase())
+    );
+
+    const templateId = existingIdx >= 0 ? templates[existingIdx].id : `tpl-loan-${loan.id}`;
+    const tplPayload: BudgetItemTemplate = {
+      id: templateId,
+      type: targetType,
+      category: existingIdx >= 0 ? templates[existingIdx].category : targetCat,
+      item: loan.name,
+      defaultEstimatedCost: loan.installmentAmount,
+      frequency: loan.frequency,
+      biweeklyPeriod: loan.biweeklyPeriod || 'both',
+      defaultPaymentMethod:
+        existingIdx >= 0 ? templates[existingIdx].defaultPaymentMethod : 'Bank Transfer',
+      loanId: loan.id,
+    };
+
+    if (existingIdx >= 0) {
+      templates[existingIdx] = tplPayload;
+    } else {
+      templates.push(tplPayload);
+    }
+
+    const customCats = currentBudget.customCategories
+      ? {
+          expense: [...currentBudget.customCategories.expense],
+          income: [...currentBudget.customCategories.income],
+          saving: [...currentBudget.customCategories.saving],
+        }
+      : { expense: ['Loans'], income: ['Other Income'], saving: [] };
+
+    if (targetType === 'expense' && !customCats.expense.includes('Loans')) {
+      customCats.expense.push('Loans');
+    }
+
+    const updatedBudget: YearBudgetData = {
+      ...currentBudget,
+      itemTemplates: templates,
+      customCategories: customCats,
+      isPersonalizedTemplate: templates.length > 0,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    return { updatedBudget, templateId };
+  }
+
+  /**
+   * Creates or updates a LoanRecord, synchronizes templates/renamed entries, and optionally disburses principal for lent receivables
+   */
+  static saveLoanContract(
+    loan: LoanRecord,
+    currentBudget: YearBudgetData,
+    frequency: EntryFrequency,
+    options?: {
+      syncToTemplate?: boolean;
+      disburseFromAccountId?: string;
+    }
+  ): {
+    ledger: SavingsLedgerData;
+    budget: YearBudgetData;
+    isUpdate: boolean;
+    disbursedAccountName?: string;
+    disbursedAmount: number;
+  } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = [...(currentLedger.loans || [])];
+    const existingIdx = loans.findIndex((l) => l.id === loan.id);
+
+    const updatedLoan = { ...loan };
+    const hasMatchingTemplateInBudget = (currentBudget.itemTemplates || []).some(
+      (t) =>
+        t.loanId === updatedLoan.id ||
+        (updatedLoan.linkedTemplateId && t.id === updatedLoan.linkedTemplateId)
+    );
+    const shouldSyncTemplate =
+      options?.syncToTemplate !== undefined
+        ? options.syncToTemplate
+        : Boolean(updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget);
+
+    let workingBudget = currentBudget;
+    if (existingIdx >= 0 && loans[existingIdx].name.trim() !== updatedLoan.name.trim()) {
+      const oldLoanNameLower = loans[existingIdx].name.trim().toLowerCase();
+      let entriesChanged = false;
+      const updatedEntries = workingBudget.entries.map((entry) => {
+        if (
+          entry.loanId === updatedLoan.id ||
+          ((entry.category === 'Loans' || entry.category === 'Other Income') &&
+            (entry.item || '').trim().toLowerCase() === oldLoanNameLower)
+        ) {
+          entriesChanged = true;
+          return {
+            ...entry,
+            item: updatedLoan.name,
+            description: updatedLoan.name,
+            loanId: updatedLoan.id,
+          };
+        }
+        return entry;
+      });
+      if (entriesChanged) {
+        workingBudget = {
+          ...workingBudget,
+          entries: updatedEntries,
+          lastUpdated: new Date().toISOString(),
+        };
+        FinanceStorageService.saveLocalBudget(workingBudget);
+      }
+    }
+
+    if (shouldSyncTemplate) {
+      const { updatedBudget, templateId } = FinanceStorageService.syncLoanToBudgetTemplate(
+        updatedLoan,
+        workingBudget
+      );
+      updatedLoan.linkedTemplateId = templateId;
+      workingBudget = updatedBudget;
+    } else if (
+      options?.syncToTemplate === false &&
+      (updatedLoan.linkedTemplateId || hasMatchingTemplateInBudget)
+    ) {
+      const filteredTemplates = (workingBudget.itemTemplates || []).filter(
+        (t) =>
+          t.loanId !== updatedLoan.id &&
+          (!updatedLoan.linkedTemplateId || t.id !== updatedLoan.linkedTemplateId)
+      );
+      updatedLoan.linkedTemplateId = undefined;
+      workingBudget = {
+        ...workingBudget,
+        itemTemplates: filteredTemplates,
+        isPersonalizedTemplate: filteredTemplates.length > 0,
+        lastUpdated: new Date().toISOString(),
+      };
+      FinanceStorageService.saveLocalBudget(workingBudget);
+    }
+
+    if (existingIdx >= 0) {
+      loans[existingIdx] = updatedLoan;
+    } else {
+      loans.unshift(updatedLoan);
+    }
+
+    let disbursedAccountName: string | undefined;
+    let disbursedAmount = 0;
+    if (existingIdx === -1 && options?.disburseFromAccountId && updatedLoan.direction === 'lent') {
+      const targetAcc = currentLedger.accounts.find((a) => a.id === options.disburseFromAccountId);
+      disbursedAmount = updatedLoan.principalAmount || updatedLoan.totalContractAmount;
+      if (targetAcc && disbursedAmount > 0) {
+        targetAcc.balance = Math.max(0, targetAcc.balance - disbursedAmount);
+        disbursedAccountName = targetAcc.name;
+
+        const dateParts = (updatedLoan.startDate || '').split('-').map((n) => parseInt(n, 10));
+        const parsedYear =
+          dateParts.length === 3 && !isNaN(dateParts[0]) ? dateParts[0] : workingBudget.year;
+        const parsedMonthIdx =
+          dateParts.length === 3 && !isNaN(dateParts[1])
+            ? Math.max(0, Math.min(11, dateParts[1] - 1))
+            : new Date().getMonth();
+        const monthName = MONTH_NAMES[parsedMonthIdx] || 'Jan';
+        const dayOfMonth =
+          dateParts.length === 3 && !isNaN(dateParts[2]) ? dateParts[2] : new Date().getDate();
+        const resolvedPeriod =
+          frequency === 'bi-weekly'
+            ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
+            : monthName;
+
+        currentLedger.transactions.push({
+          id: `tx-disburse-${Date.now()}`,
+          date: updatedLoan.startDate || new Date().toISOString().split('T')[0],
+          year: parsedYear,
+          period: resolvedPeriod,
+          amount: disbursedAmount,
+          accountId: targetAcc.id,
+          accountName: targetAcc.name,
+          source: 'withdrawal',
+          category: 'General Reserves / Starting Capital',
+          note: `Disbursed Lent Loan: ${updatedLoan.name}${
+            updatedLoan.counterparty ? ` to ${updatedLoan.counterparty}` : ''
+          }`,
+        });
+      }
+    }
+
+    currentLedger.loans = loans;
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return {
+      ledger: currentLedger,
+      budget: workingBudget,
+      isUpdate: existingIdx >= 0,
+      disbursedAccountName,
+      disbursedAmount,
+    };
+  }
+
+  /**
+   * Deletes a LoanRecord from the ledger, removes its linked template, and clears dangling loanId references on budget entries
+   */
+  static deleteLoanContract(
+    loanId: string,
+    currentBudget: YearBudgetData
+  ): { ledger: SavingsLedgerData; budget: YearBudgetData; deletedLoan?: LoanRecord } {
+    const latestLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const target = (latestLedger.loans || []).find((l) => l.id === loanId);
+    latestLedger.loans = (latestLedger.loans || []).filter((l) => l.id !== loanId);
+    FinanceStorageService.saveLocalSavingsLedger(latestLedger);
+
+    let updatedBudget = currentBudget;
+    const currentTemplates = currentBudget.itemTemplates || [];
+    const filteredTemplates = currentTemplates.filter(
+      (t) => t.loanId !== loanId && (!target?.linkedTemplateId || t.id !== target.linkedTemplateId)
+    );
+    let entriesUnlinked = false;
+    const cleanedEntries = currentBudget.entries.map((e) => {
+      if (e.loanId === loanId) {
+        entriesUnlinked = true;
+        return { ...e, loanId: undefined };
+      }
+      return e;
+    });
+    if (filteredTemplates.length !== currentTemplates.length || entriesUnlinked) {
+      updatedBudget = {
+        ...currentBudget,
+        entries: cleanedEntries,
+        itemTemplates: filteredTemplates,
+        isPersonalizedTemplate: filteredTemplates.length > 0,
+        lastUpdated: new Date().toISOString(),
+      };
+      FinanceStorageService.saveLocalBudget(updatedBudget);
+    }
+
+    return { ledger: latestLedger, budget: updatedBudget, deletedLoan: target };
+  }
+
+  /**
+   * Records a loan payment/collection and optionally logs it in the Budget Sheet and/or deposits it into a Savings Account
+   */
+  static recordLoanPayment(
+    loanId: string,
+    paymentData: {
+      amount: number;
+      date: string;
+      note: string;
+      recordInBudget?: boolean;
+      depositToAccountId?: string;
+    },
+    currentBudget: YearBudgetData,
+    frequency: EntryFrequency
+  ): {
+    ledger: SavingsLedgerData;
+    updatedActiveBudget?: YearBudgetData;
+    loan?: LoanRecord;
+    linkedBudgetEntryId?: string;
+    resolvedPeriod?: string;
+  } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = [...(currentLedger.loans || [])];
+    const loanIdx = loans.findIndex((l) => l.id === loanId);
+    if (loanIdx === -1) return { ledger: currentLedger };
+
+    const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
+    const dateParts = (paymentData.date || '').split('-').map((n) => parseInt(n, 10));
+    const parsedYear =
+      dateParts.length === 3 && !isNaN(dateParts[0]) ? dateParts[0] : currentBudget.year;
+    const parsedMonthIdx =
+      dateParts.length === 3 && !isNaN(dateParts[1])
+        ? Math.max(0, Math.min(11, dateParts[1] - 1))
+        : new Date().getMonth();
+    const dayOfMonth =
+      dateParts.length === 3 && !isNaN(dateParts[2]) ? dateParts[2] : new Date().getDate();
+    const monthName = MONTH_NAMES[parsedMonthIdx] || 'Oct';
+    const resolvedPeriod =
+      frequency === 'bi-weekly'
+        ? `${monthName}-${dayOfMonth <= 15 ? 'P1' : 'P2'}`
+        : monthName;
+    const resolvedPeriodIdx =
+      frequency === 'bi-weekly'
+        ? Math.max(0, BIWEEKLY_PERIODS.findIndex((p) => p.id === resolvedPeriod))
+        : parsedMonthIdx;
+
+    let linkedBudgetEntryId: string | undefined;
+    let updatedActiveBudget: YearBudgetData | undefined;
+
+    if (paymentData.recordInBudget) {
+      const targetBudget =
+        parsedYear === currentBudget.year
+          ? currentBudget
+          : FinanceStorageService.loadLocalBudget(parsedYear);
+      const targetType: EntryType = loan.direction === 'borrowed' ? 'expense' : 'income';
+      const estAmt = loan.installmentAmount || paymentData.amount;
+      const diffAmt =
+        loan.direction === 'borrowed' ? estAmt - paymentData.amount : paymentData.amount - estAmt;
+      const loanNameLower = loan.name.trim().toLowerCase();
+
+      const existingPlaceholder = targetBudget.entries.find(
+        (e) =>
+          e.period === resolvedPeriod &&
+          e.type === targetType &&
+          (e.loanId === loan.id ||
+            (e.item || e.description || '').trim().toLowerCase() === loanNameLower) &&
+          (e.status === 'Pending' || (e.actualCost ?? e.amount ?? 0) === 0)
+      );
+
+      let updatedEntries: BudgetEntry[];
+      if (existingPlaceholder) {
+        linkedBudgetEntryId = existingPlaceholder.id;
+        updatedEntries = targetBudget.entries.map((e) =>
+          e.id === existingPlaceholder.id
+            ? {
+                ...e,
+                date: paymentData.date,
+                item: loan.name,
+                description: paymentData.note || loan.name,
+                amount: paymentData.amount,
+                estimatedCost: e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt,
+                actualCost: paymentData.amount,
+                difference:
+                  loan.direction === 'borrowed'
+                    ? (e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt) -
+                      paymentData.amount
+                    : paymentData.amount -
+                      (e.estimatedCost && e.estimatedCost > 0 ? e.estimatedCost : estAmt),
+                status: 'Paid',
+                loanId: loan.id,
+              }
+            : e
+        );
+      } else {
+        const entryId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        linkedBudgetEntryId = entryId;
+        const newBudgetEntry: BudgetEntry = {
+          id: entryId,
+          year: parsedYear,
+          period: resolvedPeriod,
+          periodIndex: resolvedPeriodIdx,
+          date: paymentData.date,
+          type: targetType,
+          category: loan.direction === 'borrowed' ? 'Loans' : 'Other Income',
+          item: loan.name,
+          description: paymentData.note || loan.name,
+          amount: paymentData.amount,
+          estimatedCost: estAmt,
+          actualCost: paymentData.amount,
+          difference: diffAmt,
+          status: 'Paid',
+          paymentMethod: 'Bank Transfer',
+          loanId: loan.id,
+          createdAt: new Date().toISOString(),
+        };
+        updatedEntries = [newBudgetEntry, ...targetBudget.entries];
+      }
+
+      const updatedBudget: YearBudgetData = {
+        ...targetBudget,
+        entries: updatedEntries,
+        lastUpdated: new Date().toISOString(),
+      };
+      FinanceStorageService.saveLocalBudget(updatedBudget, {
+        skipTemplateProfileUpdate: parsedYear !== currentBudget.year,
+      });
+      if (parsedYear === currentBudget.year) {
+        updatedActiveBudget = updatedBudget;
+      }
+    }
+
+    let linkedLedgerTxId: string | undefined;
+    if (paymentData.depositToAccountId) {
+      const targetAcc = currentLedger.accounts.find((a) => a.id === paymentData.depositToAccountId);
+      if (targetAcc) {
+        linkedLedgerTxId = `tx-loan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        targetAcc.balance += paymentData.amount;
+        currentLedger.transactions.push({
+          id: linkedLedgerTxId,
+          date: paymentData.date,
+          year: parsedYear,
+          period: resolvedPeriod,
+          amount: paymentData.amount,
+          accountId: targetAcc.id,
+          accountName: targetAcc.name,
+          source: 'manual_deposit',
+          category: 'General Reserves / Starting Capital',
+          note: `Loan Repayment Collected: ${loan.name}`,
+        });
+      }
+    }
+
+    const newPayment: LoanPayment = {
+      id: `lpay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      loanId: loan.id,
+      date: paymentData.date,
+      year: parsedYear,
+      period: resolvedPeriod,
+      amount: paymentData.amount,
+      source: linkedBudgetEntryId ? 'budget_sync' : 'manual_payment',
+      budgetEntryId: linkedBudgetEntryId,
+      accountId: paymentData.depositToAccountId,
+      ledgerTransactionId: linkedLedgerTxId,
+      note: paymentData.note,
+    };
+
+    loan.payments.push(newPayment);
+    const totalPaid =
+      (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
+    loan.status =
+      loan.totalContractAmount > 0 && totalPaid + 0.005 >= loan.totalContractAmount
+        ? 'completed'
+        : 'active';
+    loan.updatedAt = new Date().toISOString();
+
+    loans[loanIdx] = loan;
+    currentLedger.loans = loans;
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return {
+      ledger: currentLedger,
+      updatedActiveBudget,
+      loan,
+      linkedBudgetEntryId,
+      resolvedPeriod,
+    };
+  }
+
+  /**
+   * Deletes a loan payment, reversing any linked Savings Account deposit and removing any linked Budget Sheet entry
+   */
+  static deleteLoanPayment(
+    loanId: string,
+    paymentId: string,
+    currentBudget: YearBudgetData
+  ): {
+    ledger: SavingsLedgerData;
+    updatedActiveBudget?: YearBudgetData;
+    loan?: LoanRecord;
+    removedPayment?: LoanPayment;
+  } {
+    const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const loans = [...(currentLedger.loans || [])];
+    const loanIdx = loans.findIndex((l) => l.id === loanId);
+    if (loanIdx === -1) return { ledger: currentLedger };
+
+    const loan = { ...loans[loanIdx], payments: [...(loans[loanIdx].payments || [])] };
+    const targetPay = loan.payments.find((p) => p.id === paymentId);
+    if (!targetPay) return { ledger: currentLedger };
+
+    if (targetPay.ledgerTransactionId) {
+      const linkedTx = currentLedger.transactions.find(
+        (t) => t.id === targetPay.ledgerTransactionId
+      );
+      if (linkedTx) {
+        FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, linkedTx, true);
+        currentLedger.transactions = currentLedger.transactions.filter(
+          (t) => t.id !== targetPay.ledgerTransactionId
+        );
+      } else if (targetPay.accountId) {
+        const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
+        if (acc) {
+          acc.balance = Math.max(0, acc.balance - targetPay.amount);
+        }
+      }
+    } else if (targetPay.accountId) {
+      const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
+      if (acc) {
+        acc.balance = Math.max(0, acc.balance - targetPay.amount);
+      }
+    }
+
+    let updatedActiveBudget: YearBudgetData | undefined;
+    if (targetPay.budgetEntryId) {
+      const targetYear = targetPay.year || currentBudget.year;
+      const targetBudget =
+        targetYear === currentBudget.year
+          ? currentBudget
+          : FinanceStorageService.loadLocalBudget(targetYear);
+      const updatedEntries = targetBudget.entries.filter((e) => e.id !== targetPay.budgetEntryId);
+      if (updatedEntries.length !== targetBudget.entries.length) {
+        const updatedBudget: YearBudgetData = {
+          ...targetBudget,
+          entries: updatedEntries,
+        };
+        FinanceStorageService.saveLocalBudget(updatedBudget, {
+          skipTemplateProfileUpdate: targetYear !== currentBudget.year,
+        });
+        if (targetYear === currentBudget.year) {
+          updatedActiveBudget = updatedBudget;
+        }
+      }
+    }
+
+    loan.payments = loan.payments.filter((p) => p.id !== paymentId);
+    const totalPaid =
+      (loan.initialPaidAmount || 0) + loan.payments.reduce((s, p) => s + (p.amount || 0), 0);
+    loan.status =
+      loan.totalContractAmount > 0 && totalPaid + 0.005 >= loan.totalContractAmount
+        ? 'completed'
+        : 'active';
+    loan.updatedAt = new Date().toISOString();
+
+    loans[loanIdx] = loan;
+    currentLedger.loans = loans;
+    FinanceStorageService.saveLocalSavingsLedger(currentLedger);
+    return {
+      ledger: currentLedger,
+      updatedActiveBudget,
+      loan,
+      removedPayment: targetPay,
+    };
   }
 
   // --- GOOGLE DRIVE SYNC METHODS ---

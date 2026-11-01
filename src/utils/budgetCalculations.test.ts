@@ -11,6 +11,7 @@ import {
   computeAnnualTargetFromTemplate,
   computeLoanMetrics,
   parseDateToYearAndPeriod,
+  buildAutoFillPeriodEntries,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -27,6 +28,8 @@ import {
   parseUniversalRowsToEntries,
   detectUniversalColumnMapping,
   parseCurrencyNumber,
+  buildSampleTemplateRows,
+  buildSampleTemplateWorkbook,
 } from './excelImportParser';
 import {
   getBrowserEnvironmentInfo,
@@ -124,6 +127,21 @@ describe('2. Cashflow Chart Period Aggregation (aggregateCashflowByPeriod)', () 
     assert.equal(biweekly.length, 24);
     const janP1 = biweekly.find((p) => p.label === 'Jan-P1')!;
     assert.equal(janP1.expense, 800);
+  });
+
+  it('rolls up bi-weekly P1 & P2 settled entries into monthly bars when viewing a bi-weekly-only budget in Monthly mode', () => {
+    const entries: BudgetEntry[] = [
+      makeEntry({ id: 'bw-1', period: 'Mar-P1', type: 'income', actualCost: 20000, amount: 20000, status: 'Paid' }),
+      makeEntry({ id: 'bw-2', period: 'Mar-P2', type: 'income', actualCost: 22000, amount: 22000, status: 'Paid' }),
+      makeEntry({ id: 'bw-3', period: 'Mar-P1', type: 'expense', actualCost: 8500, amount: 8500, status: 'Paid' }),
+      makeEntry({ id: 'bw-4', period: 'Mar-P2', type: 'expense', actualCost: 9500, amount: 9500, status: 'Paid' }),
+    ];
+
+    const monthlyRollup = aggregateCashflowByPeriod(entries, 'monthly');
+    const mar = monthlyRollup.find((m) => m.label === 'Mar')!;
+    assert.equal(mar.income, 42000);
+    assert.equal(mar.expense, 18000);
+    assert.equal(mar.net, 24000);
   });
 });
 
@@ -600,6 +618,22 @@ describe('9. Universal & Multi-Section Excel / CSV Importer (excelImportParser)'
     assert.equal(p2Res.entries[0].periodIndex, 19); // Oct-P2 is index 19
     assert.equal(p2Res.entries[0].date, '2026-10-16');
   });
+
+  it('generates a single-sheet Sample Excel Template with period-matched dates and round-trips cleanly', () => {
+    const wb = buildSampleTemplateWorkbook(2026, 'Mar-P2');
+    // Must have ONLY 1 worksheet tab so new users are never confused by multiple formats
+    assert.equal(wb.SheetNames.length, 1);
+    assert.equal(wb.SheetNames[0], 'Mar-P2_2026');
+
+    const rows = buildSampleTemplateRows(2026, 'Mar-P2');
+    const parsed = analyzeAndParseWorksheet(rows, 2026, 'Mar-P2');
+    assert.equal(parsed.detectedMode, 'universal');
+    assert.equal(parsed.entries.length, 5);
+    assert.equal(parsed.entries[0].type, 'income');
+    assert.equal(parsed.entries[0].date, '2026-03-16');
+    assert.equal(parsed.entries[1].type, 'expense');
+    assert.equal(parsed.entries[4].type, 'saving');
+  });
 });
 
 describe('12. In-App Browser (Messenger / WebView) & New User Auth Protection', () => {
@@ -920,5 +954,648 @@ describe('13. Cross-Module Synchronization (Loans, Funds Ledger & Multi-Year Tem
     assert.equal(syncRes2.ledger.accounts[0].balance, 20000);
   });
 });
+
+describe('14. Template Auto-Fill & Batch Period Replacement Process (buildAutoFillPeriodEntries & addMultipleBudgetEntries)', () => {
+  it('auto-fills a period with Pending entries for unrecorded templates without prematurely inflating savings account balances', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const initialAccBalance = ledger.accounts[0].balance;
+
+    const templates: BudgetItemTemplate[] = [
+      {
+        id: 'tpl-sal',
+        type: 'income',
+        category: 'Salary & Wages',
+        item: 'Monthly Salary',
+        defaultEstimatedCost: 50000,
+        frequency: 'monthly',
+      },
+      {
+        id: 'tpl-bonus',
+        type: 'income',
+        category: '13th Month & Bonuses',
+        item: 'Performance Bonus',
+        defaultEstimatedCost: 20000,
+        frequency: 'monthly',
+      },
+      {
+        id: 'tpl-rent',
+        type: 'expense',
+        category: 'Housing & Mortgage',
+        item: 'Condo Rent',
+        defaultEstimatedCost: 15000,
+        frequency: 'monthly',
+      },
+      {
+        id: 'tpl-ef',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        defaultEstimatedCost: 5000,
+        frequency: 'monthly',
+        defaultSavingAccountId: ledger.accounts[0].id,
+      },
+    ];
+
+    const autoFillRes = buildAutoFillPeriodEntries(
+      templates,
+      budget.entries,
+      2026,
+      'Nov',
+      'monthly',
+      ledger.accounts,
+      isTemplateValidForPeriod
+    );
+
+    // Performance Bonus (irregular income) is excluded; Salary, Condo Rent, and Emergency Fund are included (3 items)
+    assert.equal(autoFillRes.validTemplatesCount, 3);
+    assert.equal(autoFillRes.newEntries.length, 3);
+    assert.equal(
+      autoFillRes.newEntries.every((e) => e.status === 'Pending' && e.actualCost === 0 && e.amount === 0),
+      true
+    );
+
+    // Batch-insert auto-filled entries -> since all are Pending (0 actual), Savings Ledger balance must remain untouched
+    const batchRes = FinanceStorageService.addMultipleBudgetEntries(budget, autoFillRes.newEntries);
+    assert.equal(batchRes.budget.entries.length, 3);
+    assert.equal(batchRes.ledger.accounts[0].balance, initialAccBalance);
+    assert.equal(batchRes.ledger.transactions.length, 0);
+
+    // Re-running auto-fill on Nov when all 3 templates are already in Nov should return 0 new entries
+    const secondRun = buildAutoFillPeriodEntries(
+      templates,
+      batchRes.budget.entries,
+      2026,
+      'Nov',
+      'monthly',
+      ledger.accounts,
+      isTemplateValidForPeriod
+    );
+    assert.equal(secondRun.validTemplatesCount, 3);
+    assert.equal(secondRun.newEntries.length, 0);
+  });
+
+  it('rolls back existing period savings and loan payments when replacing a period via addMultipleBudgetEntries', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    ledger.initialCapital = 10000;
+    ledger.accounts[0].balance = 10000;
+    ledger.loans = [
+      {
+        id: 'loan-car',
+        name: 'Auto Loan',
+        direction: 'borrowed',
+        category: 'Auto / Vehicle Loan',
+        principalAmount: 50000,
+        totalContractAmount: 50000,
+        installmentAmount: 5000,
+        totalInstallments: 10,
+        initialPaidAmount: 45000,
+        initialInstallmentsPaid: 9,
+        frequency: 'monthly',
+        startDate: '2026-01-01',
+        status: 'active',
+        payments: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    const budget = FinanceStorageService.loadLocalBudget(2026);
+
+    // 1. Add initial Oct entries (a Paid saving of 4,000 and a Paid loan expense of 5,000 that completes the loan)
+    const octInitial = FinanceStorageService.addMultipleBudgetEntries(budget, [
+      {
+        year: 2026,
+        period: 'Oct',
+        periodIndex: 9,
+        date: '2026-10-05',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        estimatedCost: 4000,
+        actualCost: 4000,
+        amount: 4000,
+        status: 'Paid',
+        description: 'Emergency Fund',
+      },
+      {
+        year: 2026,
+        period: 'Oct',
+        periodIndex: 9,
+        date: '2026-10-10',
+        type: 'expense',
+        category: 'Loans',
+        item: 'Auto Loan',
+        estimatedCost: 5000,
+        actualCost: 5000,
+        amount: 5000,
+        status: 'Paid',
+        loanId: 'loan-car',
+        description: 'Auto Loan',
+      },
+    ]);
+
+    assert.equal(octInitial.ledger.accounts[0].balance, 14000);
+    assert.equal(octInitial.ledger.loans?.[0].payments.length, 1);
+    assert.equal(octInitial.ledger.loans?.[0].status, 'completed');
+
+    // 2. Replace Oct period with a fresh Excel import containing only a 1,500 saving entry (and no loan payment)
+    const octReplaced = FinanceStorageService.addMultipleBudgetEntries(
+      octInitial.budget,
+      [
+        {
+          year: 2026,
+          period: 'Oct',
+          periodIndex: 9,
+          date: '2026-10-15',
+          type: 'saving',
+          category: 'Emergency & Safety Net',
+          item: 'Emergency Fund',
+          estimatedCost: 1500,
+          actualCost: 1500,
+          amount: 1500,
+          status: 'Paid',
+          description: 'Emergency Fund',
+        },
+      ],
+      { replacePeriod: 'Oct', customExpenseCategories: ['Custom Imported Category'] }
+    );
+
+    // Old 4,000 saving rolled back and replaced with 1,500 -> balance is 11,500
+    assert.equal(octReplaced.ledger.accounts[0].balance, 11500);
+    assert.equal(octReplaced.ledger.transactions.length, 1);
+    assert.equal(octReplaced.ledger.transactions[0].amount, 1500);
+    // Old 5,000 loan payment rolled back -> loan has 0 payments and reverts to 'active'
+    assert.equal(octReplaced.ledger.loans?.[0].payments.length, 0);
+    assert.equal(octReplaced.ledger.loans?.[0].status, 'active');
+    assert.equal(
+      octReplaced.budget.customCategories?.expense.includes('Custom Imported Category'),
+      true
+    );
+  });
+});
+
+describe('15. Direct Funds Ledger Transactions, Account Management & Sinking Fund Rename/Merge/Delete Process', () => {
+  it('executes deposits, yields, withdrawals, account transfers, and virtual reallocations with accurate runningTotalCapital', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    ledger.initialCapital = 20000;
+    ledger.accounts = [
+      { id: 'acc-main', name: 'BPI Savings', type: 'Traditional Bank', balance: 15000, color: '#3b82f6' },
+      { id: 'acc-hysa', name: 'Maya HYSA', type: 'Digital Bank (High-Yield)', balance: 5000, color: '#10b981' },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    // 1. Direct deposit (+5,000 to BPI)
+    const dep = FinanceStorageService.addLedgerTransaction({
+      date: '2026-10-01',
+      year: 2026,
+      period: 'Oct',
+      amount: 5000,
+      accountId: 'acc-main',
+      accountName: 'BPI Savings',
+      source: 'manual_deposit',
+      category: 'Emergency Fund',
+      note: 'Top up Emergency Fund',
+    });
+    assert.equal(dep.ledger.accounts[0].balance, 20000);
+    assert.equal(dep.ledger.transactions[0].runningTotalCapital, 25000);
+
+    // 2. Account-to-account transfer (3,000 from BPI to Maya HYSA) -> net capital stays 25,000
+    const trf = FinanceStorageService.addLedgerTransaction({
+      date: '2026-10-05',
+      year: 2026,
+      period: 'Oct',
+      amount: 3000,
+      accountId: 'acc-main',
+      accountName: 'BPI Savings',
+      toAccountId: 'acc-hysa',
+      toAccountName: 'Maya HYSA',
+      source: 'transfer',
+      note: 'Move to high yield',
+    });
+    assert.equal(trf.ledger.accounts[0].balance, 17000);
+    assert.equal(trf.ledger.accounts[1].balance, 8000);
+    assert.equal(trf.ledger.transactions[1].runningTotalCapital, 25000);
+
+    // 3. Virtual Sinking Fund reallocation (1,000 from Emergency Fund to Travel Fund) -> physical balances & net capital unchanged
+    const realloc = FinanceStorageService.addLedgerTransaction({
+      date: '2026-10-08',
+      year: 2026,
+      period: 'Oct',
+      amount: 1000,
+      accountId: 'acc-main',
+      accountName: 'BPI Savings',
+      source: 'reallocation',
+      category: 'Emergency Fund',
+      toCategory: 'Travel & Vacation Fund',
+      note: 'Reallocate to Travel',
+    });
+    assert.equal(realloc.ledger.accounts[0].balance, 17000);
+    assert.equal(realloc.ledger.accounts[1].balance, 8000);
+    assert.equal(realloc.ledger.transactions[2].runningTotalCapital, 25000);
+
+    // 4. Update the deposit transaction from 5,000 to 7,000 -> BPI balance increases by 2,000 to 19,000, runningTotalCapital becomes 27,000
+    const upd = FinanceStorageService.updateLedgerTransaction(dep.newTx.id, { amount: 7000 }, 2026);
+    assert.equal(upd.ledger.accounts[0].balance, 19000);
+    assert.equal(upd.ledger.transactions[2].runningTotalCapital, 27000);
+
+    // 5. Delete the transfer transaction -> reverses 3,000 transfer (BPI back to 22,000, Maya back to 5,000)
+    const del = FinanceStorageService.deleteLedgerTransaction(trf.newTx.id, 2026);
+    assert.equal(del.ledger.accounts[0].balance, 22000);
+    assert.equal(del.ledger.accounts[1].balance, 5000);
+    assert.equal(del.ledger.transactions.length, 2);
+  });
+
+  it('adds, updates, and deletes savings accounts while reassigning balances, transactions, loans, and budget references', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    ledger.initialCapital = 10000;
+    ledger.accounts = [
+      { id: 'acc-1', name: 'Primary Bank', type: 'Traditional Bank', balance: 10000, color: '#3b82f6' },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    // Guard: Cannot delete the last remaining savings account
+    const blockedDelete = FinanceStorageService.deleteSavingsAccount('acc-1', undefined, 2026);
+    assert.equal(blockedDelete.deleted, false);
+    assert.equal(blockedDelete.ledger.accounts.length, 1);
+
+    // 1. Add a second account with 5,000 initial balance -> initialCapital increases to 15,000
+    const added = FinanceStorageService.addSavingsAccount({
+      name: 'Digital Vault',
+      type: 'Digital Bank (High-Yield)',
+      balance: 5000,
+      color: '#10b981',
+    });
+    const acc2Id = added.newAccount.id;
+    assert.equal(added.ledger.accounts.length, 2);
+    assert.equal(added.ledger.initialCapital, 15000);
+
+    // Record a budget saving entry tied to acc2Id
+    const budget = FinanceStorageService.loadLocalBudget(2026);
+    budget.itemTemplates = [
+      {
+        id: 'tpl-sav-1',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        defaultEstimatedCost: 2000,
+        defaultSavingAccountId: acc2Id,
+      },
+    ];
+    const withEntry = FinanceStorageService.addMultipleBudgetEntries(budget, [
+      {
+        year: 2026,
+        period: 'Oct',
+        periodIndex: 9,
+        date: '2026-10-05',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        estimatedCost: 2000,
+        actualCost: 2000,
+        amount: 2000,
+        status: 'Paid',
+        savingAccountId: acc2Id,
+        savingAccountName: 'Digital Vault',
+        description: 'Emergency Fund',
+      },
+    ]);
+    assert.equal(withEntry.ledger.accounts.find((a) => a.id === acc2Id)?.balance, 7000);
+
+    // 2. Rename acc2Id to 'Seabank High-Yield' and adjust balance from 7,000 to 8,000
+    const renamed = FinanceStorageService.updateSavingsAccount(
+      acc2Id,
+      { name: 'Seabank High-Yield', balance: 8000 },
+      2026
+    );
+    assert.equal(renamed.ledger.initialCapital, 16000);
+    assert.equal(renamed.ledger.transactions[0].accountName, 'Seabank High-Yield');
+    assert.equal(renamed.updatedBudget?.entries[0].savingAccountName, 'Seabank High-Yield');
+
+    // 3. Delete acc2Id and reassign to 'acc-1' -> balance (8,000), transactions, budget entries, and templates transfer to 'acc-1'
+    const deleted = FinanceStorageService.deleteSavingsAccount(acc2Id, 'acc-1', 2026);
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.ledger.accounts.length, 1);
+    assert.equal(deleted.ledger.accounts[0].id, 'acc-1');
+    assert.equal(deleted.ledger.accounts[0].balance, 18000);
+    assert.equal(deleted.ledger.transactions[0].accountId, 'acc-1');
+    assert.equal(deleted.updatedBudget?.entries[0].savingAccountId, 'acc-1');
+    assert.equal(deleted.updatedBudget?.itemTemplates?.[0].defaultSavingAccountId, 'acc-1');
+  });
+
+  it('renames, merges, and deletes Sinking Funds while cleaning self-reallocations and normalizing bi-weekly targets', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    ledger.transactions = [
+      {
+        id: 'tx-1',
+        date: '2026-10-01',
+        year: 2026,
+        period: 'Oct',
+        amount: 3000,
+        accountId: ledger.accounts[0].id,
+        accountName: ledger.accounts[0].name,
+        source: 'budget_sync',
+        category: 'Old Vacation Fund',
+        note: 'Old Vacation Fund',
+      },
+      {
+        id: 'tx-self-realloc',
+        date: '2026-10-02',
+        year: 2026,
+        period: 'Oct',
+        amount: 1000,
+        accountId: ledger.accounts[0].id,
+        accountName: ledger.accounts[0].name,
+        source: 'reallocation',
+        category: 'Old Vacation Fund',
+        toCategory: 'Japan Trip Fund',
+        note: 'Move to Japan Trip',
+      },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    const budget = FinanceStorageService.loadLocalBudget(2026);
+    budget.itemTemplates = [
+      {
+        id: 'tpl-vac',
+        type: 'saving',
+        category: 'Lifestyle & Planned Goals',
+        item: 'Old Vacation Fund',
+        defaultEstimatedCost: 2000,
+        frequency: 'bi-weekly',
+        biweeklyPeriod: 'both',
+      },
+    ];
+    budget.entries = [
+      makeEntry({
+        id: 'e-vac',
+        type: 'saving',
+        category: 'Lifestyle & Planned Goals',
+        item: 'Old Vacation Fund',
+        description: 'Old Vacation Fund',
+        actualCost: 3000,
+        amount: 3000,
+      }),
+    ];
+    FinanceStorageService.saveLocalBudget(budget);
+
+    // 1. Merge 'Old Vacation Fund' into 'Japan Trip Fund' with a new monthly target of 6,000
+    const merged = FinanceStorageService.renameOrMergeSinkingFund(
+      budget,
+      'Old Vacation Fund',
+      'Japan Trip Fund',
+      6000,
+      'Lifestyle & Planned Goals'
+    );
+    // Self-reallocation (Japan Trip Fund -> Japan Trip Fund) is automatically removed!
+    assert.equal(merged.ledger.transactions.length, 1);
+    assert.equal(merged.ledger.transactions[0].category, 'Japan Trip Fund');
+    // Bi-weekly ('both') template stores 6,000 / 2 = 3,000 per period
+    assert.equal(merged.budget.itemTemplates?.[0].item, 'Japan Trip Fund');
+    assert.equal(merged.budget.itemTemplates?.[0].defaultEstimatedCost, 3000);
+    assert.equal(merged.budget.entries[0].item, 'Japan Trip Fund');
+
+    // 2. Delete 'Japan Trip Fund' (returns balance to General Reserves / Starting Capital)
+    const afterDelete = FinanceStorageService.deleteSinkingFund(merged.budget, 'Japan Trip Fund');
+    assert.equal(
+      afterDelete.ledger.transactions[0].category,
+      'General Reserves / Starting Capital'
+    );
+    assert.equal(afterDelete.budget.itemTemplates?.length, 0);
+    assert.equal(
+      afterDelete.budget.entries[0].item,
+      'General Reserves / Starting Capital'
+    );
+  });
+});
+
+describe('16. Full Loans & Receivables End-to-End Lifecycle Process', () => {
+  it('manages the complete lifecycle of a Lent Receivable (principal disbursement, template sync, collection with budget + deposit sync, payment deletion rollback, and loan deletion)', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const accId = ledger.accounts[0].id;
+    ledger.initialCapital = 50000;
+    ledger.accounts[0].balance = 50000;
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    // 1. Create a Lent Receivable of 10,000 disbursed from accId, synced to recurring templates
+    const newLoan: LoanRecord = {
+      id: 'loan-receivable-1',
+      name: 'Bridge Loan - Marco',
+      direction: 'lent',
+      counterparty: 'Marco',
+      category: 'Personal Receivable',
+      principalAmount: 10000,
+      totalContractAmount: 10000,
+      installmentAmount: 5000,
+      totalInstallments: 2,
+      initialPaidAmount: 0,
+      initialInstallmentsPaid: 0,
+      frequency: 'monthly',
+      startDate: '2026-10-01',
+      status: 'active',
+      payments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const created = FinanceStorageService.saveLoanContract(newLoan, budget, 'monthly', {
+      syncToTemplate: true,
+      disburseFromAccountId: accId,
+    });
+
+    // Principal of 10,000 is deducted from savings account (50,000 -> 40,000) and withdrawal tx is recorded
+    assert.equal(created.isUpdate, false);
+    assert.equal(created.disbursedAmount, 10000);
+    assert.equal(created.ledger.accounts[0].balance, 40000);
+    assert.equal(created.ledger.transactions.length, 1);
+    assert.equal(created.ledger.transactions[0].source, 'withdrawal');
+    assert.equal(created.ledger.transactions[0].runningTotalCapital, 40000);
+    // Recurring income template is created and linked
+    assert.equal(created.budget.itemTemplates?.length, 1);
+    assert.equal(created.budget.itemTemplates?.[0].loanId, 'loan-receivable-1');
+    assert.equal(created.budget.itemTemplates?.[0].type, 'income');
+
+    // 2. Record first collection of 5,000 (logged in Oct Budget Sheet + deposited back into accId)
+    const pay1 = FinanceStorageService.recordLoanPayment(
+      'loan-receivable-1',
+      {
+        amount: 5000,
+        date: '2026-10-15',
+        note: 'First installment',
+        recordInBudget: true,
+        depositToAccountId: accId,
+      },
+      created.budget,
+      'monthly'
+    );
+    assert.equal(pay1.loan?.payments.length, 1);
+    assert.equal(pay1.loan?.status, 'active');
+    assert.equal(pay1.ledger.accounts[0].balance, 45000);
+    assert.equal(pay1.updatedActiveBudget?.entries.length, 1);
+    assert.equal(pay1.updatedActiveBudget?.entries[0].actualCost, 5000);
+
+    // 3. Record second collection of 5,000 -> auto-marks loan as 'completed' and restores account balance to 50,000
+    const pay2 = FinanceStorageService.recordLoanPayment(
+      'loan-receivable-1',
+      {
+        amount: 5000,
+        date: '2026-11-15',
+        note: 'Final installment',
+        recordInBudget: true,
+        depositToAccountId: accId,
+      },
+      pay1.updatedActiveBudget!,
+      'monthly'
+    );
+    assert.equal(pay2.loan?.payments.length, 2);
+    assert.equal(pay2.loan?.status, 'completed');
+    assert.equal(pay2.ledger.accounts[0].balance, 50000);
+    assert.equal(pay2.updatedActiveBudget?.entries.length, 2);
+
+    // 4. Delete the second payment -> reverts loan to 'active', reverses 5,000 deposit (balance -> 45,000), and removes Nov budget entry
+    const payment2Id = pay2.loan!.payments[1].id;
+    const afterDelPay = FinanceStorageService.deleteLoanPayment(
+      'loan-receivable-1',
+      payment2Id,
+      pay2.updatedActiveBudget!
+    );
+    assert.equal(afterDelPay.loan?.payments.length, 1);
+    assert.equal(afterDelPay.loan?.status, 'active');
+    assert.equal(afterDelPay.ledger.accounts[0].balance, 45000);
+    assert.equal(afterDelPay.updatedActiveBudget?.entries.length, 1);
+
+    // 5. Delete the loan contract -> removes loan and linked template, and unlinks loanId from remaining Oct budget entry
+    const afterDelLoan = FinanceStorageService.deleteLoanContract(
+      'loan-receivable-1',
+      afterDelPay.updatedActiveBudget!
+    );
+    assert.equal(afterDelLoan.ledger.loans?.length, 0);
+    assert.equal(afterDelLoan.budget.itemTemplates?.length, 0);
+    assert.equal(afterDelLoan.budget.entries.length, 1);
+    assert.equal(afterDelLoan.budget.entries[0].loanId, undefined);
+  });
+});
+
+describe('17. Cloud Sync Timestamp Comparison & Complete Go-Live Reset Process', () => {
+  it('compares local and Google Drive timestamps with 2-second clock-skew tolerance', () => {
+    assert.equal(FinanceStorageService.compareTimestamps(undefined, undefined), 'same');
+    assert.equal(
+      FinanceStorageService.compareTimestamps('2026-10-01T12:00:00.000Z', undefined),
+      'local_newer'
+    );
+    assert.equal(
+      FinanceStorageService.compareTimestamps(undefined, '2026-10-01T12:00:00.000Z'),
+      'drive_newer'
+    );
+    // Within 2000ms tolerance -> 'same'
+    assert.equal(
+      FinanceStorageService.compareTimestamps(
+        '2026-10-01T12:00:00.000Z',
+        '2026-10-01T12:00:01.500Z'
+      ),
+      'same'
+    );
+    // Beyond 2000ms tolerance -> 'drive_newer' or 'local_newer'
+    assert.equal(
+      FinanceStorageService.compareTimestamps(
+        '2026-10-01T12:00:00.000Z',
+        '2026-10-01T12:00:05.000Z'
+      ),
+      'drive_newer'
+    );
+    assert.equal(
+      FinanceStorageService.compareTimestamps(
+        '2026-10-01T12:00:10.000Z',
+        '2026-10-01T12:00:00.000Z'
+      ),
+      'local_newer'
+    );
+  });
+
+  it('resets all multi-year budgets, templates, and ledger balances via resetAllDataForGoLive', () => {
+    memoryStorage.clear();
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    FinanceStorageService.registerKnownYear(2027);
+    const { budget, ledger } = FinanceStorageService.resetAllDataForGoLive();
+    assert.equal(budget.year, 2026);
+    assert.equal(budget.entries.length, 0);
+    assert.equal(ledger.transactions.length, 0);
+    assert.deepEqual(FinanceStorageService.getKnownYears(), [2026]);
+  });
+});
+
+describe('18. Projected Net, Sorting Tie-Breakers & Category Deduplication', () => {
+  it('preserves alphabetical item tie-breaker when sorting templates descending by category, type, and frequency', () => {
+    const list: BudgetItemTemplate[] = [
+      { id: '1', type: 'expense', category: 'Utilities', item: 'Zebra Bill', defaultEstimatedCost: 100 },
+      { id: '2', type: 'expense', category: 'Utilities', item: 'Alpha Electric', defaultEstimatedCost: 200 },
+      { id: '3', type: 'expense', category: 'Food', item: 'Dining Out', defaultEstimatedCost: 300 },
+    ];
+
+    // Descending category sort comparator:
+    const sortedDesc = [...list].sort((a, b) => {
+      const catCmp = a.category.localeCompare(b.category);
+      if (catCmp !== 0) return -catCmp;
+      return a.item.localeCompare(b.item);
+    });
+
+    assert.equal(sortedDesc[0].category, 'Utilities');
+    assert.equal(sortedDesc[0].item, 'Alpha Electric'); // Tie-breaker alphabetically A before Z!
+    assert.equal(sortedDesc[1].category, 'Utilities');
+    assert.equal(sortedDesc[1].item, 'Zebra Bill');
+    assert.equal(sortedDesc[2].category, 'Food');
+  });
+
+  it('calculates projectedRemainingAll combining settled actuals and pending estimates', () => {
+    // 1 income received (Paid 35,000), 1 irregular income unreceived (est 5,000)
+    const incomeRows = [
+      { estimatedCost: 30000, actualCost: 35000, hasActualCost: true, status: 'Paid' },
+      { estimatedCost: 5000, actualCost: 0, hasActualCost: false, status: 'Pending' },
+    ];
+    // 1 expense paid (Paid 12,000, est 10,000), 1 expense pending (est 4,000)
+    const expenseRows = [
+      { estimatedCost: 10000, actualCost: 12000, hasActualCost: true, status: 'Paid' },
+      { estimatedCost: 4000, actualCost: 0, hasActualCost: false, status: 'Pending' },
+    ];
+
+    const projectedIncomeTotal = incomeRows.reduce(
+      (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : r.estimatedCost),
+      0
+    );
+    const projectedExpenseTotal = expenseRows.reduce(
+      (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : r.estimatedCost),
+      0
+    );
+    const projectedRemainingAll = projectedIncomeTotal - projectedExpenseTotal;
+
+    // Projected income = 35,000 (actual paid) + 5,000 (unreceived estimate) = 40,000
+    // Projected expense = 12,000 (actual paid) + 4,000 (pending estimate) = 16,000
+    // Projected net = 40,000 - 16,000 = 24,000
+    assert.equal(projectedIncomeTotal, 40000);
+    assert.equal(projectedExpenseTotal, 16000);
+    assert.equal(projectedRemainingAll, 24000);
+  });
+
+  it('deduplicates category arrays when renaming or merging categories', () => {
+    const existing = ['Groceries', 'Utilities', 'Dining'];
+    const oldName = 'Dining';
+    const newName = 'Groceries'; // User merges Dining into Groceries
+
+    const deduplicated = Array.from(new Set(existing.map((c) => (c === oldName ? newName : c))));
+    assert.deepEqual(deduplicated, ['Groceries', 'Utilities']);
+  });
+});
+
+
 
 

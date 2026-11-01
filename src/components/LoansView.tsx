@@ -1062,7 +1062,12 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     onChange={(e) => setFormCategory(e.target.value)}
                     className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    {(formDirection === 'borrowed' ? BORROWED_CATEGORIES : LENT_CATEGORIES).map((cat) => (
+                    {Array.from(
+                      new Set([
+                        ...(formDirection === 'borrowed' ? BORROWED_CATEGORIES : LENT_CATEGORIES),
+                        ...(formCategory.trim() ? [formCategory.trim()] : []),
+                      ])
+                    ).map((cat) => (
                       <option key={cat} value={cat}>
                         {cat}
                       </option>

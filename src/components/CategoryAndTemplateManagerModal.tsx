@@ -133,21 +133,25 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       }
       if (field === 'category') {
         const catCmp = a.category.localeCompare(b.category);
-        return dir === 'asc' ? (catCmp !== 0 ? catCmp : a.item.localeCompare(b.item)) : -catCmp;
+        if (catCmp !== 0) return dir === 'asc' ? catCmp : -catCmp;
+        return a.item.localeCompare(b.item);
       }
       if (field === 'type') {
         const typeOrder: Record<string, number> = { income: 1, expense: 2, saving: 3 };
         const diff = (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99);
-        return dir === 'asc' ? (diff !== 0 ? diff : a.item.localeCompare(b.item)) : -diff;
+        if (diff !== 0) return dir === 'asc' ? diff : -diff;
+        return a.item.localeCompare(b.item);
       }
       if (field === 'frequency') {
         const freqOrder: Record<string, number> = { monthly: 1, 'bi-weekly': 2, both: 3 };
         const diff = (freqOrder[a.frequency || 'monthly'] || 99) - (freqOrder[b.frequency || 'monthly'] || 99);
-        return dir === 'asc' ? (diff !== 0 ? diff : a.item.localeCompare(b.item)) : -diff;
+        if (diff !== 0) return dir === 'asc' ? diff : -diff;
+        return a.item.localeCompare(b.item);
       }
       if (field === 'cost') {
         const diff = (a.defaultEstimatedCost || 0) - (b.defaultEstimatedCost || 0);
-        return dir === 'asc' ? diff : -diff;
+        if (diff !== 0) return dir === 'asc' ? diff : -diff;
+        return a.item.localeCompare(b.item);
       }
       return 0;
     });
@@ -196,11 +200,12 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       saving: [...savingCats],
     };
 
-    if (type === 'expense' && !updated.expense.includes(trimmed)) {
+    const lower = trimmed.toLowerCase();
+    if (type === 'expense' && !updated.expense.some((c) => c.toLowerCase() === lower)) {
       updated.expense.push(trimmed);
-    } else if (type === 'income' && !updated.income.includes(trimmed)) {
+    } else if (type === 'income' && !updated.income.some((c) => c.toLowerCase() === lower)) {
       updated.income.push(trimmed);
-    } else if (type === 'saving' && !updated.saving.includes(trimmed)) {
+    } else if (type === 'saving' && !updated.saving.some((c) => c.toLowerCase() === lower)) {
       updated.saving.push(trimmed);
     }
 
@@ -233,9 +238,18 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     const newName = editingCat.current.trim();
 
     const updated = {
-      expense: type === 'expense' ? expenseCats.map((c) => (c === oldName ? newName : c)) : expenseCats,
-      income: type === 'income' ? incomeCats.map((c) => (c === oldName ? newName : c)) : incomeCats,
-      saving: type === 'saving' ? savingCats.map((c) => (c === oldName ? newName : c)) : savingCats,
+      expense:
+        type === 'expense'
+          ? Array.from(new Set(expenseCats.map((c) => (c === oldName ? newName : c))))
+          : expenseCats,
+      income:
+        type === 'income'
+          ? Array.from(new Set(incomeCats.map((c) => (c === oldName ? newName : c))))
+          : incomeCats,
+      saving:
+        type === 'saving'
+          ? Array.from(new Set(savingCats.map((c) => (c === oldName ? newName : c))))
+          : savingCats,
     };
     onUpdateCategories(updated, { type, oldName, newName });
     setEditingCat(null);
@@ -1317,11 +1331,15 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     onChange={(e) => setTplCategory(e.target.value)}
                     className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    {(tplType === 'income'
-                      ? incomeCats
-                      : tplType === 'saving'
-                      ? savingCats
-                      : expenseCats
+                    {Array.from(
+                      new Set([
+                        ...(tplType === 'income'
+                          ? incomeCats
+                          : tplType === 'saving'
+                          ? savingCats
+                          : expenseCats),
+                        ...(tplCategory.trim() ? [tplCategory.trim()] : []),
+                      ])
                     ).map((c) => (
                       <option key={c} value={c}>
                         {c}

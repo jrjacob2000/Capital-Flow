@@ -94,7 +94,8 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     setMapping(result.suggestedMapping);
     setParsedEntries(result.entries);
     setDiscoveredCategories(result.discoveredExpenseCategories);
-    setShowColumnMapper(result.detectedMode === 'universal');
+    // Only auto-expand the column mapper if no entries were matched automatically
+    setShowColumnMapper(result.detectedMode === 'universal' && result.entries.length === 0);
   };
 
   const recomputeWithMapping = (
@@ -124,7 +125,9 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
 
   const handleSwitchMode = (newMode: ImportParserMode) => {
     setParserMode(newMode);
-    setShowColumnMapper(newMode === 'universal');
+    if (newMode === 'structured') {
+      setShowColumnMapper(false);
+    }
     if (mapping) {
       recomputeWithMapping(sheetRows, newMode, mapping, targetPeriod);
     }
@@ -217,7 +220,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                 Import Excel or CSV (.xlsx / .xls / .csv)
               </h3>
               <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                Works with any spreadsheet table, bank/e-wallet export, or multi-section budget template
+                Upload your own spreadsheet or use our single-sheet sample template
               </p>
             </div>
           </div>
@@ -227,7 +230,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
               type="button"
               onClick={() => downloadSampleExcelTemplate(year, targetPeriod)}
               className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Download a clean sample Excel (.xlsx) template"
+              title="Download a clean 1-sheet sample Excel (.xlsx) template"
             >
               <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span className="hidden sm:inline">Sample Template</span>
@@ -261,6 +264,39 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
             />
           </label>
 
+          {/* Beginner Guide shown before uploading a file */}
+          {sheetNames.length === 0 && !errorMsg && (
+            <div className="p-3.5 sm:p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                  New to Excel Import? Two Easy Ways to Start:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => downloadSampleExcelTemplate(year, targetPeriod)}
+                  className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download 1-Sheet Sample Template ({targetPeriod} {year})</span>
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[11px] text-slate-600 dark:text-slate-400">
+                <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
+                  <strong className="text-slate-900 dark:text-white block mb-0.5">
+                    Option 1: Use Our Simple 1-Sheet Template
+                  </strong>
+                  Click <strong>Sample Template</strong> to get a single clean table (<code className="font-mono text-[10px]">Type, Category, Item, Estimated, Actual, Payment Method</code>). Fill in your rows and upload it here.
+                </div>
+                <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
+                  <strong className="text-slate-900 dark:text-white block mb-0.5">
+                    Option 2: Upload Your Own Spreadsheet
+                  </strong>
+                  Already have your own Excel or CSV file? Upload it directly—CapitalFlow automatically matches your columns (or lets you pick them).
+                </div>
+              </div>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="p-2.5 sm:p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -270,7 +306,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
 
           {sheetNames.length > 0 && (
             <>
-              {/* Step 1 & 2: Worksheet Tab & Target Period */}
+              {/* Step 1, 2 & Column Customization Bar */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 bg-slate-50 dark:bg-slate-800/60 p-2.5 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                 <div className="min-w-0">
                   <label className="block text-[10px] sm:text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate mb-1">
@@ -317,71 +353,61 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
 
                 <div className="min-w-0">
                   <label className="block text-[10px] sm:text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate mb-1">
-                    3. Format Mode
+                    3. Column Mapping
                   </label>
-                  <div className="flex items-center gap-1 h-8 sm:h-9 bg-white dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                  {parserMode === 'universal' ? (
                     <button
                       type="button"
-                      onClick={() => handleSwitchMode('universal')}
-                      className={`flex-1 h-full rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                        parserMode === 'universal'
-                          ? 'bg-emerald-600 text-white'
-                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      onClick={() => setShowColumnMapper((prev) => !prev)}
+                      className={`w-full h-8 sm:h-9 px-2.5 rounded-lg border font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                        showColumnMapper
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
                       }`}
                     >
-                      Universal Table
+                      <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                      <span>{showColumnMapper ? 'Hide Column Mapper' : 'Customize Columns'}</span>
                     </button>
+                  ) : (
                     <button
                       type="button"
-                      onClick={() => handleSwitchMode('structured')}
-                      className={`flex-1 h-full rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                        parserMode === 'structured'
-                          ? 'bg-emerald-600 text-white'
-                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                      }`}
-                      title="Multi-section sheet with Income and Monthly Expenses blocks"
+                      onClick={() => {
+                        handleSwitchMode('universal');
+                        setShowColumnMapper(true);
+                      }}
+                      className="w-full h-8 sm:h-9 px-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                     >
-                      Multi-Section
+                      <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                      <span>Use Custom Mapper</span>
                     </button>
-                  </div>
+                  )}
                 </div>
               </div>
 
-              {/* Format Detection Banner & Toggle Column Mapper */}
+              {/* Format Detection Banner */}
               <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/70 dark:border-indigo-800/60">
                 <div className="flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-300">
                   <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                   <span>
                     {parserMode === 'structured' ? (
                       <>
-                        Using <strong>Multi-Section Budget Layout</strong> (reads Income &amp; Monthly Expenses blocks automatically).
+                        Auto-detected <strong>Multi-Section Budget Sheet</strong> (reads Income &amp; Expense sections automatically).
                       </>
                     ) : (
                       <>
-                        Using <strong>Universal Table &amp; Column Mapper</strong> — works with any Excel or CSV column layout.
+                        Columns were <strong>auto-matched</strong> from your table. Need to change which column is Item or Amount? Click <strong>Customize Columns</strong>.
                       </>
                     )}
                   </span>
                 </div>
-                {parserMode === 'universal' ? (
+                {detectedStructured && parserMode === 'universal' && (
                   <button
                     type="button"
-                    onClick={() => setShowColumnMapper((prev) => !prev)}
-                    className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                    onClick={() => handleSwitchMode('structured')}
+                    className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 font-semibold text-[11px] cursor-pointer"
                   >
-                    <SlidersHorizontal className="w-3 h-3" />
-                    <span>{showColumnMapper ? 'Hide Column Mapper' : 'Customize Columns'}</span>
+                    Switch to Multi-Section Mode
                   </button>
-                ) : (
-                  !detectedStructured && (
-                    <button
-                      type="button"
-                      onClick={() => handleSwitchMode('universal')}
-                      className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-semibold text-[11px] cursor-pointer"
-                    >
-                      Switch to Universal Column Mapper
-                    </button>
-                  )
                 )}
               </div>
 

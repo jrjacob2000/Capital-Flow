@@ -832,14 +832,23 @@ export const analyzeAndParseWorksheet = (
 };
 
 /**
- * Generates and downloads a clean sample Excel (.xlsx) workbook with both a Simple Universal Table tab
- * and a Multi-Section Budget Layout tab so any user can easily get started.
+ * Builds the rows for the single-sheet Sample Excel Template using dates that match the target year & period.
  */
-export const downloadSampleExcelTemplate = (year: number = 2026, period: string = 'Oct'): void => {
-  const wb = XLSX.utils.book_new();
+export const buildSampleTemplateRows = (
+  year: number = 2026,
+  period: string = 'Oct'
+): (string | number)[][] => {
+  const { defaultDateStr } = resolvePeriodIndexAndDefaultDate(year, period);
+  // Extract YYYY-MM prefix from defaultDateStr (e.g. "2026-10")
+  const yearMonthPrefix = defaultDateStr.slice(0, 7);
+  const isSecondCutoff = period.endsWith('-P2');
+  const d1 = isSecondCutoff ? `${yearMonthPrefix}-16` : `${yearMonthPrefix}-01`;
+  const d2 = isSecondCutoff ? `${yearMonthPrefix}-18` : `${yearMonthPrefix}-05`;
+  const d3 = isSecondCutoff ? `${yearMonthPrefix}-20` : `${yearMonthPrefix}-08`;
+  const d4 = isSecondCutoff ? `${yearMonthPrefix}-22` : `${yearMonthPrefix}-12`;
+  const d5 = isSecondCutoff ? `${yearMonthPrefix}-25` : `${yearMonthPrefix}-15`;
 
-  // Sheet 1: Clean Universal Table Format (Starts in Column A)
-  const simpleTableRows = [
+  return [
     [
       'Type',
       'Category',
@@ -850,47 +859,47 @@ export const downloadSampleExcelTemplate = (year: number = 2026, period: string 
       'Date',
       'Reference / Notes',
     ],
-    ['Income', 'Salary & Wages', 'Monthly Base Salary', 45000, 45000, 'Bank Transfer', `${year}-10-01`, 'Payroll credit'],
-    ['Expense', 'Utilities', 'Meralco Electricity', 3500, 3420, 'GCash Transfer', `${year}-10-05`, 'Bill settled'],
-    ['Expense', 'Utilities', 'Home Fiber Internet', 1699, 1699, 'Credit Card', `${year}-10-08`, 'Auto-charge'],
-    ['Expense', 'Budget', 'Weekly Groceries & Market', 8000, 7650, 'Cash', `${year}-10-12`, 'Supermarket'],
-    ['Savings', 'Savings & Emergency', 'Emergency Fund', 5000, 5000, 'Bank Transfer', `${year}-10-15`, 'Transferred to HYSA'],
+    ['Income', 'Salary & Wages', 'Monthly Base Salary', 45000, 45000, 'Bank Transfer', d1, 'Payroll credit'],
+    ['Expense', 'Utilities', 'Meralco Electricity', 3500, 3420, 'GCash Transfer', d2, 'Bill settled'],
+    ['Expense', 'Utilities', 'Home Fiber Internet', 1699, 1699, 'Credit Card', d3, 'Auto-charge'],
+    ['Expense', 'Daily Living & Essentials', 'Weekly Groceries & Market', 8000, 7650, 'Cash', d4, 'Supermarket'],
+    ['Savings', 'Savings & Emergency', 'Emergency Fund', 5000, 5000, 'Bank Transfer', d5, 'Monthly reserve'],
   ];
-  const wsSimple = XLSX.utils.aoa_to_sheet(simpleTableRows);
-  XLSX.utils.book_append_sheet(wb, wsSimple, `${period}_Simple_Table`);
-
-  // Sheet 2: Structured Multi-Section Budget Format
-  const structuredRows = [
-    ['', '', `${period} ${year} Budget Sheet`],
-    [],
-    ['', '', 'Income', 'Estimated', 'Actual'],
-    ['', '', 'Salary 15th & 30th', 45000, 45000],
-    ['', '', 'Total Income', 45000, 45000],
-    [],
-    [
-      '',
-      'Category',
-      'Item',
-      'Estimated Cost',
-      'Actual Cost',
-      'Stay in ATM',
-      'Cash',
-      'Credit Card',
-      'GCash Transfer',
-      'Kath Account',
-      'Check Account',
-      'Bank Transfer',
-      'Difference',
-      'Status',
-      'Reference',
-    ],
-    ['', 'Utilities', 'Electricity Bill', 3500, 3420, 0, 0, 0, 3420, 0, 0, 0, 80, 'Paid', 'Meralco'],
-    ['', 'Budget', 'Groceries & Allowance', 8000, 7650, 0, 7650, 0, 0, 0, 0, 0, 350, 'Paid', 'Cash withdrawal'],
-    ['', 'Savings', 'Emergency Fund', 5000, 5000, 0, 0, 0, 0, 0, 0, 5000, 0, 'Paid', 'Monthly reserve'],
-    ['', '', 'Expenses Total Summary', 16500, 16070],
-  ];
-  const wsStructured = XLSX.utils.aoa_to_sheet(structuredRows);
-  XLSX.utils.book_append_sheet(wb, wsStructured, `${period}_Multi_Section`);
-
-  XLSX.writeFile(wb, `CapitalFlow_Import_Template_${year}.xlsx`);
 };
+
+/**
+ * Creates a clean, single-worksheet Excel (.xlsx) template workbook so new users never get confused by multiple tabs/formats.
+ */
+export const buildSampleTemplateWorkbook = (
+  year: number = 2026,
+  period: string = 'Oct'
+): XLSX.WorkBook => {
+  const wb = XLSX.utils.book_new();
+  const rows = buildSampleTemplateRows(year, period);
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+
+  // Set readable column widths so headers and values are never truncated in Excel
+  ws['!cols'] = [
+    { wch: 12 }, // Type
+    { wch: 24 }, // Category
+    { wch: 28 }, // Item / Description
+    { wch: 16 }, // Estimated Cost
+    { wch: 16 }, // Actual Cost
+    { wch: 18 }, // Payment Method
+    { wch: 14 }, // Date
+    { wch: 24 }, // Reference / Notes
+  ];
+
+  const safeSheetName = `${period}_${year}`.replace(/[\\/?*[\]:]/g, '_').slice(0, 31);
+  XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
+  return wb;
+};
+
+/**
+ * Generates and downloads a single-sheet sample Excel (.xlsx) template for the selected period and year.
+ */
+export const downloadSampleExcelTemplate = (year: number = 2026, period: string = 'Oct'): void => {
+  const wb = buildSampleTemplateWorkbook(year, period);
+  XLSX.writeFile(wb, `CapitalFlow_Import_Template_${period}_${year}.xlsx`);
+};
+
