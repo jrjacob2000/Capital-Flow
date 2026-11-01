@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   PiggyBank,
   HandCoins,
+  BookOpen,
 } from 'lucide-react';
 import { EntryFrequency, DriveSyncStatus, APP_VERSION } from '../types/finance';
 
@@ -24,8 +25,8 @@ interface HeaderProps {
   onAddNewYear: () => void;
   frequency: EntryFrequency;
   onChangeFrequency: (freq: EntryFrequency) => void;
-  activeTab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive';
-  onSelectTab: (tab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive') => void;
+  activeTab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive' | 'help';
+  onSelectTab: (tab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive' | 'help') => void;
   driveStatus: DriveSyncStatus;
   onSignInWithGoogle: () => void;
   onSignOut: () => void;
@@ -153,6 +154,17 @@ export const Header: React.FC<HeaderProps> = ({
                     title="Local changes not yet synced to Google Drive"
                   />
                 )}
+              </button>
+              <button
+                onClick={() => onSelectTab('help')}
+                className={`px-2.5 lg:px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === 'help'
+                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Guide</span>
               </button>
             </nav>
 
@@ -424,7 +436,7 @@ export const Header: React.FC<HeaderProps> = ({
         aria-label="Mobile Primary Navigation"
         className="fixed bottom-0 left-0 right-0 z-40 md:hidden bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_16px_rgba(0,0,0,0.06)] pb-[env(safe-area-inset-bottom)] transform-gpu will-change-transform after:content-[''] after:absolute after:inset-x-0 after:top-full after:h-24 after:bg-white dark:after:bg-slate-900 after:pointer-events-none"
       >
-        <div className="grid grid-cols-5 items-center h-16 px-1">
+        <div className="grid grid-cols-6 items-center h-16 px-1">
           <button
             type="button"
             onClick={() => onSelectTab('dashboard')}
@@ -435,7 +447,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             {activeTab === 'dashboard' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
+              <span className="absolute top-0 inset-x-3 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
             )}
             <LayoutDashboard className="w-5 h-5" />
             <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Dashboard</span>
@@ -451,7 +463,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             {activeTab === 'budget' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
+              <span className="absolute top-0 inset-x-3 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
             )}
             <FileSpreadsheet className="w-5 h-5" />
             <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Budget</span>
@@ -467,7 +479,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             {activeTab === 'savings' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
+              <span className="absolute top-0 inset-x-3 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
             )}
             <PiggyBank className="w-5 h-5" />
             <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Funds</span>
@@ -483,7 +495,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             {activeTab === 'loans' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
+              <span className="absolute top-0 inset-x-3 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
             )}
             <HandCoins className="w-5 h-5" />
             <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Loans</span>
@@ -499,7 +511,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             {activeTab === 'drive' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
+              <span className="absolute top-0 inset-x-3 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
             )}
             <div className="relative">
               <Cloud className="w-5 h-5" />
@@ -508,6 +520,22 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </div>
             <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Drive</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectTab('help')}
+            className={`relative flex flex-col items-center justify-center h-full min-h-[48px] transition-colors cursor-pointer ${
+              activeTab === 'help'
+                ? 'text-indigo-600 dark:text-indigo-400 font-bold'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-medium'
+            }`}
+          >
+            {activeTab === 'help' && (
+              <span className="absolute top-0 inset-x-3 h-0.5 rounded-b-full bg-indigo-600 dark:bg-indigo-400" />
+            )}
+            <BookOpen className="w-5 h-5" />
+            <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Guide</span>
           </button>
         </div>
       </nav>

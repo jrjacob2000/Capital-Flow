@@ -44,6 +44,7 @@ import { BudgetEntryView } from './components/BudgetEntryView';
 import { SavingsLedgerView } from './components/SavingsLedgerView';
 import { LoansView } from './components/LoansView';
 import { DriveFilesManagerView } from './components/DriveFilesManagerView';
+import { HelpGuideView } from './components/HelpGuideView';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { DriveConflictModal, DriveConflictDetail } from './components/DriveConflictModal';
 import { DriveSessionExpiredModal } from './components/DriveSessionExpiredModal';
@@ -61,7 +62,7 @@ export default function App() {
   const [currentYear, setCurrentYear] = useState<number>(2026);
   const [availableYears, setAvailableYears] = useState<number[]>([2026, 2025]);
   const [frequency, setFrequency] = useState<EntryFrequency>('monthly');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'budget' | 'savings' | 'loans' | 'drive'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'budget' | 'savings' | 'loans' | 'drive' | 'help'>('dashboard');
 
   // Core Financial Data
   const [budget, setBudget] = useState<YearBudgetData>(() =>
@@ -3286,6 +3287,16 @@ export default function App() {
             onOrganizeDriveFolder={triggerOrganizeDriveFolder}
           />
         )}
+
+        {activeTab === 'help' && (
+          <HelpGuideView
+            onNavigateTab={setActiveTab}
+            currentYear={currentYear}
+            frequency={frequency}
+            onChangeFrequency={setFrequency}
+            currencySymbol="₱"
+          />
+        )}
       </main>
 
       {/* Footer */}
@@ -3298,6 +3309,17 @@ export default function App() {
             </span>
             <span>&bull;</span>
             <span>Google Drive Folder: /{CAPITALFLOW_DRIVE_FOLDER_NAME}/</span>
+            <span>&bull;</span>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('help');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="underline hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+            >
+              User Guide &amp; Help
+            </button>
             <span>&bull;</span>
             <a
               href="./privacy.html"
