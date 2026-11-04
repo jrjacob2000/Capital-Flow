@@ -12,6 +12,11 @@ import {
   computeLoanMetrics,
   parseDateToYearAndPeriod,
   buildAutoFillPeriodEntries,
+  resolveTemplateBudgetVisibility,
+  applyTemplateBudgetVisibility,
+  shouldTemplateDisplayInBudget,
+  getPeriodItemExclusionKeys,
+  isTemplateExcludedInPeriod,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -21,6 +26,7 @@ import {
   normalizeCategoryWording,
   deriveCategoryBudgetsFromTemplates,
   stripDefaultStarterTemplates,
+  isDefaultStarterBudget,
 } from '../services/sampleData';
 import { FinanceStorageService } from '../services/storageService';
 import {
@@ -1596,6 +1602,457 @@ describe('18. Projected Net, Sorting Tie-Breakers & Category Deduplication', () 
   });
 });
 
+describe('19. Template Budget Display & Optionality (Displayed / Optional / Not Displayed)', () => {
+  it('resolves and applies template visibility modes while preserving backward compatibility', () => {
+    const regularExpense: BudgetItemTemplate = {
+      id: 'tpl-exp',
+      type: 'expense',
+      category: 'Utilities',
+      item: 'Meralco Bill',
+      defaultEstimatedCost: 3500,
+    };
+    const irregularIncome: BudgetItemTemplate = {
+      id: 'tpl-bonus',
+      type: 'income',
+      category: 'Bonus',
+      item: '13th Month Bonus',
+      defaultEstimatedCost: 40000,
+    };
 
+    // Default behavior when showInBudget & isOptional are undefined:
+    assert.equal(resolveTemplateBudgetVisibility(regularExpense), 'displayed');
+    assert.equal(shouldTemplateDisplayInBudget(regularExpense), true);
+    assert.equal(resolveTemplateBudgetVisibility(irregularIncome), 'hidden');
+    assert.equal(shouldTemplateDisplayInBudget(irregularIncome), false);
+
+    // Explicitly marking an item as Optional:
+    const optionalExpense = applyTemplateBudgetVisibility(regularExpense, 'optional');
+    assert.equal(optionalExpense.showInBudget, true);
+    assert.equal(optionalExpense.isOptional, true);
+    assert.equal(resolveTemplateBudgetVisibility(optionalExpense), 'optional');
+    assert.equal(shouldTemplateDisplayInBudget(optionalExpense, true), true);
+    assert.equal(shouldTemplateDisplayInBudget(optionalExpense, false), false);
+
+    // Explicitly marking an item as Hidden (Not Displayed):
+    const hiddenExpense = applyTemplateBudgetVisibility(optionalExpense, 'hidden');
+    assert.equal(hiddenExpense.showInBudget, false);
+    assert.equal(hiddenExpense.isOptional, false);
+    assert.equal(resolveTemplateBudgetVisibility(hiddenExpense), 'hidden');
+    assert.equal(shouldTemplateDisplayInBudget(hiddenExpense, true), false);
+
+    // Explicitly enabling an irregular income item to Display in budget:
+    const displayedBonus = applyTemplateBudgetVisibility(irregularIncome, 'displayed');
+    assert.equal(resolveTemplateBudgetVisibility(displayedBonus), 'displayed');
+    assert.equal(shouldTemplateDisplayInBudget(displayedBonus, true), true);
+  });
+
+  it('excludes Not Displayed templates from auto-fill and category budget targets while tagging Optional items', () => {
+    const templates: BudgetItemTemplate[] = [
+      {
+        id: 'tpl-1',
+        type: 'expense',
+        category: 'Utilities',
+        item: 'Electricity',
+        defaultEstimatedCost: 3000,
+        frequency: 'monthly',
+        showInBudget: true,
+        isOptional: false,
+      },
+      {
+        id: 'tpl-2',
+        type: 'expense',
+        category: 'Lifestyle',
+        item: 'Weekend Dining Out',
+        defaultEstimatedCost: 1500,
+        frequency: 'monthly',
+        showInBudget: true,
+        isOptional: true,
+      },
+      {
+        id: 'tpl-3',
+        type: 'expense',
+        category: 'Travel',
+        item: 'Holiday Flight',
+        defaultEstimatedCost: 12000,
+        frequency: 'monthly',
+        showInBudget: false,
+        isOptional: false,
+      },
+    ];
+
+    // 1. Auto-fill with includeOptional = true (default): includes Displayed + Optional, skips Hidden
+    const autoFillWithOptional = buildAutoFillPeriodEntries(
+      templates,
+      [],
+      2026,
+      'Oct',
+      'monthly',
+      [],
+      isTemplateValidForPeriod,
+      { includeOptional: true }
+    );
+    assert.equal(autoFillWithOptional.validTemplatesCount, 2);
+    assert.equal(autoFillWithOptional.newEntries.length, 2);
+    assert.equal(autoFillWithOptional.newEntries[0].item, 'Electricity');
+    assert.equal(autoFillWithOptional.newEntries[0].isOptional, false);
+    assert.equal(autoFillWithOptional.newEntries[1].item, 'Weekend Dining Out');
+    assert.equal(autoFillWithOptional.newEntries[1].isOptional, true);
+
+    // 2. Auto-fill with includeOptional = false: includes only Displayed, skips Optional & Hidden
+    const autoFillRequiredOnly = buildAutoFillPeriodEntries(
+      templates,
+      [],
+      2026,
+      'Oct',
+      'monthly',
+      [],
+      isTemplateValidForPeriod,
+      { includeOptional: false }
+    );
+    assert.equal(autoFillRequiredOnly.validTemplatesCount, 1);
+    assert.equal(autoFillRequiredOnly.newEntries.length, 1);
+    assert.equal(autoFillRequiredOnly.newEntries[0].item, 'Electricity');
+
+    // 3. deriveCategoryBudgetsFromTemplates skips Hidden ('showInBudget: false') templates
+    const catBudgets = deriveCategoryBudgetsFromTemplates(templates);
+    assert.equal(catBudgets.find((c) => c.category === 'Utilities')?.plannedAmount, 3000);
+    assert.equal(catBudgets.find((c) => c.category === 'Lifestyle')?.plannedAmount, 1500);
+    assert.equal(catBudgets.find((c) => c.category === 'Travel'), undefined);
+  });
+});
+
+describe('20. Per-Period Budget Item Deletion & Restoration (deleteBudgetPeriodItem & restoreExcludedPeriodItems)', () => {
+  it('deletes an entire item (recorded entry + virtual template row) for a specific period while leaving other periods and master templates intact', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const accId = ledger.accounts[0].id;
+    ledger.initialCapital = 10000;
+    ledger.accounts[0].balance = 10000;
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    budget.itemTemplates = [
+      {
+        id: 'tpl-ef',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        defaultEstimatedCost: 4000,
+        frequency: 'monthly',
+        defaultSavingAccountId: accId,
+      },
+      {
+        id: 'tpl-net',
+        type: 'expense',
+        category: 'Utilities',
+        item: 'Home Fiber Internet',
+        defaultEstimatedCost: 1899,
+        frequency: 'monthly',
+      },
+    ];
+    FinanceStorageService.saveLocalBudget(budget);
+
+    // 1. Record a Paid saving entry in Oct for Emergency Fund (+4,000 to savings account)
+    const octAdded = FinanceStorageService.addMultipleBudgetEntries(budget, [
+      {
+        year: 2026,
+        period: 'Oct',
+        periodIndex: 9,
+        date: '2026-10-05',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        estimatedCost: 4000,
+        actualCost: 4000,
+        amount: 4000,
+        status: 'Paid',
+        savingAccountId: accId,
+        savingAccountName: ledger.accounts[0].name,
+        description: 'Emergency Fund',
+      },
+    ]);
+    assert.equal(octAdded.ledger.accounts[0].balance, 14000);
+    assert.equal(octAdded.budget.entries.length, 1);
+
+    // 2. Delete 'Emergency Fund' in Oct via deleteBudgetPeriodItem:
+    //    - Removes the recorded Oct entry
+    //    - Rolls back the +4,000 savings ledger transaction (balance returns to 10,000)
+    //    - Marks 'Emergency Fund' as excluded in Oct so its virtual template row also disappears in Oct
+    const octEntryId = octAdded.budget.entries[0].id;
+    const afterDeleteRecorded = FinanceStorageService.deleteBudgetPeriodItem(
+      octAdded.budget,
+      'Oct',
+      {
+        entryId: octEntryId,
+        templateId: 'tpl-ef',
+        type: 'saving',
+        item: 'Emergency Fund',
+      }
+    );
+    assert.equal(afterDeleteRecorded.budget.entries.length, 0);
+    assert.equal(afterDeleteRecorded.ledger.accounts[0].balance, 10000);
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        budget.itemTemplates[0],
+        'Oct',
+        afterDeleteRecorded.budget.excludedPeriodItems
+      ),
+      true
+    );
+    // In Nov, 'Emergency Fund' is NOT excluded!
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        budget.itemTemplates[0],
+        'Nov',
+        afterDeleteRecorded.budget.excludedPeriodItems
+      ),
+      false
+    );
+
+    // 3. Delete unrecorded virtual template row 'Home Fiber Internet' in Oct
+    const afterDeleteVirtual = FinanceStorageService.deleteBudgetPeriodItem(
+      afterDeleteRecorded.budget,
+      'Oct',
+      {
+        templateId: 'tpl-net',
+        type: 'expense',
+        item: 'Home Fiber Internet',
+      }
+    );
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        budget.itemTemplates[1],
+        'Oct',
+        afterDeleteVirtual.budget.excludedPeriodItems
+      ),
+      true
+    );
+
+    // 4. Auto-fill in Oct skips both excluded templates, while Auto-fill in Nov includes both!
+    const autoFillOct = buildAutoFillPeriodEntries(
+      budget.itemTemplates,
+      afterDeleteVirtual.budget.entries,
+      2026,
+      'Oct',
+      'monthly',
+      [],
+      isTemplateValidForPeriod,
+      { excludedPeriodItems: afterDeleteVirtual.budget.excludedPeriodItems }
+    );
+    assert.equal(autoFillOct.validTemplatesCount, 0);
+    assert.equal(autoFillOct.newEntries.length, 0);
+
+    const autoFillNov = buildAutoFillPeriodEntries(
+      budget.itemTemplates,
+      afterDeleteVirtual.budget.entries,
+      2026,
+      'Nov',
+      'monthly',
+      [],
+      isTemplateValidForPeriod,
+      { excludedPeriodItems: afterDeleteVirtual.budget.excludedPeriodItems }
+    );
+    assert.equal(autoFillNov.validTemplatesCount, 2);
+    assert.equal(autoFillNov.newEntries.length, 2);
+
+    // 5. Restore excluded items in Oct -> both templates are active in Oct again
+    const restoredOct = FinanceStorageService.restoreExcludedPeriodItems(
+      afterDeleteVirtual.budget,
+      'Oct'
+    );
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        budget.itemTemplates[0],
+        'Oct',
+        restoredOct.excludedPeriodItems
+      ),
+      false
+    );
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        budget.itemTemplates[1],
+        'Oct',
+        restoredOct.excludedPeriodItems
+      ),
+      false
+    );
+    assert.equal(
+      getPeriodItemExclusionKeys({
+        type: 'expense',
+        item: 'Home Fiber Internet',
+        templateId: 'tpl-net',
+      }).length,
+      2
+    );
+  });
+
+  it('clears all template/loan exclusion keys when re-adding via addMultipleBudgetEntries or recordLoanPayment, and avoids stale exclusions for hidden templates', () => {
+    memoryStorage.clear();
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+
+    const loanRecord: LoanRecord = {
+      id: 'loan-car-1',
+      name: 'Auto Loan',
+      direction: 'borrowed',
+      counterparty: 'BPI Auto',
+      category: 'Vehicle Loan',
+      principalAmount: 100000,
+      totalContractAmount: 120000,
+      installmentAmount: 5000,
+      totalInstallments: 24,
+      initialPaidAmount: 0,
+      initialInstallmentsPaid: 0,
+      frequency: 'monthly',
+      startDate: '2026-01-01',
+      status: 'active',
+      payments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const syncedLoan = FinanceStorageService.saveLoanContract(loanRecord, budget, 'monthly', {
+      syncToTemplate: true,
+    });
+    const activeBudget = syncedLoan.budget;
+
+    // Add a hidden irregular bonus template (13th Month & Bonuses with 0 default estimate -> hidden from sheet by default)
+    const bonusTpl: BudgetItemTemplate = {
+      id: 'tpl-bonus-hidden',
+      type: 'income',
+      category: '13th Month & Bonuses',
+      item: '13th Month Bonus',
+      defaultEstimatedCost: 0,
+      frequency: 'monthly',
+      biweeklyPeriod: 'both',
+      showInBudget: false,
+    };
+    activeBudget.itemTemplates = [...(activeBudget.itemTemplates || []), bonusTpl];
+    FinanceStorageService.saveLocalBudget(activeBudget);
+
+    const autoLoanTpl = activeBudget.itemTemplates.find((t) => t.loanId === 'loan-car-1')!;
+    assert.ok(autoLoanTpl);
+
+    // 1. Delete 'Auto Loan' from Oct -> excluded in Oct
+    const afterDeleteLoanInOct = FinanceStorageService.deleteBudgetPeriodItem(
+      activeBudget,
+      'Oct',
+      {
+        templateId: autoLoanTpl.id,
+        type: 'expense',
+        item: 'Auto Loan',
+        loanId: 'loan-car-1',
+      }
+    );
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        autoLoanTpl,
+        'Oct',
+        afterDeleteLoanInOct.budget.excludedPeriodItems
+      ),
+      true
+    );
+
+    // Verify isDefaultStarterBudget detects excludedPeriodItems even if isDefaultStarterData is undefined
+    assert.equal(
+      isDefaultStarterBudget({
+        ...afterDeleteLoanInOct.budget,
+        isDefaultStarterData: undefined,
+      }),
+      false
+    );
+
+    // 2. Record a loan payment for 'Auto Loan' in Oct with recordInBudget: true -> automatically clears tpl:, item:, and loan: exclusions in Oct!
+    const afterRecordLoan = FinanceStorageService.recordLoanPayment(
+      'loan-car-1',
+      {
+        date: '2026-10-15',
+        amount: 5000,
+        note: 'Oct Auto Loan Payment',
+        recordInBudget: true,
+      },
+      afterDeleteLoanInOct.budget,
+      'monthly'
+    );
+    const budgetAfterLoanPay = afterRecordLoan.updatedActiveBudget!;
+    assert.ok(budgetAfterLoanPay);
+    assert.equal(
+      isTemplateExcludedInPeriod(
+        autoLoanTpl,
+        'Oct',
+        budgetAfterLoanPay.excludedPeriodItems
+      ),
+      false
+    );
+
+    // 3. Delete 'Auto Loan' from Nov, then re-add via addMultipleBudgetEntries (without explicit templateId) -> clears tpl: exclusion key too!
+    const afterDeleteNov = FinanceStorageService.deleteBudgetPeriodItem(
+      budgetAfterLoanPay,
+      'Nov',
+      {
+        templateId: autoLoanTpl.id,
+        type: 'expense',
+        item: 'Auto Loan',
+        loanId: 'loan-car-1',
+      }
+    );
+    assert.equal(
+      isTemplateExcludedInPeriod(autoLoanTpl, 'Nov', afterDeleteNov.budget.excludedPeriodItems),
+      true
+    );
+
+    const afterBatchReAdd = FinanceStorageService.addMultipleBudgetEntries(afterDeleteNov.budget, [
+      {
+        year: 2026,
+        period: 'Nov',
+        periodIndex: 10,
+        date: '2026-11-15',
+        type: 'expense',
+        category: 'Loans',
+        item: 'Auto Loan',
+        estimatedCost: 5000,
+        actualCost: 5000,
+        amount: 5000,
+        status: 'Paid',
+        description: 'Auto Loan',
+      },
+    ]);
+    assert.equal(
+      isTemplateExcludedInPeriod(autoLoanTpl, 'Nov', afterBatchReAdd.budget.excludedPeriodItems),
+      false
+    );
+
+    // 4. Record a one-off entry for the hidden '13th Month Bonus' template in Dec, then delete it -> removes the entry without adding stale exclusion keys
+    const afterAddBonus = FinanceStorageService.addMultipleBudgetEntries(afterBatchReAdd.budget, [
+      {
+        year: 2026,
+        period: 'Dec',
+        periodIndex: 11,
+        date: '2026-12-10',
+        type: 'income',
+        category: '13th Month & Bonuses',
+        item: '13th Month Bonus',
+        estimatedCost: 25000,
+        actualCost: 25000,
+        amount: 25000,
+        status: 'Paid',
+        description: '13th Month Bonus',
+      },
+    ]);
+    const bonusEntry = afterAddBonus.budget.entries.find((e) => e.period === 'Dec')!;
+    const afterDeleteBonus = FinanceStorageService.deleteBudgetPeriodItem(
+      afterAddBonus.budget,
+      'Dec',
+      {
+        entryId: bonusEntry.id,
+        type: 'income',
+        item: '13th Month Bonus',
+      }
+    );
+    assert.equal(
+      afterDeleteBonus.budget.entries.some((e) => e.period === 'Dec'),
+      false
+    );
+    assert.equal(afterDeleteBonus.excludedTemplate, false);
+    assert.equal(afterDeleteBonus.budget.excludedPeriodItems?.['Dec'], undefined);
+  });
+});
 
 

@@ -52,6 +52,7 @@ type GuideSectionId =
   | 'all'
   | 'quickstart'
   | 'glossary'
+  | 'cards'
   | 'dashboard'
   | 'budget'
   | 'funds'
@@ -219,6 +220,30 @@ const FAQ_ITEMS: FaqItem[] = [
     actionLabel: 'Manage Annual Files',
     actionTab: 'drive',
   },
+  {
+    id: 'faq-delete-period-item',
+    category: 'budget',
+    categoryLabel: 'Budget & Cutoffs',
+    question: 'What happens when I click the Delete (Trash) button on an item in the Budget sheet?',
+    answer:
+      'Deleting an item on the Budget sheet removes the entire item—both any recorded entry and its virtual template estimate row—for that specific period only (e.g., Oct or May-P1). If the deleted entry had a linked Sinking Fund deposit or Loan payment, that transaction is rolled back automatically. All other periods and your master Recurring Estimate Template remain untouched. If you change your mind, click the "Restore Deleted (X)" button in the filter bar to bring it back for that period.',
+    formulaOrExample:
+      'Delete on Budget Row → Removed for Selected Period Only  |  Click "Restore Deleted (X)" → Restored',
+    actionLabel: 'Open Budget Sheet',
+    actionTab: 'budget',
+  },
+  {
+    id: 'faq-remaining-vs-projected',
+    category: 'cards',
+    categoryLabel: 'Card Explanations',
+    question: 'On the "Remaining to Salary" card, what is the difference between the main number and "Projected net"?',
+    answer:
+      'The main number on the "Remaining to Salary" card shows your current settled cash position (Settled Income minus Settled Outflows so far in the period). "Projected net" looks ahead to the end of the period by combining already-settled actuals with the Planned Estimates of any items still marked Pending—showing how much money will be left once every remaining bill in the period is paid.',
+    formulaOrExample:
+      'Main Value = Settled Income − Settled Outflows  |  Projected Net = (Settled + Pending Income) − (Settled + Pending Outflows)',
+    actionLabel: 'View Budget Summary Cards',
+    actionTab: 'budget',
+  },
 ];
 
 export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
@@ -234,11 +259,12 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeSection, setActiveSection] = useState<GuideSectionId>('all');
+  const [cardGuideScreen, setCardGuideScreen] = useState<'all' | 'dashboard' | 'budget' | 'funds' | 'loans'>('all');
   const [expandedFaqs, setExpandedFaqs] = useState<Record<string, boolean>>({
     'faq-new-user-blank': true,
     'faq-excel-import': true,
     'faq-pending-vs-paid': true,
-    'faq-messenger-browser': true,
+    'faq-remaining-vs-projected': true,
   });
 
   const toggleFaq = (id: string) => {
@@ -274,6 +300,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
     { id: 'all', label: 'All Topics' },
     { id: 'quickstart', label: 'New User Start' },
     { id: 'glossary', label: '5 Golden Rules' },
+    { id: 'cards', label: 'Card-by-Card Guide' },
     { id: 'budget', label: 'Budget, Excel & Split' },
     { id: 'dashboard', label: 'Dashboard & Cashflow' },
     { id: 'funds', label: 'Funds & Earmarked' },
@@ -604,6 +631,509 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
           </div>
         </section>
       )}
+
+      {/* 2B. COMPLETE CARD-BY-CARD GUIDE (EVERY CARD ACROSS ALL SCREENS EXPLAINED) */}
+      {(activeSection === 'all' ||
+        activeSection === 'cards' ||
+        activeSection === 'dashboard' ||
+        activeSection === 'budget' ||
+        activeSection === 'funds' ||
+        activeSection === 'loans') &&
+        (!normalizedQuery ||
+          'card by card explanation meaning formula dashboard total savings true net worth assigned to goal funds unassigned cash emergency runway remaining debt receivables full year cashflow year to date income paid expenses moved to savings remaining cash top funds accounts active loans analytics chart budget income outflow remaining to salary projected net payment channel subtotals restore deleted sinking fund general reserves compound growth projector borrowed i owe lent owed to me paid and collected net loan position'.includes(
+            normalizedQuery
+          )) && (
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                    Card-by-Card Visual Guide (What Every Card Means &amp; How It Is Calculated)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Plain-English explanation and exact formula for every summary card across Dashboard, Budget, Funds, and Loans
+                  </p>
+                </div>
+              </div>
+
+              {/* Screen Filter Pills inside the Card Guide */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                {(
+                  [
+                    { id: 'all', label: 'All Screens (25 Cards)' },
+                    { id: 'dashboard', label: 'Dashboard Cards' },
+                    { id: 'budget', label: 'Budget Cards' },
+                    { id: 'funds', label: 'Funds Cards' },
+                    { id: 'loans', label: 'Loans Cards' },
+                  ] as const
+                ).map((pill) => {
+                  const isSelected =
+                    activeSection === 'dashboard' ||
+                    activeSection === 'budget' ||
+                    activeSection === 'funds' ||
+                    activeSection === 'loans'
+                      ? activeSection === pill.id
+                      : cardGuideScreen === pill.id;
+                  return (
+                    <button
+                      key={pill.id}
+                      type="button"
+                      onClick={() => {
+                        if (
+                          activeSection === 'dashboard' ||
+                          activeSection === 'budget' ||
+                          activeSection === 'funds' ||
+                          activeSection === 'loans'
+                        ) {
+                          setActiveSection('cards');
+                        }
+                        setCardGuideScreen(pill.id);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-2xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-700/70'
+                      }`}
+                    >
+                      {pill.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* A. DASHBOARD CARDS */}
+            {((activeSection === 'all' || activeSection === 'cards')
+              ? cardGuideScreen === 'all' || cardGuideScreen === 'dashboard'
+              : activeSection === 'dashboard') && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <LayoutDashboard className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      A. Dashboard Screen Cards
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('dashboard')}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Open Dashboard</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      HERO BANNER CARD
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Total Savings &amp; True Net Worth
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      <strong>Total Savings</strong> sums the current balances of all your physical bank and e-wallet accounts, plus net growth (<code className="font-mono">+%</code>) since your starting capital. <strong>True Net Worth</strong> adjusts that total by adding money owed to you (Receivables) and subtracting unpaid Borrowed Debt.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      True Net Worth = Total Savings + Receivables − Debt
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      PILLAR CARD 1
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Assigned to Goal Funds
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Shows how much of your total bank savings is already earmarked (reserved) inside named Sinking Funds such as your <em>Emergency Fund</em>, <em>Travel Fund</em>, or <em>Tuition</em>, along with the count of active goal funds.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Sum of all named Sinking Fund balances
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-amber-600 dark:text-amber-400">
+                      PILLAR CARD 2
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Unassigned Cash
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      The portion of your physical bank balance that is <strong>not yet locked into any Sinking Fund goal</strong>. This is your general reserve that you can freely assign to new goals without touching dedicated funds.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Total Savings − Assigned to Goal Funds
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      PILLAR CARD 3
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Emergency Runway
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Measures how many months your Emergency Fund (or liquid reserves) can sustain your average monthly expenses if income stops. Rated as <strong>Critical</strong> (&lt;1 mo), <strong>Building</strong> (1–3 mo), <strong>Solid</strong> (3–6 mo), or <strong>Fortress</strong> (6+ mo).
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Emergency Reserve ÷ Avg Monthly Spend
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                      PILLAR CARD 4
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Remaining Debt / Receivables
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Displays your total remaining unpaid balance across active <strong>Borrowed Loans</strong> (plus your monthly installment commitment). If you have no debt, it shows your active <strong>Lent Receivables</strong> owed to you.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Total Contract − (Initial Paid + Recorded Payments)
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      FULL-YEAR PULSE STRIP (4 CARDS)
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      YTD Income, Paid Expenses, Moved to Savings &amp; Remaining Cash
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Tracks settled (<code className="font-mono">Paid</code>) totals across the entire {currentYear} year: <strong>YTD Income</strong> received, <strong>Paid Expenses</strong>, <strong>Moved to Savings</strong> (with Savings Rate <code className="font-mono">%</code>), and <strong>Remaining Cash</strong> (<code className="font-mono">Leftover</code> vs. <code className="font-mono">Over Budget</code>).
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Remaining = YTD Income − Paid Expenses − Savings
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      PRIORITY SNAPSHOT CARDS
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Top Funds / Accounts &amp; Active Loans Lists
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      The left card toggles between your top 5 <strong>Goal Funds</strong> (with goal target <code className="font-mono">%</code>) and your physical <strong>Bank Accounts</strong> (with share of capital). The right card lists active loans and receivables sorted by highest remaining balance.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Click any row to jump to Funds or Loans
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      3-TAB VISUAL ANALYTICS CARD
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Cashflow, Categories &amp; Capital Growth Charts
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      <strong>Cashflow</strong> compares Income, Expenses, and Savings per period; <strong>Categories</strong> breaks down Expense, Funds, or Income shares in a donut chart; <strong>Capital Growth</strong> plots your cumulative ledger balance over time.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Charts include settled (Paid) entries only
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* B. BUDGET & ENTRIES CARDS */}
+            {((activeSection === 'all' || activeSection === 'cards')
+              ? cardGuideScreen === 'all' || cardGuideScreen === 'budget'
+              : activeSection === 'budget') && (
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      B. Budget &amp; Entries Screen Cards
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('budget')}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Open Budget Sheet</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      PERIOD SUMMARY CARD 1
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Income (Selected Period)
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Shows total settled (<code className="font-mono">Received</code>) income for the active month or bi-weekly cutoff. Before any income is marked received, it displays your Planned Estimate <code className="font-mono">(Est)</code> so you can plan ahead, with <code className="font-mono">Est</code> vs. <code className="font-mono">Act</code> underneath.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                      PERIOD SUMMARY CARD 2
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Outflow &amp; Funds (Selected Period)
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Shows the combined total of settled (<code className="font-mono">Paid</code>) expenses, bills, loan installments, and savings allocations for the selected period (or the Planned Estimate total before bills are paid), with <code className="font-mono">Est</code> vs. <code className="font-mono">Act</code> comparison.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-teal-600 dark:text-teal-400">
+                      PERIOD SUMMARY CARD 3
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Remaining to Salary &amp; Projected Net
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      The large headline number shows your <strong>current remaining cash</strong> (<code className="font-mono">Received Income − Paid Outflows</code>). Beneath it, <strong>Projected net</strong> combines already-paid actuals with remaining unpaid estimates so you know your end-of-period surplus or deficit in advance.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      INCOME SOURCES CARD
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Collapsible Income Section &amp; Carry Over Surplus
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Lists your salary and extra income for the period. Once every income item is marked <code className="font-mono">Received</code>, the card can collapse into a single summary bar to save screen space. If a prior period had leftover cash, a <strong>Carry Over Surplus</strong> button appears here.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      STICKY CONTROL &amp; LIVE PILL CARD
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Status Filters, Restore Deleted &amp; Live In/Out/Left Readout
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Filter outflows by <code className="font-mono">All</code>, <code className="font-mono">Pending</code>, <code className="font-mono">Paid</code>, or <code className="font-mono">Funds</code>, search by keyword, or sort by any column. If you deleted any item in the current period, a <strong>Restore Deleted (X)</strong> button appears here to restore it.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      PAYMENT CHANNEL SUBTOTAL CARDS (6 CHANNELS)
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Cash, Credit Card, GCash, Kath, Check &amp; Bank Transfer
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Displays the exact settled outflow for each of the 6 payment channels (including split payments). <strong>Tap any channel card</strong> to filter the expense list to only bills paid via that account or payment method.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* C. FUNDS & ACCOUNTS CARDS */}
+            {((activeSection === 'all' || activeSection === 'cards')
+              ? cardGuideScreen === 'all' || cardGuideScreen === 'funds'
+              : activeSection === 'funds') && (
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <PiggyBank className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      C. Funds &amp; Accounts Screen Cards
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('savings')}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Open Funds &amp; Accounts</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      CAPITAL &amp; MILESTONE HEADER CARD
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Total Bank &amp; Wallet Savings + Milestone Bar
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Shows your combined balance across all physical bank and e-wallet accounts, your progress (<code className="font-mono">%</code>) toward your next capital milestone, and 4 quick-action buttons: <strong>Deposit</strong>, <strong>Withdraw</strong>, <strong>Transfer</strong> (between banks), and <strong>Reallocate</strong> (between goals).
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      4-METRIC CAPITAL STRIP
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Assigned to Goal Funds, Added from Budget, Interest &amp; Withdrawn
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Breaks down your ledger history into 4 lifetime totals: <strong>Assigned to Goal Funds</strong> (earmarked), <strong>Added from Budget</strong> (auto-synced when Budget savings items are marked Paid), <strong>Interest Earned</strong> (yields/dividends), and <strong>Total Withdrawn</strong>.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      SINKING FUND GOAL CARDS (FUNDS TAB)
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Individual Goal Envelopes &amp; Where Held Badges
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Each card represents a dedicated savings goal (e.g., <em>Emergency Fund</em>, <em>Travel</em>), showing its current net balance (<code className="font-mono">Added − Used</code>), share of total capital, annual target progress bar, and <strong>Where Held</strong> tags showing which physical bank account(s) hold that fund.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-slate-600 dark:text-slate-400">
+                      UNALLOCATED POOL CARD (FUNDS TAB)
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      General Reserves / Starting Capital Card
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Automatically displays any cash sitting in your physical bank accounts that has not yet been assigned to a specific Sinking Fund. Click <strong>Assign to a Goal Fund</strong> on this card to earmark part or all of it into a named goal.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      BANK &amp; WALLET CARDS (ACCOUNTS TAB)
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Physical Account Cards &amp; Fund Allocation Breakdown
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Each card represents a real bank or digital wallet account, displaying its current balance, APY interest rate, share of total capital, and an internal breakdown of which Sinking Funds are stored inside that specific bank account.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-amber-600 dark:text-amber-400">
+                      HISTORY &amp; GROWTH PROJECTOR CARDS
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Chronological Audit Log &amp; Compound Simulator
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      <strong>History</strong> lists every deposit, withdrawal, transfer, and reallocation with a chronological <code className="font-mono">Running Total Capital</code> column. <strong>Growth Projector</strong> simulates future compound interest growth based on your monthly contribution, APY, and time horizon.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* D. LOANS & RECEIVABLES CARDS */}
+            {((activeSection === 'all' || activeSection === 'cards')
+              ? cardGuideScreen === 'all' || cardGuideScreen === 'loans'
+              : activeSection === 'loans') && (
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <HandCoins className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      D. Loans &amp; Receivables Screen Cards
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('loans')}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Open Loans &amp; Receivables</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                      LOANS KPI CARD 1
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Borrowed (I Owe)
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Total remaining unpaid balance across all active borrowed loans (mortgages, car loans, credit card installments, personal loans), plus the number of active contracts and your combined monthly payment commitment.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      LOANS KPI CARD 2
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Lent (Owed to Me)
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Total remaining uncollected balance across all active receivables (money you lent to friends, family, or clients), along with the active receivable count and expected monthly repayments.
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      LOANS KPI CARD 3
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Paid &amp; Collected
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Cumulative amount you have already repaid toward borrowed debt plus repayments collected on receivables (combining any prior initial paid amount with all logged installment payments).
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      LOANS KPI CARD 4
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Net Loan Position
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Calculated as <code className="font-mono">Lent Remaining − Borrowed Remaining</code>. Shows whether you are in a positive <strong>Net Receivable</strong> position (more owed to you than you owe), a negative <strong>Net Debt</strong> position, or <strong>Balanced</strong> (<code className="font-mono">{currencySymbol}0</code>).
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5 md:col-span-2 lg:col-span-2">
+                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      CONTRACT AMORTIZATION CARDS
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Individual Loan &amp; Receivable Contract Cards
+                    </h5>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Each contract card displays the <strong>Remaining Balance</strong>, <strong>Total Paid / Collected</strong>, completion progress bar (<code className="font-mono">%</code>), <strong>Principal</strong> vs. <strong>Total Contract</strong> (including interest), <strong>Installment Amount</strong>, and <strong>Terms Paid / Total Terms</strong> (<code className="font-mono">X left</code>). Linked contracts automatically log payments when you mark their corresponding Budget row as <strong>Paid</strong>, or you can click <strong>Record Payment / Collection</strong> directly on the card.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
 
       {/* 3. BUDGET, EXCEL IMPORT, SPLIT PAYMENTS & BI-WEEKLY CUTOFFS */}
       {showSection(

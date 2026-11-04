@@ -367,6 +367,7 @@ export function isLegacyHardcodedTemplate(templates?: BudgetItemTemplate[]): boo
 export function deriveCategoryBudgetsFromTemplates(templates: BudgetItemTemplate[]) {
   const map = new Map<string, { category: string; type: 'income' | 'expense' | 'saving'; plannedAmount: number }>();
   stripDefaultStarterTemplates(templates).forEach((tpl) => {
+    if (tpl.showInBudget === false) return;
     const key = `${tpl.type}:${tpl.category}`;
     const existing = map.get(key);
     const rawAmount = tpl.defaultEstimatedCost || 0;
@@ -1189,6 +1190,11 @@ export function isDefaultStarterBudget(budget?: YearBudgetData | null): boolean 
   if (!budget) return true;
   if (budget.isDefaultStarterData === true) return true;
   if (budget.isDefaultStarterData === false) return false;
+
+  const hasExcludedPeriodItems = Object.values(budget.excludedPeriodItems || {}).some(
+    (keys) => Array.isArray(keys) && keys.length > 0
+  );
+  if (hasExcludedPeriodItems) return false;
 
   const entries = budget.entries || [];
   const templates = budget.itemTemplates || [];

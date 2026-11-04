@@ -4,6 +4,7 @@ import {
   EntryFrequency,
   EntryType,
   LoanRecord,
+  TemplateBudgetVisibility,
 } from '../types/finance';
 import {
   BIWEEKLY_PERIODS,
@@ -39,6 +40,73 @@ export function isRegularSalaryIncome(itemName?: string, categoryName?: string):
     catLower === 'salary' ||
     catLower === 'salary & wages'
   );
+}
+
+/**
+ * Resolves the effective budget display mode of a template item:
+ * - 'displayed': Automatically appears on the budget list every matching period
+ * - 'optional': Appears on the budget list marked as Optional (can be toggled on/off on the budget sheet)
+ * - 'hidden': Does not automatically display on the budget sheet (available via "From Template" when adding manually)
+ */
+export function resolveTemplateBudgetVisibility(
+  tpl: BudgetItemTemplate
+): TemplateBudgetVisibility {
+  if (tpl.showInBudget === false) {
+    return 'hidden';
+  }
+  if (tpl.isOptional === true) {
+    return 'optional';
+  }
+  if (tpl.showInBudget === true) {
+    return 'displayed';
+  }
+  // Default fallback when neither showInBudget nor isOptional is explicitly set:
+  if (tpl.type === 'income' && !isRegularSalaryIncome(tpl.item, tpl.category)) {
+    return 'hidden';
+  }
+  return 'displayed';
+}
+
+/**
+ * Applies a TemplateBudgetVisibility mode ('displayed' | 'optional' | 'hidden') to a template item.
+ */
+export function applyTemplateBudgetVisibility(
+  tpl: BudgetItemTemplate,
+  mode: TemplateBudgetVisibility
+): BudgetItemTemplate {
+  if (mode === 'hidden') {
+    return {
+      ...tpl,
+      showInBudget: false,
+      isOptional: false,
+    };
+  }
+  if (mode === 'optional') {
+    return {
+      ...tpl,
+      showInBudget: true,
+      isOptional: true,
+    };
+  }
+  return {
+    ...tpl,
+    showInBudget: true,
+    isOptional: false,
+  };
+}
+
+/**
+ * Determines whether a template item should automatically display on the budget sheet
+ * given whether optional items are currently enabled on the sheet.
+ */
+export function shouldTemplateDisplayInBudget(
+  tpl: BudgetItemTemplate,
+  includeOptional: boolean = true
+): boolean {
+  const mode = resolveTemplateBudgetVisibility(tpl);
+  if (mode === 'hidden') return false;
+  if (mode === 'optional') return includeOptional;
+  return true;
 }
 
 /**
@@ -320,9 +388,51 @@ export function parseDateToYearAndPeriod(
 }
 
 /**
+ * Builds canonical exclusion keys for a budget item/template within a period so that
+ * deleting a row from a specific period hides both its templateId and its normalized type:item key.
+ */
+export function getPeriodItemExclusionKeys(input: {
+  templateId?: string;
+  type: EntryType;
+  item: string;
+  loanId?: string;
+}): string[] {
+  const keys: string[] = [];
+  if (input.templateId && input.templateId.trim()) {
+    keys.push(input.templateId.trim());
+  }
+  if (input.loanId && input.loanId.trim()) {
+    keys.push(`loan:${input.loanId.trim()}`);
+  }
+  const cleanItem = (input.item || '').trim().toLowerCase();
+  if (cleanItem) {
+    keys.push(`${input.type}:${cleanItem}`);
+  }
+  return Array.from(new Set(keys));
+}
+
+/**
+ * Checks whether a template item has been explicitly deleted/excluded for a specific period.
+ */
+export function isTemplateExcludedInPeriod(
+  tpl: BudgetItemTemplate,
+  period: string,
+  excludedPeriodItems?: Record<string, string[]>
+): boolean {
+  const list = excludedPeriodItems?.[period];
+  if (!Array.isArray(list) || list.length === 0) return false;
+  const tplKeys = getPeriodItemExclusionKeys({
+    templateId: tpl.id,
+    type: tpl.type,
+    item: tpl.item,
+    loanId: tpl.loanId,
+  });
+  return tplKeys.some((k) => list.includes(k));
+}
+
+/**
  * Generates Pending placeholder budget entries for a target period from all valid recurring
- * templates that have not yet been recorded in that period.
- * Irregular income templates are excluded unless they are regular Salary/Paycheck templates.
+ * templates that have not yet been recorded or deleted in that period.
  */
 export function buildAutoFillPeriodEntries(
   itemTemplates: BudgetItemTemplate[],
@@ -335,15 +445,21 @@ export function buildAutoFillPeriodEntries(
     tpl: BudgetItemTemplate,
     freq: EntryFrequency,
     period: string
-  ) => boolean
+  ) => boolean,
+  options?: {
+    includeOptional?: boolean;
+    excludedPeriodItems?: Record<string, string[]>;
+  }
 ): {
   validTemplatesCount: number;
   newEntries: Omit<BudgetEntry, 'id' | 'createdAt'>[];
 } {
+  const includeOptional = options?.includeOptional ?? true;
   const validTemplates = itemTemplates.filter(
     (t) =>
       isTemplateValidFn(t, frequency, selectedPeriod) &&
-      (t.type !== 'income' || isRegularSalaryIncome(t.item, t.category))
+      shouldTemplateDisplayInBudget(t, includeOptional) &&
+      !isTemplateExcludedInPeriod(t, selectedPeriod, options?.excludedPeriodItems)
   );
 
   if (validTemplates.length === 0) {
@@ -401,6 +517,7 @@ export function buildAutoFillPeriodEntries(
       status: 'Pending',
       reference: 'Auto-filled from template',
       toBeWithdrawn: Boolean(t.toBeWithdrawn),
+      isOptional: Boolean(t.isOptional),
       description: t.item || t.category,
       savingAccountId: t.type === 'saving' ? targetAcc?.id : undefined,
       savingAccountName: t.type === 'saving' ? targetAcc?.name : undefined,

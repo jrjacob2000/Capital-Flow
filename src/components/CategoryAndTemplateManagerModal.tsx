@@ -20,12 +20,15 @@ import {
   ChevronUp,
   ChevronDown,
   Search,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   BudgetItemTemplate,
   EntryType,
   PaymentMethod,
   SavingsAccount,
+  TemplateBudgetVisibility,
   YearBudgetData,
 } from '../types/finance';
 import {
@@ -36,6 +39,10 @@ import {
   DEFAULT_ITEM_TEMPLATES,
   stripDefaultStarterTemplates,
 } from '../services/sampleData';
+import {
+  resolveTemplateBudgetVisibility,
+  applyTemplateBudgetVisibility,
+} from '../utils/budgetCalculations';
 import { ConfirmationModal } from './ConfirmationModal';
 
 interface CategoryAndTemplateManagerModalProps {
@@ -66,14 +73,32 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 }) => {
   const [activeTab, setActiveTab] = useState<'estimates' | 'expense_cats' | 'income_cats' | 'saving_cats'>('estimates');
 
-  // Categories state
-  const expenseCats = budget?.customCategories?.expense || [...EXPENSE_CATEGORIES];
-  const incomeCats = budget?.customCategories?.income || [...INCOME_CATEGORIES];
-  const savingCats = budget?.customCategories?.saving || [...SAVING_CATEGORIES];
-
+  // Categories state (merged with default categories so dropdowns never show only 1 option)
   const templates: BudgetItemTemplate[] = budget?.isPersonalizedTemplate
     ? stripDefaultStarterTemplates(budget.itemTemplates)
     : [];
+
+  const expenseCats = Array.from(
+    new Set([
+      ...(budget?.customCategories?.expense || []),
+      ...EXPENSE_CATEGORIES,
+      ...templates.filter((t) => t.type === 'expense').map((t) => t.category),
+    ])
+  ).filter(Boolean);
+  const incomeCats = Array.from(
+    new Set([
+      ...(budget?.customCategories?.income || []),
+      ...INCOME_CATEGORIES,
+      ...templates.filter((t) => t.type === 'income').map((t) => t.category),
+    ])
+  ).filter(Boolean);
+  const savingCats = Array.from(
+    new Set([
+      ...(budget?.customCategories?.saving || []),
+      ...SAVING_CATEGORIES,
+      ...templates.filter((t) => t.type === 'saving').map((t) => t.category),
+    ])
+  ).filter(Boolean);
 
   // Category editing state
   const [newCatName, setNewCatName] = useState('');
@@ -84,12 +109,14 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
   const [tplId, setTplId] = useState<string | null>(null);
   const [tplType, setTplType] = useState<EntryType>('expense');
   const [tplCategory, setTplCategory] = useState<string>(expenseCats[0] || 'Budget');
+  const [isCreatingCustomTplCat, setIsCreatingCustomTplCat] = useState<boolean>(false);
   const [tplItem, setTplItem] = useState<string>('');
   const [tplEstimated, setTplEstimated] = useState<string>('');
   const [tplFrequency, setTplFrequency] = useState<'monthly' | 'bi-weekly' | 'both'>('monthly');
   const [tplBiweeklyPeriod, setTplBiweeklyPeriod] = useState<'P1' | 'P2' | 'both'>('both');
   const [tplMethod, setTplMethod] = useState<PaymentMethod>('Bank Transfer');
   const [tplSavingAccountId, setTplSavingAccountId] = useState<string>(accounts[0]?.id || '');
+  const [tplVisibility, setTplVisibility] = useState<TemplateBudgetVisibility>('displayed');
   const [deleteConfirm, setDeleteConfirm] = useState<{
     isOpen: boolean;
     title: string;
@@ -105,12 +132,24 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
   });
 
   // Template Sorting & Filtering State
-  type TemplateSortField = 'manual' | 'item' | 'type' | 'category' | 'frequency' | 'cost';
+  type TemplateSortField = 'manual' | 'item' | 'type' | 'category' | 'frequency' | 'cost' | 'visibility';
   type SortDirection = 'asc' | 'desc';
 
   const [sortField, setSortField] = useState<TemplateSortField>('manual');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [templateSearchQuery, setTemplateSearchQuery] = useState('');
+  const [visibilityFilter, setVisibilityFilter] = useState<'all' | TemplateBudgetVisibility>('all');
+
+  // Toggle an item's budget display status directly from the table/list
+  const handleCycleTemplateVisibility = (tpl: BudgetItemTemplate, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const current = resolveTemplateBudgetVisibility(tpl);
+    const next: TemplateBudgetVisibility = current === 'hidden' ? 'displayed' : 'hidden';
+    const updated = templates.map((t) =>
+      t.id === tpl.id ? applyTemplateBudgetVisibility(t, next) : t
+    );
+    onUpdateTemplates(updated);
+  };
 
   // Move an item up or down in the template list
   const handleMoveTemplate = (index: number, direction: 'up' | 'down') => {
@@ -148,6 +187,14 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
         if (diff !== 0) return dir === 'asc' ? diff : -diff;
         return a.item.localeCompare(b.item);
       }
+      if (field === 'visibility') {
+        const visOrder: Record<TemplateBudgetVisibility, number> = { displayed: 1, optional: 2, hidden: 3 };
+        const diff =
+          (visOrder[resolveTemplateBudgetVisibility(a)] || 99) -
+          (visOrder[resolveTemplateBudgetVisibility(b)] || 99);
+        if (diff !== 0) return dir === 'asc' ? diff : -diff;
+        return a.item.localeCompare(b.item);
+      }
       if (field === 'cost') {
         const diff = (a.defaultEstimatedCost || 0) - (b.defaultEstimatedCost || 0);
         if (diff !== 0) return dir === 'asc' ? diff : -diff;
@@ -175,6 +222,11 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 
   const displayedTemplates = useMemo(() => {
     let result = [...templates];
+    if (visibilityFilter === 'displayed') {
+      result = result.filter((t) => resolveTemplateBudgetVisibility(t) !== 'hidden');
+    } else if (visibilityFilter === 'hidden') {
+      result = result.filter((t) => resolveTemplateBudgetVisibility(t) === 'hidden');
+    }
     if (templateSearchQuery.trim()) {
       const q = templateSearchQuery.toLowerCase().trim();
       result = result.filter(
@@ -185,7 +237,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       );
     }
     return result;
-  }, [templates, templateSearchQuery]);
+  }, [templates, templateSearchQuery, visibilityFilter]);
 
   if (!isOpen) return null;
 
@@ -260,12 +312,14 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     setTplId(null);
     setTplType('expense');
     setTplCategory(expenseCats[0] || 'Budget');
+    setIsCreatingCustomTplCat(false);
     setTplItem('');
     setTplEstimated('');
     setTplFrequency('monthly');
     setTplBiweeklyPeriod('both');
     setTplMethod('Bank Transfer');
     setTplSavingAccountId(accounts[0]?.id || '');
+    setTplVisibility('displayed');
     setIsTemplateFormOpen(true);
   };
 
@@ -273,12 +327,14 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     setTplId(tpl.id);
     setTplType(tpl.type);
     setTplCategory(tpl.category);
+    setIsCreatingCustomTplCat(false);
     setTplItem(tpl.item);
     setTplEstimated(String(tpl.defaultEstimatedCost || ''));
     setTplFrequency(tpl.frequency || 'monthly');
     setTplBiweeklyPeriod(tpl.biweeklyPeriod || 'both');
     setTplMethod(tpl.defaultPaymentMethod || 'Bank Transfer');
     setTplSavingAccountId(tpl.defaultSavingAccountId || accounts[0]?.id || '');
+    setTplVisibility(resolveTemplateBudgetVisibility(tpl) === 'hidden' ? 'hidden' : 'displayed');
     setIsTemplateFormOpen(true);
   };
 
@@ -286,38 +342,64 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     e.preventDefault();
     if (!tplItem.trim()) return;
     const estNum = parseFloat(tplEstimated) || 0;
+    const resolvedCategory =
+      tplCategory.trim() ||
+      (tplType === 'income'
+        ? incomeCats[0] || 'Salary & Wages'
+        : tplType === 'saving'
+        ? savingCats[0] || 'Short-Term & General Savings'
+        : expenseCats[0] || 'Utilities & Bills');
+
+    // Persist newly typed custom category into customCategories
+    if (resolvedCategory) {
+      const targetList =
+        tplType === 'income' ? incomeCats : tplType === 'saving' ? savingCats : expenseCats;
+      if (!targetList.some((c) => c.toLowerCase() === resolvedCategory.toLowerCase())) {
+        onUpdateCategories({
+          expense: tplType === 'expense' ? [...expenseCats, resolvedCategory] : [...expenseCats],
+          income: tplType === 'income' ? [...incomeCats, resolvedCategory] : [...incomeCats],
+          saving: tplType === 'saving' ? [...savingCats, resolvedCategory] : [...savingCats],
+        });
+      }
+    }
 
     let updatedList = [...templates];
     if (tplId) {
       updatedList = updatedList.map((t) =>
         t.id === tplId
-          ? {
-              ...t,
-              type: tplType,
-              category: tplCategory,
-              item: tplItem.trim(),
-              defaultEstimatedCost: estNum,
-              frequency: tplFrequency,
-              biweeklyPeriod: tplBiweeklyPeriod,
-              defaultPaymentMethod: tplMethod,
-              defaultSavingAccountId: tplType === 'saving' ? (tplSavingAccountId || accounts[0]?.id) : undefined,
-              toBeWithdrawn: tplMethod === 'Cash',
-            }
+          ? applyTemplateBudgetVisibility(
+              {
+                ...t,
+                type: tplType,
+                category: resolvedCategory,
+                item: tplItem.trim(),
+                defaultEstimatedCost: estNum,
+                frequency: tplFrequency,
+                biweeklyPeriod: tplBiweeklyPeriod,
+                defaultPaymentMethod: tplMethod,
+                defaultSavingAccountId: tplType === 'saving' ? (tplSavingAccountId || accounts[0]?.id) : undefined,
+                toBeWithdrawn: tplMethod === 'Cash',
+              },
+              tplVisibility
+            )
           : t
       );
     } else {
-      const newTpl: BudgetItemTemplate = {
-        id: `tpl-${Date.now()}`,
-        type: tplType,
-        category: tplCategory,
-        item: tplItem.trim(),
-        defaultEstimatedCost: estNum,
-        frequency: tplFrequency,
-        biweeklyPeriod: tplBiweeklyPeriod,
-        defaultPaymentMethod: tplMethod,
-        defaultSavingAccountId: tplType === 'saving' ? (tplSavingAccountId || accounts[0]?.id) : undefined,
-        toBeWithdrawn: tplMethod === 'Cash',
-      };
+      const newTpl = applyTemplateBudgetVisibility(
+        {
+          id: `tpl-${Date.now()}`,
+          type: tplType,
+          category: resolvedCategory,
+          item: tplItem.trim(),
+          defaultEstimatedCost: estNum,
+          frequency: tplFrequency,
+          biweeklyPeriod: tplBiweeklyPeriod,
+          defaultPaymentMethod: tplMethod,
+          defaultSavingAccountId: tplType === 'saving' ? (tplSavingAccountId || accounts[0]?.id) : undefined,
+          toBeWithdrawn: tplMethod === 'Cash',
+        },
+        tplVisibility
+      );
       updatedList.push(newTpl);
     }
 
@@ -355,6 +437,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     setTplFrequency(helper.frequency || 'monthly');
     setTplBiweeklyPeriod(helper.biweeklyPeriod || 'both');
     setTplMethod(helper.defaultPaymentMethod || 'Bank Transfer');
+    setTplVisibility(resolveTemplateBudgetVisibility(helper));
   };
 
   const createPersonalizedFromDefault = (): BudgetItemTemplate[] => {
@@ -421,15 +504,22 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       : raw;
   };
 
-  const totalEstIncome = templates
+  const activeTemplatesForTotals = templates.filter(
+    (t) => resolveTemplateBudgetVisibility(t) !== 'hidden'
+  );
+
+  const totalEstIncome = activeTemplatesForTotals
     .filter((t) => t.type === 'income')
     .reduce((s, t) => s + getMonthlyEquivalentEstimate(t), 0);
-  const totalEstExpense = templates
+  const totalEstExpense = activeTemplatesForTotals
     .filter((t) => t.type === 'expense')
     .reduce((s, t) => s + getMonthlyEquivalentEstimate(t), 0);
-  const totalEstFunds = templates
+  const totalEstFunds = activeTemplatesForTotals
     .filter((t) => t.type === 'saving')
     .reduce((s, t) => s + getMonthlyEquivalentEstimate(t), 0);
+
+  const countDisplayed = templates.filter((t) => resolveTemplateBudgetVisibility(t) !== 'hidden').length;
+  const countHidden = templates.filter((t) => resolveTemplateBudgetVisibility(t) === 'hidden').length;
 
   return (
     <div className="fixed inset-0 m-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-hidden">
@@ -653,86 +743,130 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
               ) : (
                 <div className="space-y-2.5 sm:space-y-3 min-w-0">
                   {/* Sorting & Filter Controls Toolbar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50 dark:bg-slate-800/40 p-2 sm:p-2.5 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-700/70 min-w-0">
-                    <div className="relative w-full sm:flex-1 sm:max-w-xs min-w-0">
-                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="Search items or categories..."
-                        value={templateSearchQuery}
-                        onChange={(e) => setTemplateSearchQuery(e.target.value)}
-                        className="w-full min-w-0 pl-8 pr-7 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                      />
-                      {templateSearchQuery && (
+                  <div className="flex flex-col gap-2 bg-slate-50 dark:bg-slate-800/40 p-2 sm:p-2.5 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-700/70 min-w-0">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 min-w-0">
+                      <div className="relative w-full sm:flex-1 sm:max-w-xs min-w-0">
+                        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Search items or categories..."
+                          value={templateSearchQuery}
+                          onChange={(e) => setTemplateSearchQuery(e.target.value)}
+                          className="w-full min-w-0 pl-8 pr-7 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        {templateSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setTemplateSearchQuery('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 text-[10px] sm:text-[11px] min-w-0">
+                        <span className="text-slate-400 font-semibold mr-0.5 hidden md:inline">Sort:</span>
                         <button
                           type="button"
-                          onClick={() => setTemplateSearchQuery('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                          onClick={() => handleApplyPresetSort('type', 'asc')}
+                          className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                            sortField === 'type'
+                              ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                          title="Group by Type: Income first, then Expenses, then Funds"
                         >
-                          <X className="w-3 h-3" />
+                          Type
                         </button>
-                      )}
+                        <button
+                          type="button"
+                          onClick={() => handleApplyPresetSort('category', 'asc')}
+                          className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                            sortField === 'category'
+                              ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                          title="Sort alphabetically by category"
+                        >
+                          Category
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApplyPresetSort('item', 'asc')}
+                          className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                            sortField === 'item'
+                              ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                          title="Sort alphabetically by item name"
+                        >
+                          Name (A-Z)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApplyPresetSort('visibility', 'asc')}
+                          className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                            sortField === 'visibility'
+                              ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                          title="Sort by Budget Display Mode (Displayed, Optional, Hidden)"
+                        >
+                          Display
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApplyPresetSort('cost', 'desc')}
+                          className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                            sortField === 'cost'
+                              ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                          title="Sort by highest estimated cost first"
+                        >
+                          Cost (&darr;)
+                        </button>
+                        {sortField !== 'manual' && (
+                          <button
+                            type="button"
+                            onClick={() => setSortField('manual')}
+                            className="px-1.5 py-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-[10px] underline cursor-pointer"
+                          >
+                            Manual
+                          </button>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 text-[10px] sm:text-[11px] min-w-0">
-                      <span className="text-slate-400 font-semibold mr-0.5 hidden md:inline">Sort:</span>
-                      <button
-                        type="button"
-                        onClick={() => handleApplyPresetSort('type', 'asc')}
-                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
-                          sortField === 'type'
-                            ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
-                        }`}
-                        title="Group by Type: Income first, then Expenses, then Funds"
-                      >
-                        Type
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleApplyPresetSort('category', 'asc')}
-                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
-                          sortField === 'category'
-                            ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
-                        }`}
-                        title="Sort alphabetically by category"
-                      >
-                        Category
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleApplyPresetSort('item', 'asc')}
-                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
-                          sortField === 'item'
-                            ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
-                        }`}
-                        title="Sort alphabetically by item name"
-                      >
-                        Name (A-Z)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleApplyPresetSort('cost', 'desc')}
-                        className={`px-2 py-1 rounded-lg border transition-all cursor-pointer ${
-                          sortField === 'cost'
-                            ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-300 dark:border-indigo-700 font-bold'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
-                        }`}
-                        title="Sort by highest estimated cost first"
-                      >
-                        Cost (&darr;)
-                      </button>
-                      {sortField !== 'manual' && (
-                        <button
-                          type="button"
-                          onClick={() => setSortField('manual')}
-                          className="px-1.5 py-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-[10px] underline cursor-pointer"
-                        >
-                          Manual
-                        </button>
-                      )}
+                    {/* Budget Display Mode Filter Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-200/70 dark:border-slate-700/60 text-[10px] sm:text-[11px]">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-slate-400 font-semibold mr-1">Budget Display:</span>
+                        {(
+                          [
+                            { id: 'all', label: `All (${templates.length})` },
+                            { id: 'displayed', label: `Displayed (${countDisplayed})` },
+                            { id: 'hidden', label: `Not Displayed (${countHidden})` },
+                          ] as const
+                        ).map((f) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            onClick={() => setVisibilityFilter(f.id)}
+                            className={`px-2 py-0.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                              visibilityFilter === f.id
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                            }`}
+                          >
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
+                      <span className="text-slate-400 text-[10px] hidden sm:inline">
+                        Tip: Click any item&apos;s Display badge to toggle Displayed &harr; Not Displayed
+                      </span>
                     </div>
                   </div>
 
@@ -740,11 +874,12 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                   <div className="sm:hidden border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
                     {displayedTemplates.length === 0 ? (
                       <div className="p-6 text-center text-slate-400 text-xs">
-                        No template items match &ldquo;{templateSearchQuery}&rdquo;.
+                        No template items match your current filter.
                       </div>
                     ) : (
                       displayedTemplates.map((tpl) => {
                         const originalIndex = templates.findIndex((t) => t.id === tpl.id);
+                        const visMode = resolveTemplateBudgetVisibility(tpl);
                         const freqLabel =
                           tpl.frequency === 'bi-weekly'
                             ? `Bi-Weekly (${tpl.biweeklyPeriod || 'both'})`
@@ -759,7 +894,9 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         return (
                           <div
                             key={tpl.id}
-                            className="p-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/40 min-w-0"
+                            className={`p-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/40 min-w-0 ${
+                              visMode === 'hidden' ? 'opacity-65 bg-slate-50/40 dark:bg-slate-900/40' : ''
+                            }`}
                           >
                             {/* Order & Up/Down controls */}
                             <div className="flex items-center gap-1 shrink-0">
@@ -793,8 +930,14 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                               onClick={() => handleOpenEditTemplate(tpl)}
                               className="min-w-0 flex-1 cursor-pointer"
                             >
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="font-bold text-slate-900 dark:text-white text-xs truncate">
+                              <div className="flex flex-wrap items-center gap-1 min-w-0">
+                                <span
+                                  className={`font-bold text-xs truncate ${
+                                    visMode === 'hidden'
+                                      ? 'line-through text-slate-500 dark:text-slate-400'
+                                      : 'text-slate-900 dark:text-white'
+                                  }`}
+                                >
                                   {tpl.item}
                                 </span>
                                 <span
@@ -808,6 +951,28 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                                 >
                                   {tpl.type === 'saving' ? 'funds' : tpl.type}
                                 </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleCycleTemplateVisibility(tpl, e)}
+                                  className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[9px] font-bold border shrink-0 cursor-pointer ${
+                                    visMode !== 'hidden'
+                                      ? 'bg-emerald-50/80 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-700'
+                                  }`}
+                                  title="Tap to toggle Budget Display: Displayed ↔ Not Displayed"
+                                >
+                                  {visMode !== 'hidden' ? (
+                                    <>
+                                      <Eye className="w-2.5 h-2.5" />
+                                      <span>Displayed</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <EyeOff className="w-2.5 h-2.5" />
+                                      <span>Hidden</span>
+                                    </>
+                                  )}
+                                </button>
                               </div>
                               <div className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
                                 <span className="truncate">{tpl.category}</span>
@@ -848,7 +1013,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 
                   {/* DESKTOP TABLE VIEW (sm and up) */}
                   <div className="hidden sm:block border border-slate-200 dark:border-slate-800 rounded-2xl overflow-x-auto shadow-2xs">
-                    <table className="w-full text-left text-xs min-w-[640px]">
+                    <table className="w-full text-left text-xs min-w-[720px]">
                       <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-700 select-none">
                         <tr>
                           <th className="py-2.5 px-3 text-center w-16">
@@ -868,8 +1033,22 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                             </div>
                           </th>
                           <th
+                            onClick={() => handleToggleColumnSort('visibility')}
+                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            title="Whether the item displays automatically on the budget list, is optional, or is hidden"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Budget Display</span>
+                              {sortField === 'visibility' ? (
+                                sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-600" /> : <ArrowDown className="w-3 h-3 text-indigo-600" />
+                              ) : (
+                                <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
+                              )}
+                            </div>
+                          </th>
+                          <th
                             onClick={() => handleToggleColumnSort('type')}
-                            className="py-2.5 px-4 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                           >
                             <div className="flex items-center gap-1.5">
                               <span>Type</span>
@@ -895,7 +1074,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                           </th>
                           <th
                             onClick={() => handleToggleColumnSort('frequency')}
-                            className="py-2.5 px-4 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                           >
                             <div className="flex items-center gap-1.5">
                               <span>Frequency</span>
@@ -919,15 +1098,21 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                               )}
                             </div>
                           </th>
-                          <th className="py-2.5 px-4">Default Payment Channel</th>
+                          <th className="py-2.5 px-4">Default Channel</th>
                           <th className="py-2.5 px-3 text-center">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {displayedTemplates.map((tpl) => {
                           const originalIndex = templates.findIndex((t) => t.id === tpl.id);
+                          const visMode = resolveTemplateBudgetVisibility(tpl);
                           return (
-                            <tr key={tpl.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                            <tr
+                              key={tpl.id}
+                              className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 ${
+                                visMode === 'hidden' ? 'opacity-65 bg-slate-50/40 dark:bg-slate-900/40' : ''
+                              }`}
+                            >
                               {/* Order & Reordering Arrows */}
                               <td className="py-2 px-2 text-center whitespace-nowrap">
                                 <div className="flex items-center justify-center gap-1">
@@ -957,10 +1142,43 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                                 </div>
                               </td>
 
-                              <td className="py-2.5 px-4 font-semibold text-slate-800 dark:text-slate-200">
+                              <td
+                                className={`py-2.5 px-4 font-semibold ${
+                                  visMode === 'hidden'
+                                    ? 'line-through text-slate-400 dark:text-slate-500'
+                                    : 'text-slate-800 dark:text-slate-200'
+                                }`}
+                              >
                                 {tpl.item}
                               </td>
-                              <td className="py-2.5 px-4">
+
+                              {/* Interactive Budget Display Mode Badge */}
+                              <td className="py-2.5 px-3 whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleCycleTemplateVisibility(tpl, e)}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all cursor-pointer ${
+                                    visMode !== 'hidden'
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-700 hover:bg-slate-200'
+                                  }`}
+                                  title="Click to toggle: Displayed in Budget ↔ Not Displayed (Hidden)"
+                                >
+                                  {visMode !== 'hidden' ? (
+                                    <>
+                                      <Eye className="w-3 h-3 shrink-0" />
+                                      <span>Displayed</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <EyeOff className="w-3 h-3 shrink-0" />
+                                      <span>Not Displayed</span>
+                                    </>
+                                  )}
+                                </button>
+                              </td>
+
+                              <td className="py-2.5 px-3">
                                 <span
                                   className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                                     tpl.type === 'income'
@@ -976,7 +1194,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                               <td className="py-2.5 px-4 text-slate-600 dark:text-slate-400">
                                 {tpl.category}
                               </td>
-                              <td className="py-2.5 px-4">
+                              <td className="py-2.5 px-3">
                                 <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium text-[10px]">
                                   {tpl.frequency === 'bi-weekly'
                                     ? `Bi-Weekly (${tpl.biweeklyPeriod || 'both'})`
@@ -1325,27 +1543,67 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
                       Category
                     </label>
+                    {isCreatingCustomTplCat && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCreatingCustomTplCat(false);
+                          const fallbackList =
+                            tplType === 'income'
+                              ? incomeCats
+                              : tplType === 'saving'
+                              ? savingCats
+                              : expenseCats;
+                          if (!tplCategory.trim()) {
+                            setTplCategory(fallbackList[0] || 'Utilities & Bills');
+                          }
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                      >
+                        List
+                      </button>
+                    )}
                   </div>
-                  <select
-                    value={tplCategory}
-                    onChange={(e) => setTplCategory(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    {Array.from(
-                      new Set([
-                        ...(tplType === 'income'
-                          ? incomeCats
-                          : tplType === 'saving'
-                          ? savingCats
-                          : expenseCats),
-                        ...(tplCategory.trim() ? [tplCategory.trim()] : []),
-                      ])
-                    ).map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                  {!isCreatingCustomTplCat ? (
+                    <select
+                      value={tplCategory}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '__CREATE_NEW_TPL_CATEGORY__') {
+                          setIsCreatingCustomTplCat(true);
+                          setTplCategory('');
+                        } else {
+                          setTplCategory(val);
+                        }
+                      }}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {Array.from(
+                        new Set([
+                          ...(tplType === 'income'
+                            ? incomeCats
+                            : tplType === 'saving'
+                            ? savingCats
+                            : expenseCats),
+                          ...(tplCategory.trim() ? [tplCategory.trim()] : []),
+                        ])
+                      ).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                      <option value="__CREATE_NEW_TPL_CATEGORY__">+ Custom Category...</option>
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      required
+                      value={tplCategory}
+                      onChange={(e) => setTplCategory(e.target.value)}
+                      placeholder="New category name..."
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -1444,6 +1702,46 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     </select>
                   </div>
                 )}
+              </div>
+
+              {/* Budget List Display Option (Displayed / Not Displayed) */}
+              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-1.5">
+                <div className="flex items-center justify-between gap-1">
+                  <label className="text-[11px] text-slate-700 dark:text-slate-200 font-semibold">
+                    Budget List Display Option
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-1 bg-slate-200/70 dark:bg-slate-900 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[10px] sm:text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setTplVisibility('displayed')}
+                    className={`py-1.5 px-2 rounded-lg font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                      tplVisibility !== 'hidden'
+                        ? 'bg-white dark:bg-slate-800 text-emerald-700 dark:text-emerald-300 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <Eye className="w-3 h-3 shrink-0" />
+                    <span className="truncate">Display in Budget</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTplVisibility('hidden')}
+                    className={`py-1.5 px-2 rounded-lg font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                      tplVisibility === 'hidden'
+                        ? 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <EyeOff className="w-3 h-3 shrink-0" />
+                    <span className="truncate">Don&apos;t Display</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
+                  {tplVisibility !== 'hidden'
+                    ? 'Automatically appears on the budget list every matching period. You can also delete it from any specific period on the Budget page.'
+                    : 'Will not automatically display on the budget sheet. Still available via "From Template" when adding manually.'}
+                </p>
               </div>
 
               <div className="pt-2.5 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">

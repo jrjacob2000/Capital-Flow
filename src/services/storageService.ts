@@ -48,6 +48,7 @@ import {
   isDefaultStarterTemplateData,
   isDefaultStarterLedger,
 } from './sampleData';
+import { getPeriodItemExclusionKeys, shouldTemplateDisplayInBudget } from '../utils/budgetCalculations';
 
 const LOCAL_STORAGE_KEY_PREFIX = 'capitalflow_local_budget_';
 const LOCAL_STORAGE_KEY_LEDGER = 'capitalflow_local_savings_ledger';
@@ -106,7 +107,10 @@ export class FinanceStorageService {
         });
         const hadDefaultItems = cleanedTemplates.length !== parsed.itemTemplates.length;
 
-        const rawExpenseCats = parsed.customCategories?.expense || EXPENSE_CATEGORIES;
+        const rawExpenseCats =
+          Array.isArray(parsed.customCategories?.expense) && parsed.customCategories.expense.length > 1
+            ? parsed.customCategories.expense
+            : Array.from(new Set([...(parsed.customCategories?.expense || []), ...EXPENSE_CATEGORIES]));
         const normalizedExpenseCats: string[] = [];
         rawExpenseCats.forEach((c) => {
           const norm = normalizeCategoryWording(c);
@@ -115,6 +119,12 @@ export class FinanceStorageService {
             normalizedExpenseCats.push(norm);
           }
         });
+
+        const rawIncomeCats =
+          Array.isArray(parsed.customCategories?.income) && parsed.customCategories.income.length > 1
+            ? parsed.customCategories.income
+            : Array.from(new Set([...(parsed.customCategories?.income || []), ...INCOME_CATEGORIES]));
+        const normalizedIncomeCats = Array.from(new Set(rawIncomeCats.filter(Boolean)));
 
         const rawSavingCats = parsed.customCategories?.saving || SAVING_CATEGORIES;
         const normalizedSavingCats: string[] = [...SAVING_CATEGORIES];
@@ -135,7 +145,7 @@ export class FinanceStorageService {
           lastUpdated: isStarterTpl ? DEFAULT_STARTER_EPOCH : parsed.lastUpdated,
           customCategories: {
             expense: normalizedExpenseCats,
-            income: [...(parsed.customCategories?.income || INCOME_CATEGORIES)],
+            income: normalizedIncomeCats,
             saving: normalizedSavingCats,
           },
           itemTemplates: cleanedTemplates,
@@ -176,9 +186,21 @@ export class FinanceStorageService {
         cleanedTemplates.push({ ...t, category: normalizeCategoryWording(t.category) });
       }
     });
-    const normalizedExpenseCats = (profile.customCategories?.expense || EXPENSE_CATEGORIES)
+    const baseExpenseSource =
+      Array.isArray(profile.customCategories?.expense) && profile.customCategories.expense.length > 1
+        ? profile.customCategories.expense
+        : Array.from(new Set([...(profile.customCategories?.expense || []), ...EXPENSE_CATEGORIES]));
+    const normalizedExpenseCats = baseExpenseSource
       .map(normalizeCategoryWording)
       .filter((cat, idx, arr) => Boolean(cat) && arr.indexOf(cat) === idx);
+    const normalizedIncomeCats = Array.from(
+      new Set(
+        (Array.isArray(profile.customCategories?.income) && profile.customCategories.income.length > 1
+          ? profile.customCategories.income
+          : [...(profile.customCategories?.income || []), ...INCOME_CATEGORIES]
+        ).filter(Boolean)
+      )
+    );
     const normalizedSavingCats = Array.from(
       new Set([
         ...SAVING_CATEGORIES,
@@ -198,7 +220,7 @@ export class FinanceStorageService {
       isDefaultStarterData: isStarterTpl,
       customCategories: {
         expense: normalizedExpenseCats,
-        income: [...(profile.customCategories?.income || INCOME_CATEGORIES)],
+        income: normalizedIncomeCats,
         saving: normalizedSavingCats,
       },
       itemTemplates: cleanedTemplates,
@@ -455,15 +477,34 @@ export class FinanceStorageService {
 
     if (budget.customCategories) {
       if (Array.isArray(budget.customCategories.expense)) {
+        const rawExp =
+          budget.customCategories.expense.length > 1
+            ? budget.customCategories.expense
+            : Array.from(new Set([...budget.customCategories.expense, ...EXPENSE_CATEGORIES]));
         const normalizedExpense: string[] = [];
-        budget.customCategories.expense.forEach((c) => {
+        rawExp.forEach((c) => {
           const norm = normalizeCategoryWording(c);
           if (norm !== c) didMigrate = true;
           if (norm && !normalizedExpense.includes(norm)) {
             normalizedExpense.push(norm);
           }
         });
+        if (normalizedExpense.length !== budget.customCategories.expense.length) {
+          didMigrate = true;
+        }
         budget.customCategories.expense = normalizedExpense;
+      }
+
+      if (Array.isArray(budget.customCategories.income)) {
+        const rawInc =
+          budget.customCategories.income.length > 1
+            ? budget.customCategories.income
+            : Array.from(new Set([...budget.customCategories.income, ...INCOME_CATEGORIES]));
+        const normalizedIncome = Array.from(new Set(rawInc.filter(Boolean)));
+        if (normalizedIncome.length !== budget.customCategories.income.length) {
+          didMigrate = true;
+        }
+        budget.customCategories.income = normalizedIncome;
       }
 
       if (Array.isArray(budget.customCategories.saving)) {
@@ -1756,18 +1797,56 @@ export class FinanceStorageService {
       ? budget.entries.filter((e) => e.period !== options.replacePeriod)
       : budget.entries;
 
-    const currentCustomCats = budget.customCategories || {
-      expense: [],
-      income: [],
-      saving: [],
+    const currentCustomCats = {
+      expense:
+        budget.customCategories?.expense && budget.customCategories.expense.length > 0
+          ? [...budget.customCategories.expense]
+          : [...EXPENSE_CATEGORIES],
+      income:
+        budget.customCategories?.income && budget.customCategories.income.length > 0
+          ? [...budget.customCategories.income]
+          : [...INCOME_CATEGORIES],
+      saving:
+        budget.customCategories?.saving && budget.customCategories.saving.length > 0
+          ? [...budget.customCategories.saving]
+          : [...SAVING_CATEGORIES],
     };
     const mergedExpenseCats = options?.customExpenseCategories?.length
       ? Array.from(new Set([...currentCustomCats.expense, ...options.customExpenseCategories]))
       : currentCustomCats.expense;
 
+    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    if (options?.replacePeriod && updatedExcluded[options.replacePeriod]) {
+      delete updatedExcluded[options.replacePeriod];
+    } else {
+      newEntries.forEach((entry) => {
+        const p = entry.period;
+        if (updatedExcluded[p] && updatedExcluded[p].length > 0) {
+          const cleanItemLower = (entry.item || entry.description || '').trim().toLowerCase();
+          const matchedTpl = (budget.itemTemplates || []).find(
+            (t) =>
+              t.type === entry.type &&
+              ((entry.loanId && t.loanId === entry.loanId) ||
+                t.item.trim().toLowerCase() === cleanItemLower)
+          );
+          const keysToUnexclude = getPeriodItemExclusionKeys({
+            templateId: matchedTpl?.id,
+            type: entry.type,
+            item: matchedTpl?.item || entry.item || entry.description,
+            loanId: entry.loanId || matchedTpl?.loanId,
+          });
+          updatedExcluded[p] = updatedExcluded[p].filter((k) => !keysToUnexclude.includes(k));
+          if (updatedExcluded[p].length === 0) {
+            delete updatedExcluded[p];
+          }
+        }
+      });
+    }
+
     const updatedBudget: YearBudgetData = {
       ...budget,
       entries: [...newEntries, ...baseEntries],
+      excludedPeriodItems: updatedExcluded,
       customCategories: {
         ...currentCustomCats,
         expense: mergedExpenseCats,
@@ -1800,6 +1879,134 @@ export class FinanceStorageService {
     });
 
     return { budget: updatedBudget, ledger: updatedLedger, newEntries };
+  }
+
+  /**
+   * Deletes an entire budget item from a specific period:
+   * - Removes any recorded BudgetEntry rows matching the item in that period (and rolls back linked Funds ledger / Loan payments)
+   * - Marks any matching template item as excluded for that period so it does not reappear as a virtual estimate row in that period
+   */
+  static deleteBudgetPeriodItem(
+    budget: YearBudgetData,
+    period: string,
+    target: {
+      entryId?: string;
+      templateId?: string;
+      type: EntryType;
+      item: string;
+      loanId?: string;
+    }
+  ): {
+    budget: YearBudgetData;
+    ledger: SavingsLedgerData;
+    removedEntries: BudgetEntry[];
+    excludedTemplate: boolean;
+  } {
+    const cleanItemLower = (target.item || '').trim().toLowerCase();
+    const matchedTemplate = (budget.itemTemplates || []).find(
+      (t) =>
+        (target.templateId && t.id === target.templateId) ||
+        (t.type === target.type &&
+          ((target.loanId && t.loanId === target.loanId) ||
+            t.item.trim().toLowerCase() === cleanItemLower))
+    );
+
+    const effectiveTemplateId = target.templateId || matchedTemplate?.id;
+    const effectiveLoanId = target.loanId || matchedTemplate?.loanId;
+
+    const removedEntries: BudgetEntry[] = [];
+    const remainingEntries: BudgetEntry[] = [];
+
+    (budget.entries || []).forEach((e) => {
+      const isDirectIdMatch = Boolean(target.entryId && e.id === target.entryId);
+      const isSamePeriodAndItemMatch =
+        e.period === period &&
+        e.type === target.type &&
+        (Boolean(effectiveLoanId && e.loanId === effectiveLoanId) ||
+          (cleanItemLower.length > 0 &&
+            (e.item || e.description || '').trim().toLowerCase() === cleanItemLower));
+
+      if (isDirectIdMatch || isSamePeriodAndItemMatch) {
+        removedEntries.push(e);
+      } else {
+        remainingEntries.push(e);
+      }
+    });
+
+    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    let excludedTemplate = false;
+    const isDisplayedTemplate = matchedTemplate
+      ? shouldTemplateDisplayInBudget(matchedTemplate, true)
+      : Boolean(effectiveTemplateId);
+    if ((effectiveTemplateId || matchedTemplate) && isDisplayedTemplate) {
+      excludedTemplate = true;
+      const keysToExclude = getPeriodItemExclusionKeys({
+        templateId: effectiveTemplateId,
+        type: target.type,
+        item: matchedTemplate?.item || target.item,
+        loanId: effectiveLoanId,
+      });
+      const existingList = updatedExcluded[period] || [];
+      updatedExcluded[period] = Array.from(new Set([...existingList, ...keysToExclude]));
+    }
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: remainingEntries,
+      excludedPeriodItems: updatedExcluded,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+
+    let updatedLedger = FinanceStorageService.loadLocalSavingsLedger();
+    removedEntries.forEach((removed) => {
+      if (removed.type === 'saving') {
+        updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(removed, true);
+      } else {
+        const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(removed, true);
+        updatedLedger = loanSync.ledger;
+      }
+    });
+
+    return {
+      budget: updatedBudget,
+      ledger: updatedLedger,
+      removedEntries,
+      excludedTemplate,
+    };
+  }
+
+  /**
+   * Restores excluded template items for a specific period (either all excluded items in that period, or specific keys).
+   */
+  static restoreExcludedPeriodItems(
+    budget: YearBudgetData,
+    period: string,
+    keysToRemove?: string[]
+  ): YearBudgetData {
+    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    if (!updatedExcluded[period] || updatedExcluded[period].length === 0) {
+      return budget;
+    }
+
+    if (!keysToRemove || keysToRemove.length === 0) {
+      delete updatedExcluded[period];
+    } else {
+      updatedExcluded[period] = updatedExcluded[period].filter((k) => !keysToRemove.includes(k));
+      if (updatedExcluded[period].length === 0) {
+        delete updatedExcluded[period];
+      }
+    }
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      excludedPeriodItems: updatedExcluded,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+    return updatedBudget;
   }
 
   /**
@@ -1842,11 +2049,24 @@ export class FinanceStorageService {
 
     const customCats = currentBudget.customCategories
       ? {
-          expense: [...currentBudget.customCategories.expense],
-          income: [...currentBudget.customCategories.income],
-          saving: [...currentBudget.customCategories.saving],
+          expense:
+            currentBudget.customCategories.expense.length > 1
+              ? [...currentBudget.customCategories.expense]
+              : Array.from(new Set([...currentBudget.customCategories.expense, ...EXPENSE_CATEGORIES])),
+          income:
+            currentBudget.customCategories.income.length > 1
+              ? [...currentBudget.customCategories.income]
+              : Array.from(new Set([...currentBudget.customCategories.income, ...INCOME_CATEGORIES])),
+          saving:
+            currentBudget.customCategories.saving.length > 0
+              ? [...currentBudget.customCategories.saving]
+              : [...SAVING_CATEGORIES],
         }
-      : { expense: ['Loans'], income: ['Other Income'], saving: [] };
+      : {
+          expense: [...EXPENSE_CATEGORIES, 'Loans'],
+          income: [...INCOME_CATEGORIES],
+          saving: [...SAVING_CATEGORIES],
+        };
 
     if (targetType === 'expense' && !customCats.expense.includes('Loans')) {
       customCats.expense.push('Loans');
@@ -2168,9 +2388,32 @@ export class FinanceStorageService {
         updatedEntries = [newBudgetEntry, ...targetBudget.entries];
       }
 
+      const updatedExcluded: Record<string, string[]> = { ...(targetBudget.excludedPeriodItems || {}) };
+      if (updatedExcluded[resolvedPeriod] && updatedExcluded[resolvedPeriod].length > 0) {
+        const matchingTemplate = (targetBudget.itemTemplates || []).find(
+          (t) =>
+            t.loanId === loan.id ||
+            (loan.linkedTemplateId && t.id === loan.linkedTemplateId) ||
+            (t.type === targetType && t.item.trim().toLowerCase() === loanNameLower)
+        );
+        const keysToUnexclude = getPeriodItemExclusionKeys({
+          templateId: matchingTemplate?.id || loan.linkedTemplateId,
+          type: targetType,
+          item: matchingTemplate?.item || loan.name,
+          loanId: loan.id,
+        });
+        updatedExcluded[resolvedPeriod] = updatedExcluded[resolvedPeriod].filter(
+          (k) => !keysToUnexclude.includes(k)
+        );
+        if (updatedExcluded[resolvedPeriod].length === 0) {
+          delete updatedExcluded[resolvedPeriod];
+        }
+      }
+
       const updatedBudget: YearBudgetData = {
         ...targetBudget,
         entries: updatedEntries,
+        excludedPeriodItems: updatedExcluded,
         lastUpdated: new Date().toISOString(),
       };
       FinanceStorageService.saveLocalBudget(updatedBudget, {

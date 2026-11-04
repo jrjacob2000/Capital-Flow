@@ -1,8 +1,10 @@
-export const APP_VERSION = '1.16.9';
+export const APP_VERSION = '1.19.0';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
 export type EntryFrequency = 'monthly' | 'bi-weekly';
+
+export type TemplateBudgetVisibility = 'displayed' | 'optional' | 'hidden';
 
 export type PaymentMethod =
   | 'Cash'
@@ -38,6 +40,7 @@ export interface BudgetEntry {
   status?: 'Paid' | 'Pending' | 'Scheduled';
   reference?: string; // memo, receipt, notes
   toBeWithdrawn?: boolean; // included in ATM cash withdrawal list
+  isOptional?: boolean; // marked as optional on the budget list
   description: string;
   // If saving entry:
   savingAccountId?: string;
@@ -92,6 +95,8 @@ export interface BudgetItemTemplate {
   defaultSavingAccountId?: string;
   toBeWithdrawn?: boolean;
   loanId?: string;
+  showInBudget?: boolean; // whether the item automatically displays on the budget list (default true)
+  isOptional?: boolean; // whether the item is marked as optional on the budget list
 }
 
 export type LoanDirection = 'borrowed' | 'lent';
@@ -151,6 +156,7 @@ export interface YearBudgetData {
     saving: string[];
   };
   itemTemplates?: BudgetItemTemplate[];
+  excludedPeriodItems?: Record<string, string[]>; // Per-period deleted template/item keys
   isPersonalizedTemplate?: boolean;
   isDefaultStarterData?: boolean;
   notes?: string;

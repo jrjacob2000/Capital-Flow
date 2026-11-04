@@ -25,6 +25,22 @@ interface BudgetEntryViewProps {
   ) => void;
   onUpdateEntry?: (entryId: string, updated: Partial<BudgetEntry>) => void;
   onDeleteEntry: (entryId: string) => void;
+  onDeletePeriodItem?: (
+    period: string,
+    target: {
+      entryId?: string;
+      templateId?: string;
+      type: EntryType;
+      item: string;
+      category?: string;
+      estimatedCost?: number;
+      actualCost?: number;
+      hasActualCost?: boolean;
+      status?: 'Paid' | 'Pending' | 'Scheduled';
+      loanId?: string;
+    }
+  ) => void;
+  onRestorePeriodItems?: (period: string) => void;
   onUpdateCategories: (
     customCats: {
       expense: string[];
@@ -46,6 +62,8 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
   onAddMultipleEntries,
   onUpdateEntry,
   onDeleteEntry,
+  onDeletePeriodItem,
+  onRestorePeriodItems,
   onUpdateCategories,
   onUpdateTemplates,
   currencySymbol = '₱',
@@ -91,6 +109,8 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
         onAddMultipleEntries={onAddMultipleEntries}
         onUpdateEntry={onUpdateEntry || (() => {})}
         onDeleteEntry={onDeleteEntry}
+        onDeletePeriodItem={onDeletePeriodItem}
+        onRestorePeriodItems={onRestorePeriodItems}
         onUpdateCategories={onUpdateCategories}
         onUpdateTemplates={onUpdateTemplates}
         currencySymbol={currencySymbol}

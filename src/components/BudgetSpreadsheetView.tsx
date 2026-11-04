@@ -23,11 +23,13 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  RotateCcw,
 } from 'lucide-react';
 import {
   BudgetEntry,
   YearBudgetData,
   EntryFrequency,
+  EntryType,
   PaymentMethod,
   SavingsAccount,
   BudgetItemTemplate,
@@ -49,7 +51,11 @@ import {
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
 import { CarryOverModal } from './CarryOverModal';
 import { ExcelImportModal } from './ExcelImportModal';
-import { buildAutoFillPeriodEntries } from '../utils/budgetCalculations';
+import {
+  buildAutoFillPeriodEntries,
+  isTemplateExcludedInPeriod,
+  shouldTemplateDisplayInBudget,
+} from '../utils/budgetCalculations';
 
 export interface SheetRowItem {
   id: string;
@@ -68,6 +74,7 @@ export interface SheetRowItem {
   reference?: string;
   date: string;
   toBeWithdrawn: boolean;
+  isOptional?: boolean;
   savingAccountId?: string;
   savingAccountName?: string;
 }
@@ -86,6 +93,22 @@ interface BudgetSpreadsheetViewProps {
   ) => void;
   onUpdateEntry: (id: string, updated: Partial<BudgetEntry>) => void;
   onDeleteEntry: (entryId: string) => void;
+  onDeletePeriodItem?: (
+    period: string,
+    target: {
+      entryId?: string;
+      templateId?: string;
+      type: EntryType;
+      item: string;
+      category?: string;
+      estimatedCost?: number;
+      actualCost?: number;
+      hasActualCost?: boolean;
+      status?: 'Paid' | 'Pending' | 'Scheduled';
+      loanId?: string;
+    }
+  ) => void;
+  onRestorePeriodItems?: (period: string) => void;
   onUpdateCategories: (
     customCats: {
       expense: string[];
@@ -109,6 +132,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   onAddMultipleEntries,
   onUpdateEntry,
   onDeleteEntry,
+  onDeletePeriodItem,
+  onRestorePeriodItems,
   onUpdateCategories,
   onUpdateTemplates,
   currencySymbol = '₱',
@@ -126,6 +151,24 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [entrySourceMode, setEntrySourceMode] = useState<'unplanned' | 'template'>('unplanned');
   const [mobileShowFullTable, setMobileShowFullTable] = useState<boolean>(false);
   const [mobileExpenseFilter, setMobileExpenseFilter] = useState<'all' | 'pending' | 'paid' | 'saving'>('all');
+
+  const handleDeleteRowFromPeriod = (row: SheetRowItem, targetPeriod: string = selectedPeriod) => {
+    if (onDeletePeriodItem) {
+      onDeletePeriodItem(targetPeriod, {
+        entryId: row.isVirtualEstimate ? undefined : row.id,
+        templateId: row.templateId,
+        type: row.type,
+        item: row.item,
+        category: row.category,
+        estimatedCost: row.estimatedCost,
+        actualCost: row.actualCost,
+        hasActualCost: row.hasActualCost,
+        status: row.status,
+      });
+    } else if (!row.isVirtualEstimate) {
+      onDeleteEntry(row.id);
+    }
+  };
   const [paymentMethodFilter, setPaymentMethodFilter] = useState<PaymentMethod | null>(null);
   const [expenseSearchQuery, setExpenseSearchQuery] = useState<string>('');
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
@@ -165,15 +208,45 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     }
   };
 
-  // Active Categories & Templates (from budget or defaults)
-  const expenseCategories = budget.customCategories?.expense || [...EXPENSE_CATEGORIES];
-  const incomeCategories = budget.customCategories?.income || [...INCOME_CATEGORIES];
-  const savingCategories = budget.customCategories?.saving || [...SAVING_CATEGORIES];
+  // Active Categories & Templates (merged with defaults & existing items so dropdowns always list all options)
   const itemTemplates: BudgetItemTemplate[] = useMemo(() => {
     return budget.isPersonalizedTemplate
       ? stripDefaultStarterTemplates(budget.itemTemplates)
       : [];
   }, [budget.isPersonalizedTemplate, budget.itemTemplates]);
+
+  const expenseCategories = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...(budget.customCategories?.expense || []),
+        ...EXPENSE_CATEGORIES,
+        ...itemTemplates.filter((t) => t.type === 'expense').map((t) => t.category),
+        ...budget.entries.filter((e) => e.type === 'expense').map((e) => e.category),
+      ])
+    ).filter(Boolean);
+  }, [budget.customCategories?.expense, itemTemplates, budget.entries]);
+
+  const incomeCategories = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...(budget.customCategories?.income || []),
+        ...INCOME_CATEGORIES,
+        ...itemTemplates.filter((t) => t.type === 'income').map((t) => t.category),
+        ...budget.entries.filter((e) => e.type === 'income').map((e) => e.category),
+      ])
+    ).filter(Boolean);
+  }, [budget.customCategories?.income, itemTemplates, budget.entries]);
+
+  const savingCategories = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...(budget.customCategories?.saving || []),
+        ...SAVING_CATEGORIES,
+        ...itemTemplates.filter((t) => t.type === 'saving').map((t) => t.category),
+        ...budget.entries.filter((e) => e.type === 'saving').map((e) => e.category),
+      ])
+    ).filter(Boolean);
+  }, [budget.customCategories?.saving, itemTemplates, budget.entries]);
 
   // Helper to find estimated cost for any item name or category
   const getEstimateForItem = (itemName: string, catName?: string, type?: 'income' | 'expense' | 'saving'): number => {
@@ -230,8 +303,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     new Date().toISOString().split('T')[0].replace(/^\d{4}/, String(budget.year))
   );
   const [formSavingAccountId, setFormSavingAccountId] = useState<string>(accounts[0]?.id || '');
+  const [formIsOptional, setFormIsOptional] = useState<boolean>(false);
   const [saveToTemplate, setSaveToTemplate] = useState<boolean>(false);
   const [isCreatingNewSinkingFund, setIsCreatingNewSinkingFund] = useState<boolean>(false);
+  const [isCreatingCustomCategory, setIsCreatingCustomCategory] = useState<boolean>(false);
 
   const existingSinkingFunds = useMemo(() => {
     const basePool = [...DEFAULT_SINKING_FUND_NAMES];
@@ -349,12 +424,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       selectedPeriod,
       frequency,
       accounts,
-      isTemplateValidForPeriod
+      isTemplateValidForPeriod,
+      {
+        includeOptional: true,
+        excludedPeriodItems: budget.excludedPeriodItems,
+      }
     );
 
     if (validTemplatesCount === 0) {
       setAutoFillMessage(
-        `No estimate templates found for ${selectedPeriod}. Click "Estimates & Categories" to create your templates first.`
+        `No displayed estimate templates found for ${selectedPeriod}. Click "Templates" to create or enable your templates first.`
       );
       setTimeout(() => setAutoFillMessage(null), 4000);
       return;
@@ -384,7 +463,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const periodList =
     frequency === 'monthly' ? MONTH_NAMES : BIWEEKLY_PERIODS.map((p) => p.id);
 
-  // UNIFIED SHEET ROWS: THE SHEET IS PRE-POPULATED WITH ESTIMATES (FOR INCOME, ONLY REGULAR SALARY IS PRE-POPULATED)
+  const excludedTemplateCountForPeriod = useMemo(() => {
+    return itemTemplates.filter(
+      (tpl) =>
+        isTemplateValidForPeriod(tpl, frequency, selectedPeriod) &&
+        shouldTemplateDisplayInBudget(tpl, true) &&
+        isTemplateExcludedInPeriod(tpl, selectedPeriod, budget.excludedPeriodItems)
+    ).length;
+  }, [itemTemplates, frequency, selectedPeriod, budget.excludedPeriodItems]);
+
+  // UNIFIED SHEET ROWS: THE SHEET IS PRE-POPULATED WITH DISPLAYED ESTIMATES (EXCLUDING ITEMS DELETED IN THIS PERIOD)
   const { unifiedIncomeRows, unifiedExpenseRows } = useMemo(() => {
     const recordedEntries = budget.entries.filter((e) => e.period === selectedPeriod);
     const usedEntryIds = new Set<string>();
@@ -396,6 +484,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     itemTemplates
       .filter((tpl) => isTemplateValidForPeriod(tpl, frequency, selectedPeriod))
       .forEach((tpl) => {
+      if (isTemplateExcludedInPeriod(tpl, selectedPeriod, budget.excludedPeriodItems)) {
+        return;
+      }
+      const shouldDisplay = shouldTemplateDisplayInBudget(tpl, true);
       const tplItemLower = tpl.item.toLowerCase().trim();
       const matchingCandidates = recordedEntries.filter(
         (e) =>
@@ -405,17 +497,40 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             (e.item || e.description || '').toLowerCase().trim() === tplItemLower)
       );
       const matchedEntry =
-        matchingCandidates.find((e) => (e.actualCost !== undefined ? e.actualCost : e.amount) > 0) ||
-        matchingCandidates[0];
+        matchingCandidates.find(
+          (e) =>
+            (e.actualCost !== undefined ? e.actualCost : e.amount) > 0 ||
+            e.status === 'Paid'
+        ) || matchingCandidates[0];
 
       if (matchedEntry) {
         usedEntryIds.add(matchedEntry.id);
+        matchingCandidates.forEach((cand) => {
+          const candAct = cand.actualCost !== undefined ? cand.actualCost : cand.amount;
+          if (
+            cand.id !== matchedEntry.id &&
+            cand.reference === 'Auto-filled from template' &&
+            cand.status === 'Pending' &&
+            candAct === 0
+          ) {
+            usedEntryIds.add(cand.id);
+          }
+        });
         const est =
           matchedEntry.estimatedCost !== undefined && matchedEntry.estimatedCost > 0
             ? matchedEntry.estimatedCost
             : tpl.defaultEstimatedCost;
         const act = matchedEntry.actualCost !== undefined ? matchedEntry.actualCost : matchedEntry.amount;
         const diff = tpl.type === 'income' ? act - est : est - act;
+        const isUneditedAutoFillPlaceholder =
+          matchedEntry.reference === 'Auto-filled from template' &&
+          matchedEntry.status === 'Pending' &&
+          act === 0;
+
+        // If the user hid the template globally, hide unedited auto-filled placeholders too
+        if (isUneditedAutoFillPlaceholder && !shouldDisplay) {
+          return;
+        }
 
         const row: SheetRowItem = {
           id: matchedEntry.id,
@@ -439,17 +554,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         };
 
         if (tpl.type === 'income') {
-          // Non-salary irregular income templates are shown if received (> 0) or manually added/scheduled by the user
           const isUserManualEntry = matchedEntry.reference !== 'Auto-filled from template';
-          if (isRegularSalaryIncome(row.item, row.category) || act > 0 || isUserManualEntry) {
+          if (shouldDisplay || act > 0 || isUserManualEntry) {
             incomeRows.push(row);
           }
         } else {
           expenseRows.push(row);
         }
       } else {
-        // Not yet recorded: For income, ONLY pre-populate regular Salary; irregular income sources only appear when received
-        if (tpl.type === 'income' && !isRegularSalaryIncome(tpl.item, tpl.category)) {
+        // Not yet recorded: Check whether template is configured to display in the budget list
+        if (!shouldDisplay) {
           return;
         }
 
@@ -526,7 +640,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     });
 
     return { unifiedIncomeRows: incomeRows, unifiedExpenseRows: expenseRows };
-  }, [budget.entries, itemTemplates, selectedPeriod, budget.year, frequency, accounts]);
+  }, [budget.entries, budget.excludedPeriodItems, itemTemplates, selectedPeriod, budget.year, frequency, accounts]);
 
   // Totals calculations across the pre-populated sheet (counting settled/Paid actuals)
   const totalIncomeEstimated = unifiedIncomeRows.reduce(
@@ -841,6 +955,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const handleOpenRow = (row: SheetRowItem) => {
     setIsRowAction(true);
     setIsCreatingNewSinkingFund(false);
+    setIsCreatingCustomCategory(false);
     setModalPeriod(selectedPeriod);
     setModalType(row.type);
     setFormCategory(row.category);
@@ -894,6 +1009,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       });
     }
     setFormSavingAccountId(row.savingAccountId || accounts[0]?.id || '');
+    setFormIsOptional(Boolean(row.isOptional));
     setSelectedTemplateId(row.templateId || '');
     setEntrySourceMode(row.templateId || row.isVirtualEstimate || (row.estimatedCost && row.estimatedCost > 0) ? 'template' : 'unplanned');
     setSaveToTemplate(false);
@@ -943,6 +1059,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       status: 'Paid',
       reference: '',
       toBeWithdrawn: Boolean(row.toBeWithdrawn),
+      isOptional: Boolean(row.isOptional ?? matchedTpl?.isOptional),
       description: row.item || row.category,
       savingAccountId: row.type === 'saving' ? targetAcc?.id : undefined,
       savingAccountName: row.type === 'saving' ? targetAcc?.name : undefined,
@@ -971,6 +1088,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setEntrySourceMode('unplanned');
     setSelectedTemplateId('');
     setIsCreatingNewSinkingFund(false);
+    setIsCreatingCustomCategory(false);
     const defaultFund = existingSinkingFunds[0] || 'General Savings';
     setFormCategory(
       type === 'income'
@@ -984,6 +1102,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setFormActual('');
     setFormPaymentMethod('Bank Transfer');
     setFormSavingAccountId(accounts[0]?.id || '');
+    setFormIsOptional(false);
     setFormStatus('Paid');
     setFormReference('');
     setSaveToTemplate(false);
@@ -996,6 +1115,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     if (!templateId) {
       setEntrySourceMode('unplanned');
       setFormEstimated('0');
+      setFormIsOptional(false);
       return;
     }
 
@@ -1004,8 +1124,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     if (!tpl) return;
 
     setModalType(tpl.type);
+    setIsCreatingCustomCategory(false);
     setFormCategory(tpl.category);
     setFormItem(tpl.item);
+    setFormIsOptional(Boolean(tpl.isOptional));
     const estCost = tpl.defaultEstimatedCost || 0;
     setFormEstimated(estCost > 0 ? String(estCost) : '');
     if (!formActual || formActual.trim() === '') {
@@ -1038,6 +1160,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     );
     if (tpl) {
       setFormCategory(tpl.category);
+      setFormIsOptional(Boolean(tpl.isOptional));
       if (tpl.defaultPaymentMethod) setFormPaymentMethod(tpl.defaultPaymentMethod);
       if (tpl.defaultSavingAccountId) setFormSavingAccountId(tpl.defaultSavingAccountId);
       setSelectedTemplateId(tpl.id);
@@ -1142,13 +1265,47 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           (t) => t.item.toLowerCase() === resolvedFundOrItem.toLowerCase() && t.type === modalType
         );
 
+    const finalCategory =
+      formCategory.trim() ||
+      (modalType === 'income'
+        ? incomeCategories[0] || 'Salary & Wages'
+        : modalType === 'saving'
+        ? savingCategories[0] || 'Short-Term & General Savings'
+        : expenseCategories[0] || 'Utilities & Bills');
+
+    // Persist newly typed custom category into budget.customCategories so it appears in future dropdowns
+    if (finalCategory) {
+      const currentList =
+        modalType === 'income'
+          ? budget.customCategories?.income || INCOME_CATEGORIES
+          : modalType === 'saving'
+          ? budget.customCategories?.saving || SAVING_CATEGORIES
+          : budget.customCategories?.expense || EXPENSE_CATEGORIES;
+      if (!currentList.some((c) => c.toLowerCase() === finalCategory.toLowerCase())) {
+        onUpdateCategories({
+          expense:
+            modalType === 'expense'
+              ? [...expenseCategories, finalCategory]
+              : [...expenseCategories],
+          income:
+            modalType === 'income'
+              ? [...incomeCategories, finalCategory]
+              : [...incomeCategories],
+          saving:
+            modalType === 'saving'
+              ? [...savingCategories, finalCategory]
+              : [...savingCategories],
+        });
+      }
+    }
+
     const entryPayload = {
       year: budget.year,
       period: modalPeriod,
       periodIndex,
       date: formDate,
       type: modalType,
-      category: formCategory,
+      category: finalCategory,
       item: resolvedFundOrItem,
       estimatedCost: estNum,
       actualCost: actNum,
@@ -1159,6 +1316,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       status: formStatus,
       reference: formReference.trim(),
       toBeWithdrawn: computedToBeWithdrawn,
+      isOptional: formIsOptional,
       description: resolvedFundOrItem,
       savingAccountId: modalType === 'saving' ? formSavingAccountId : undefined,
       savingAccountName: modalType === 'saving' ? selectedAcc?.name : undefined,
@@ -1189,6 +1347,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   defaultSavingAccountId:
                     modalType === 'saving' ? formSavingAccountId || t.defaultSavingAccountId : t.defaultSavingAccountId,
                   toBeWithdrawn: computedToBeWithdrawn,
+                  showInBudget: t.showInBudget ?? true,
                 }
               : t
           );
@@ -1223,6 +1382,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           defaultPaymentMethod: resolvedPaymentMethod,
           defaultSavingAccountId: modalType === 'saving' ? formSavingAccountId || undefined : undefined,
           toBeWithdrawn: computedToBeWithdrawn,
+          showInBudget: true,
+          isOptional: formIsOptional,
         };
         onUpdateTemplates([...itemTemplates, newTpl]);
       }
@@ -1774,21 +1935,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleOpenRow(inc)}
-                                className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold flex items-center gap-1"
+                                className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
                               >
                                 <Edit2 className="w-3 h-3" />
                                 <span>Edit</span>
                               </button>
-                              {!inc.isVirtualEstimate && (
-                                <button
-                                  type="button"
-                                  onClick={() => onDeleteEntry(inc.id)}
-                                  className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] font-semibold flex items-center gap-1"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  <span>Reset</span>
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteRowFromPeriod(inc)}
+                                className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Delete</span>
+                              </button>
                             </div>
                           </div>
                         )}
@@ -2061,20 +2220,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => handleOpenRow(inc)}
-                              className="p-1 md:p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              className="p-1 md:p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                               title={isReceived ? 'Edit income' : 'Record actual'}
                             >
                               <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                             </button>
-                            {!inc.isVirtualEstimate && (
-                              <button
-                                onClick={() => onDeleteEntry(inc.id)}
-                                className="p-1 md:p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                                title="Reset to estimate"
-                              >
-                                <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                              </button>
-                            )}
+                            <button
+                              onClick={() => handleDeleteRowFromPeriod(inc)}
+                              className="p-1 md:p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title={`Delete "${inc.item}" from ${selectedPeriod}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -2154,6 +2311,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       {tab.label}
                     </button>
                   ))}
+
+                  {excludedTemplateCountForPeriod > 0 && onRestorePeriodItems && (
+                    <button
+                      type="button"
+                      onClick={() => onRestorePeriodItems(selectedPeriod)}
+                      className="px-2.5 py-1 rounded-lg whitespace-nowrap inline-flex items-center gap-1 bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 transition-colors cursor-pointer"
+                      title={`Restore ${excludedTemplateCountForPeriod} deleted template item(s) for ${selectedPeriod}`}
+                    >
+                      <RotateCcw className="w-3 h-3 shrink-0" />
+                      <span>Restore Deleted ({excludedTemplateCountForPeriod})</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Compact Live Pill Readout */}
@@ -2568,21 +2737,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleOpenRow(exp)}
-                                    className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold flex items-center gap-1"
+                                    className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
                                   >
                                     <Edit2 className="w-3 h-3" />
                                     <span>Edit</span>
                                   </button>
-                                  {!exp.isVirtualEstimate && (
-                                    <button
-                                      type="button"
-                                      onClick={() => onDeleteEntry(exp.id)}
-                                      className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] font-semibold flex items-center gap-1"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                      <span>Reset</span>
-                                    </button>
-                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteRowFromPeriod(exp)}
+                                    className="px-2 py-1 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    <span>Delete</span>
+                                  </button>
                                 </div>
                               </div>
 
@@ -3015,20 +3182,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => handleOpenRow(exp)}
-                              className="p-1 md:p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              className="p-1 md:p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                               title={isPaid ? 'Edit entry' : 'Record actual'}
                             >
                               <Edit2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                             </button>
-                            {!exp.isVirtualEstimate && (
-                              <button
-                                onClick={() => onDeleteEntry(exp.id)}
-                                className="p-1 md:p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                                title="Reset to estimate"
-                              >
-                                <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                              </button>
-                            )}
+                            <button
+                              onClick={() => handleDeleteRowFromPeriod(exp)}
+                              className="p-1 md:p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title={`Delete "${exp.item}" from ${selectedPeriod}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -3184,6 +3349,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       type="button"
                       onClick={() => {
                         setModalType('expense');
+                        setIsCreatingCustomCategory(false);
                         if (entrySourceMode === 'unplanned') {
                           setFormCategory(expenseCategories[0] || 'Budget');
                         } else {
@@ -3207,6 +3373,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       type="button"
                       onClick={() => {
                         setModalType('income');
+                        setIsCreatingCustomCategory(false);
                         if (entrySourceMode === 'unplanned') {
                           setFormCategory(incomeCategories[0] || 'Salary');
                         } else {
@@ -3231,6 +3398,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       onClick={() => {
                         setModalType('saving');
                         setIsCreatingNewSinkingFund(false);
+                        setIsCreatingCustomCategory(false);
                         const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
                         if (entrySourceMode === 'unplanned') {
                           setFormCategory(savingCategories[0] || 'General Savings');
@@ -3272,6 +3440,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   type="button"
                   onClick={() => {
                     setModalType('expense');
+                    setIsCreatingCustomCategory(false);
                     if (entrySourceMode === 'unplanned') {
                       setFormCategory(expenseCategories[0] || 'Budget');
                     } else {
@@ -3295,6 +3464,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   type="button"
                   onClick={() => {
                     setModalType('income');
+                    setIsCreatingCustomCategory(false);
                     if (entrySourceMode === 'unplanned') {
                       setFormCategory(incomeCategories[0] || 'Salary');
                     } else {
@@ -3319,6 +3489,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   onClick={() => {
                     setModalType('saving');
                     setIsCreatingNewSinkingFund(false);
+                    setIsCreatingCustomCategory(false);
                     const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
                     if (entrySourceMode === 'unplanned') {
                       setFormCategory(savingCategories[0] || 'General Savings');
@@ -3401,13 +3572,43 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         className="w-full min-w-0 h-8 px-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-lg text-[11px] text-slate-900 dark:text-white font-medium outline-none"
                       >
                         <option value="">Select preset...</option>
-                        {itemTemplates
-                          .filter((t) => t.type === modalType && isTemplateValidForPeriod(t, frequency, modalPeriod))
-                          .map((tpl) => (
-                            <option key={tpl.id} value={tpl.id}>
-                              {tpl.item} ({currencySymbol}{formatNumber(tpl.defaultEstimatedCost)})
-                            </option>
-                          ))}
+                        {(() => {
+                          const matchingTypeTemplates = itemTemplates.filter((t) => t.type === modalType);
+                          const currentPeriodTemplates = matchingTypeTemplates.filter((t) =>
+                            isTemplateValidForPeriod(t, frequency, modalPeriod)
+                          );
+                          const otherPeriodTemplates = matchingTypeTemplates.filter(
+                            (t) => !isTemplateValidForPeriod(t, frequency, modalPeriod)
+                          );
+                          const renderTplOption = (tpl: BudgetItemTemplate) => {
+                            const isHidden = !shouldTemplateDisplayInBudget(tpl);
+                            const isDeletedInPeriod = isTemplateExcludedInPeriod(
+                              tpl,
+                              modalPeriod,
+                              budget.excludedPeriodItems
+                            );
+                            const tag = isDeletedInPeriod
+                              ? ` [Deleted in ${modalPeriod}]`
+                              : isHidden
+                              ? ' [Not Auto-Displayed]'
+                              : '';
+                            return (
+                              <option key={tpl.id} value={tpl.id}>
+                                {tpl.item} ({currencySymbol}{formatNumber(tpl.defaultEstimatedCost)}){tag}
+                              </option>
+                            );
+                          };
+                          return (
+                            <>
+                              {currentPeriodTemplates.map(renderTplOption)}
+                              {otherPeriodTemplates.length > 0 && (
+                                <optgroup label="Other Cutoffs / Frequencies">
+                                  {otherPeriodTemplates.map(renderTplOption)}
+                                </optgroup>
+                              )}
+                            </>
+                          );
+                        })()}
                       </select>
                     )}
                   </div>
@@ -3485,7 +3686,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         <input
                           type="text"
                           required
-                          list={modalType === 'saving' ? 'existing-sinking-funds-list' : undefined}
                           placeholder={
                             modalType === 'saving'
                               ? 'New Fund name...'
@@ -3497,11 +3697,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         />
                         {modalType === 'saving' && (
                           <>
-                            <datalist id="existing-sinking-funds-list">
-                              {existingSinkingFunds.map((f) => (
-                                <option key={f} value={f} />
-                              ))}
-                            </datalist>
                             {(() => {
                               const closeMatch = findClosestSinkingFundMatch(formItem, existingSinkingFunds);
                               if (
@@ -3540,32 +3735,76 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
                         Category
                       </label>
-                      <button
-                        type="button"
-                        onClick={() => setIsManagerModalOpen(true)}
-                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isCreatingCustomCategory && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsCreatingCustomCategory(false);
+                              const activeList =
+                                modalType === 'income'
+                                  ? incomeCategories
+                                  : modalType === 'saving'
+                                  ? savingCategories
+                                  : expenseCategories;
+                              if (!formCategory.trim()) {
+                                setFormCategory(activeList[0] || 'Utilities & Bills');
+                              }
+                            }}
+                            className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                          >
+                            List
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setIsManagerModalOpen(true)}
+                          className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </div>
-                    <input
-                      type="text"
-                      list="category-options"
-                      value={formCategory}
-                      onChange={(e) => handleCategoryChange(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                      placeholder="Category..."
-                    />
-                    <datalist id="category-options">
-                      {(modalType === 'income'
-                        ? incomeCategories
-                        : modalType === 'saving'
-                        ? savingCategories
-                        : expenseCategories
-                      ).map((cat) => (
-                        <option key={cat} value={cat} />
-                      ))}
-                    </datalist>
+                    {!isCreatingCustomCategory ? (
+                      <select
+                        value={formCategory}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '__CREATE_NEW_CATEGORY__') {
+                            setIsCreatingCustomCategory(true);
+                            setFormCategory('');
+                          } else {
+                            handleCategoryChange(val);
+                          }
+                        }}
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {Array.from(
+                          new Set([
+                            ...(modalType === 'income'
+                              ? incomeCategories
+                              : modalType === 'saving'
+                              ? savingCategories
+                              : expenseCategories),
+                            ...(formCategory && formCategory.trim() ? [formCategory.trim()] : []),
+                          ])
+                        ).map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                        <option value="__CREATE_NEW_CATEGORY__">+ Custom Category...</option>
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        required
+                        value={formCategory}
+                        onChange={(e) => handleCategoryChange(e.target.value)}
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="New category name..."
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -3879,16 +4118,30 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
             {/* Compact Modal Footer with Template Sync & Actions */}
             <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
-              <div className="flex items-center gap-1.5 min-w-0">
-                {editingEntryId && (
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+                {(editingEntryId || isRowAction) && (
                   <button
                     type="button"
                     onClick={() => {
-                      onDeleteEntry(editingEntryId);
+                      if (onDeletePeriodItem) {
+                        onDeletePeriodItem(modalPeriod, {
+                          entryId: editingEntryId || undefined,
+                          templateId: selectedTemplateId || undefined,
+                          type: modalType,
+                          item: formItem.trim() || formCategory,
+                          category: formCategory,
+                          estimatedCost: parseFloat(formEstimated) || 0,
+                          actualCost: parseFloat(formActual) || 0,
+                          hasActualCost: Boolean(editingEntryId),
+                          status: formStatus,
+                        });
+                      } else if (editingEntryId) {
+                        onDeleteEntry(editingEntryId);
+                      }
                       setIsAddModalOpen(false);
                     }}
                     className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded-lg transition-colors cursor-pointer shrink-0"
-                    title="Delete / Reset to Estimate"
+                    title={`Delete item from ${modalPeriod}`}
                   >
                     <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </button>
@@ -3906,7 +4159,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   />
                   <span className="truncate">
                     <span className="sm:hidden">Sync template</span>
-                    <span className="hidden sm:inline">Sync to recurring template</span>
+                    <span className="hidden sm:inline">Sync to template</span>
                   </span>
                 </label>
               </div>

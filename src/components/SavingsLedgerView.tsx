@@ -2222,6 +2222,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     {Array.from(
                       new Set([
                         ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
+                        ...DEFAULT_SINKING_FUND_NAMES,
                         ...(budget?.customCategories?.saving || []),
                       ])
                     ).map((cat) => {
@@ -2378,8 +2379,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       {Array.from(
                         new Set([
                           ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
+                          ...DEFAULT_SINKING_FUND_NAMES,
                           ...(budget?.customCategories?.saving || []),
                           ...WITHDRAWAL_REASONS,
+                          ...(withdrawCategory ? [withdrawCategory] : []),
                         ])
                       ).map((reason) => (
                         <option key={reason} value={reason}>
@@ -3119,7 +3122,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                         </option>
                       ))}
-                    {(budget?.customCategories?.saving || [])
+                    {Array.from(
+                      new Set([
+                        ...DEFAULT_SINKING_FUND_NAMES,
+                        ...(budget?.customCategories?.saving || []),
+                      ])
+                    )
                       .filter(
                         (cat) =>
                           cat !== reallocateFromCategory &&
@@ -3329,6 +3337,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     {Array.from(
                       new Set([
                         ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
+                        ...DEFAULT_SINKING_FUND_NAMES,
                         ...(budget?.customCategories?.saving || []),
                         ...(editingTx.category ? [editingTx.category] : []),
                       ])

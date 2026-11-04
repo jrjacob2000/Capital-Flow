@@ -29,6 +29,7 @@ import {
   isDefaultStarterTemplateData,
   isDefaultStarterLedger,
 } from './services/sampleData';
+import { getPeriodItemExclusionKeys } from './utils/budgetCalculations';
 import {
   initAuth,
   googleSignIn,
@@ -428,7 +429,9 @@ export default function App() {
             );
 
             const isIdentical =
-              JSON.stringify(currentLocalBudget.entries) === JSON.stringify(driveBudgetRes.budget.entries);
+              JSON.stringify(currentLocalBudget.entries) === JSON.stringify(driveBudgetRes.budget.entries) &&
+              JSON.stringify(currentLocalBudget.excludedPeriodItems || {}) ===
+                JSON.stringify(driveBudgetRes.budget.excludedPeriodItems || {});
 
             if (!isIdentical) {
               conflictItems.push({
@@ -887,7 +890,9 @@ export default function App() {
           const isIdentical =
             JSON.stringify(loadedBudget.entries) === JSON.stringify(driveRes.budget.entries) &&
             JSON.stringify(loadedBudget.itemTemplates || []) === JSON.stringify(driveRes.budget.itemTemplates || []) &&
-            JSON.stringify(loadedBudget.customCategories || {}) === JSON.stringify(driveRes.budget.customCategories || {});
+            JSON.stringify(loadedBudget.customCategories || {}) === JSON.stringify(driveRes.budget.customCategories || {}) &&
+            JSON.stringify(loadedBudget.excludedPeriodItems || {}) ===
+              JSON.stringify(driveRes.budget.excludedPeriodItems || {});
 
           if (isIdentical) {
             return;
@@ -1010,9 +1015,32 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
 
+    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    if (updatedExcluded[newEntry.period] && updatedExcluded[newEntry.period].length > 0) {
+      const matchedTpl = (budget.itemTemplates || []).find(
+        (t) =>
+          t.type === newEntry.type &&
+          ((newEntry.loanId && t.loanId === newEntry.loanId) ||
+            t.item.trim().toLowerCase() === (newEntry.item || newEntry.description || '').trim().toLowerCase())
+      );
+      const keysToUnexclude = getPeriodItemExclusionKeys({
+        templateId: matchedTpl?.id,
+        type: newEntry.type,
+        item: newEntry.item || newEntry.description,
+        loanId: newEntry.loanId || matchedTpl?.loanId,
+      });
+      updatedExcluded[newEntry.period] = updatedExcluded[newEntry.period].filter(
+        (k) => !keysToUnexclude.includes(k)
+      );
+      if (updatedExcluded[newEntry.period].length === 0) {
+        delete updatedExcluded[newEntry.period];
+      }
+    }
+
     const updatedBudget: YearBudgetData = {
       ...budget,
       entries: [newEntry, ...budget.entries],
+      excludedPeriodItems: updatedExcluded,
     };
 
     setBudget(updatedBudget);
@@ -1053,16 +1081,38 @@ export default function App() {
       return e;
     });
 
+    const target = updatedEntries.find((e) => e.id === entryId);
+    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    if (target && updatedExcluded[target.period] && updatedExcluded[target.period].length > 0) {
+      const matchedTpl = (budget.itemTemplates || []).find(
+        (t) =>
+          t.type === target.type &&
+          ((target.loanId && t.loanId === target.loanId) ||
+            t.item.trim().toLowerCase() === (target.item || target.description || '').trim().toLowerCase())
+      );
+      const keysToUnexclude = getPeriodItemExclusionKeys({
+        templateId: matchedTpl?.id,
+        type: target.type,
+        item: matchedTpl?.item || target.item || target.description,
+        loanId: target.loanId || matchedTpl?.loanId,
+      });
+      updatedExcluded[target.period] = updatedExcluded[target.period].filter(
+        (k) => !keysToUnexclude.includes(k)
+      );
+      if (updatedExcluded[target.period].length === 0) {
+        delete updatedExcluded[target.period];
+      }
+    }
+
     const updatedBudget: YearBudgetData = {
       ...budget,
       entries: updatedEntries,
+      excludedPeriodItems: updatedExcluded,
     };
 
     setBudget(updatedBudget);
     FinanceStorageService.saveLocalBudget(updatedBudget);
     setHasUnsavedChanges(true);
-
-    const target = updatedEntries.find((e) => e.id === entryId);
     if (oldEntry?.type === 'saving' && target && target.type !== 'saving') {
       const rolledBackLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldEntry, true);
       setLedger({ ...rolledBackLedger });
@@ -1081,55 +1131,97 @@ export default function App() {
     showToast(`Updated entry: ${target?.item || target?.description || 'Item'}`);
   };
 
-  // Delete Budget Entry (with confirmation)
+  // Delete an entire budget item (recorded entry and/or virtual template row) for a specific period
+  const handleDeletePeriodItem = (
+    period: string,
+    target: {
+      entryId?: string;
+      templateId?: string;
+      type: EntryType;
+      item: string;
+      category?: string;
+      estimatedCost?: number;
+      actualCost?: number;
+      hasActualCost?: boolean;
+      status?: 'Paid' | 'Pending' | 'Scheduled';
+      loanId?: string;
+    }
+  ) => {
+    const currSym = budget.currency || '₱';
+    const typeLabel =
+      target.type === 'saving' ? 'Funds' : target.type === 'income' ? 'Income' : 'Expense';
+    const displayAmt =
+      target.hasActualCost && target.status === 'Paid'
+        ? target.actualCost ?? 0
+        : target.estimatedCost ?? target.actualCost ?? 0;
+
+    setConfirmationModal({
+      isOpen: true,
+      title: `Delete ${typeLabel} Item from ${period}?`,
+      description:
+        target.type === 'saving' && target.hasActualCost && target.status === 'Paid' && (target.actualCost || 0) > 0
+          ? `Are you sure you want to delete "${target.item}" from ${period} (${budget.year})? The entire item will be removed from ${period} and its recorded allocation will be rolled back from your Funds ledger. Other periods will not be affected.`
+          : `Are you sure you want to delete "${target.item}" from ${period} (${budget.year})? The entire item will be removed from ${period} only—other periods and your master template will not be affected.`,
+      affectedItems: [
+        `${target.item}${target.category ? ` (${target.category})` : ''} — ${currSym}${displayAmt.toLocaleString()} in ${period} ${budget.year}`,
+      ],
+      confirmLabel: `Yes, Delete from ${period}`,
+      isDestructive: true,
+      onConfirm: async () => {
+        const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
+        const {
+          budget: updatedBudget,
+          ledger: updatedLedger,
+          removedEntries,
+        } = FinanceStorageService.deleteBudgetPeriodItem(currentBudget, period, {
+          entryId: target.entryId,
+          templateId: target.templateId,
+          type: target.type,
+          item: target.item,
+          loanId: target.loanId,
+        });
+
+        setBudget(updatedBudget);
+        setLedger({ ...updatedLedger });
+        setHasUnsavedChanges(true);
+
+        const hadPaidSaving = removedEntries.some(
+          (e) => e.type === 'saving' && e.status !== 'Pending' && (e.actualCost ?? e.amount ?? 0) > 0
+        );
+        if (hadPaidSaving) {
+          showToast(`Deleted "${target.item}" from ${period} and updated Funds ledger`);
+        } else {
+          showToast(`Deleted "${target.item}" from ${period}`);
+        }
+        setConfirmationModal((m) => ({ ...m, isOpen: false }));
+      },
+    });
+  };
+
+  // Restore any deleted template items for a specific period
+  const handleRestorePeriodItems = (period: string) => {
+    const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
+    const updatedBudget = FinanceStorageService.restoreExcludedPeriodItems(currentBudget, period);
+    setBudget(updatedBudget);
+    setHasUnsavedChanges(true);
+    showToast(`Restored deleted template items for ${period}`);
+  };
+
+  // Delete Budget Entry by ID (delegates to handleDeletePeriodItem so the entire item is removed from that period)
   const handleDeleteBudgetEntry = (entryId: string) => {
     const entry = budget.entries.find((e) => e.id === entryId);
     if (!entry) return;
 
-    const currSym = budget.currency || '₱';
-    const entryAmt = entry.actualCost ?? entry.amount ?? 0;
-    const typeLabel = entry.type === 'saving' ? 'Funds' : entry.type === 'income' ? 'Income' : 'Expense';
-
-    setConfirmationModal({
-      isOpen: true,
-      title: `Delete ${typeLabel} Entry?`,
-      description:
-        entry.type === 'saving'
-          ? `Are you sure you want to delete this Funds entry? The corresponding amount will also be rolled back from your Funds ledger.`
-          : `Are you sure you want to delete this recorded ${typeLabel.toLowerCase()} entry from ${entry.period} (${entry.year})?`,
-      affectedItems: [
-        `${entry.item || entry.description} (${entry.category}) — ${currSym}${entryAmt.toLocaleString()}`,
-      ],
-      confirmLabel: 'Yes, Delete Entry',
-      isDestructive: true,
-      onConfirm: async () => {
-        const currentBudget = FinanceStorageService.loadLocalBudget(budget.year);
-        const updatedEntries = currentBudget.entries.filter((e) => e.id !== entryId);
-        const updatedBudget: YearBudgetData = {
-          ...currentBudget,
-          entries: updatedEntries,
-        };
-
-        setBudget(updatedBudget);
-        FinanceStorageService.saveLocalBudget(updatedBudget);
-        setHasUnsavedChanges(true);
-
-        // If it was a saving entry, roll back from Savings Ledger
-        if (entry.type === 'saving') {
-          const updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, true);
-          setLedger(updatedLedger);
-          showToast(`Removed Funds entry and updated Funds ledger`);
-        } else {
-          const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(entry, true);
-          if (loanSync.matchedLoan) {
-            setLedger({ ...loanSync.ledger });
-            showToast(`Deleted entry and rolled back loan payment on "${loanSync.matchedLoan.name}"`);
-          } else {
-            showToast(`Deleted ${entry.type} entry`);
-          }
-        }
-        setConfirmationModal((m) => ({ ...m, isOpen: false }));
-      },
+    handleDeletePeriodItem(entry.period, {
+      entryId: entry.id,
+      type: entry.type,
+      item: entry.item || entry.description,
+      category: entry.category,
+      estimatedCost: entry.estimatedCost,
+      actualCost: entry.actualCost ?? entry.amount,
+      hasActualCost: true,
+      status: entry.status,
+      loanId: entry.loanId,
     });
   };
 
@@ -2521,6 +2613,8 @@ export default function App() {
             onAddMultipleEntries={handleAddMultipleBudgetEntries}
             onUpdateEntry={handleUpdateBudgetEntry}
             onDeleteEntry={handleDeleteBudgetEntry}
+            onDeletePeriodItem={handleDeletePeriodItem}
+            onRestorePeriodItems={handleRestorePeriodItems}
             onUpdateCategories={handleUpdateCategories}
             onUpdateTemplates={handleUpdateTemplates}
             currencySymbol="₱"
