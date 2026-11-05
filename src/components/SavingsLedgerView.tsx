@@ -28,6 +28,7 @@ import {
 } from '../types/finance';
 import {
   resolveCanonicalSinkingFundName,
+  findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
   SAVING_CATEGORIES,
   DEFAULT_SINKING_FUND_NAMES,
@@ -178,7 +179,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   // Form states - Withdraw
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawAccountId, setWithdrawAccountId] = useState(ledger.accounts[0]?.id || '');
-  const [withdrawCategory, setWithdrawCategory] = useState(WITHDRAWAL_REASONS[0]);
+  const [withdrawCategory, setWithdrawCategory] = useState('General Reserves / Starting Capital');
   const [withdrawNote, setWithdrawNote] = useState('');
   const [withdrawDate, setWithdrawDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -295,7 +296,9 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       year,
       period,
       note: editTxNote.trim() || editingTx.note,
-      category: resolvedCategory || undefined,
+      category:
+        resolvedCategory ||
+        (editingTx.source === 'withdrawal' ? 'General Reserves / Starting Capital' : undefined),
       accountId: targetAcc ? targetAcc.id : editingTx.accountId,
       accountName: targetAcc ? targetAcc.name : editingTx.accountName,
     });
@@ -516,12 +519,30 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         fundName = tx.category && tx.category.trim() ? tx.category.trim() : 'Compounding Yields & Dividend';
         category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
-        fundName = resolveCanonicalSinkingFundName(
-          tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
-          tx.category,
-          knownCanonicalPool
-        ) || 'General Withdrawal';
-        category = tx.category || 'Withdrawal';
+        const rawWithdrawCat = (tx.category || '').trim();
+        if (
+          !rawWithdrawCat ||
+          rawWithdrawCat.toLowerCase() === 'general reserves / starting capital' ||
+          rawWithdrawCat.toLowerCase() === 'general unallocated withdrawal' ||
+          WITHDRAWAL_REASONS.some((r) => r.toLowerCase() === rawWithdrawCat.toLowerCase())
+        ) {
+          const matchedKnown = rawWithdrawCat
+            ? findClosestSinkingFundMatch(rawWithdrawCat, knownCanonicalPool)
+            : null;
+          if (!matchedKnown) {
+            return;
+          }
+          fundName = matchedKnown;
+          category = matchedKnown;
+        } else {
+          fundName =
+            resolveCanonicalSinkingFundName(
+              rawWithdrawCat || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
+              rawWithdrawCat,
+              knownCanonicalPool
+            ) || 'General Withdrawal';
+          category = rawWithdrawCat || 'Withdrawal';
+        }
       } else {
         const linkedEntry = tx.budgetEntryId
           ? budget?.entries?.find((e) => e.id === tx.budgetEntryId)
@@ -723,13 +744,53 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     return ledger.transactions.filter((tx) => tx.accountId === accountId || tx.toAccountId === accountId).length;
   };
 
-  const handleOpenTransactionModal = (mode: 'deposit' | 'withdraw' | 'transfer', accountId?: string) => {
+  const getDefaultFundForAccount = (accountId: string, preferredFund?: string): string => {
+    if (preferredFund) {
+      return preferredFund;
+    }
+    const fundsInAcc = categoryFunds
+      .filter((f) => f.id !== 'fund-general-unallocated')
+      .filter((f) => f.accounts.some((a) => a.accountId === accountId && a.amount > 0));
+    const currentHasBalanceInAcc = fundsInAcc.some((f) => f.name === withdrawCategory);
+    if (currentHasBalanceInAcc) {
+      return withdrawCategory;
+    }
+    const unallocInAcc =
+      unallocatedFund?.accounts.find((a) => a.accountId === accountId)?.amount || 0;
+    if (unallocInAcc > 0 && withdrawCategory === 'General Reserves / Starting Capital') {
+      return 'General Reserves / Starting Capital';
+    }
+    if (fundsInAcc.length > 0) {
+      return fundsInAcc[0].name;
+    }
+    if (unallocInAcc > 0) {
+      return 'General Reserves / Starting Capital';
+    }
+    const firstActiveFund = categoryFunds.find((f) => f.id !== 'fund-general-unallocated' && f.currentBalance > 0);
+    return firstActiveFund ? firstActiveFund.name : 'General Reserves / Starting Capital';
+  };
+
+  const handleOpenTransactionModal = (
+    mode: 'deposit' | 'withdraw' | 'transfer',
+    accountId?: string,
+    fundName?: string
+  ) => {
     setTransactionMode(mode);
-    if (accountId) {
+    if (mode === 'withdraw') {
+      let targetAccId = accountId || withdrawAccountId || ledger.accounts[0]?.id || '';
+      if (fundName && !accountId) {
+        const targetFundObj = categoryFunds.find((f) => f.name === fundName);
+        if (targetFundObj && targetFundObj.accounts.length > 0) {
+          targetAccId = targetFundObj.accounts[0].accountId;
+        }
+      }
+      if (targetAccId) {
+        setWithdrawAccountId(targetAccId);
+      }
+      setWithdrawCategory(getDefaultFundForAccount(targetAccId, fundName));
+    } else if (accountId) {
       if (mode === 'deposit') {
         setDepositAccountId(accountId);
-      } else if (mode === 'withdraw') {
-        setWithdrawAccountId(accountId);
       } else if (mode === 'transfer') {
         setTransferFromAccountId(accountId);
         const other = ledger.accounts.find((a) => a.id !== accountId);
@@ -745,26 +806,58 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   };
 
   const handleOpenReallocateModal = (fromFund?: string, toFund?: string, accountId?: string, amount?: number) => {
-    const firstNamedFund = categoryFunds.find((f) => f.id !== 'fund-general-unallocated');
     const source = fromFund || 'General Reserves / Starting Capital';
     setReallocateFromCategory(source);
-    if (toFund) {
+    const otherNamedFund = categoryFunds.find(
+      (f) => f.id !== 'fund-general-unallocated' && f.name !== source
+    );
+    if (toFund && toFund !== source) {
       setReallocateToCategory(toFund);
-    } else if (firstNamedFund && firstNamedFund.name !== source) {
-      setReallocateToCategory(firstNamedFund.name);
+    } else if (otherNamedFund) {
+      setReallocateToCategory(otherNamedFund.name);
+    } else if (source !== 'General Reserves / Starting Capital') {
+      setReallocateToCategory('General Reserves / Starting Capital');
     } else {
       setReallocateToCategory('__custom__');
     }
-    const firstUnallocatedAcc = unallocatedFund?.accounts?.[0];
-    setReallocateAccountId(accountId !== undefined ? accountId : (firstUnallocatedAcc ? firstUnallocatedAcc.accountId : ''));
+
+    const sourceFundObj =
+      source.trim().toLowerCase() === 'general reserves / starting capital'
+        ? unallocatedFund
+        : categoryFunds.find((f) => f.name === source);
+    const firstSourceAcc = sourceFundObj?.accounts?.[0];
+    setReallocateAccountId(
+      accountId !== undefined ? accountId : (firstSourceAcc ? firstSourceAcc.accountId : '')
+    );
     if (amount !== undefined) {
       setReallocateAmount(String(amount));
-    } else if (source === 'General Reserves / Starting Capital' && firstUnallocatedAcc) {
-      setReallocateAmount(String(firstUnallocatedAcc.amount));
+    } else if (source === 'General Reserves / Starting Capital' && firstSourceAcc) {
+      setReallocateAmount(String(firstSourceAcc.amount));
     } else {
       setReallocateAmount('');
     }
     setIsReallocateModalOpen(true);
+  };
+
+  const handleSwapReallocateFunds = () => {
+    if (!reallocateToCategory || reallocateToCategory === '__custom__') return;
+    const prevFrom = reallocateFromCategory;
+    const nextFrom = reallocateToCategory;
+    setReallocateFromCategory(nextFrom);
+    setReallocateToCategory(prevFrom);
+
+    const nextSourceObj =
+      nextFrom.trim().toLowerCase() === 'general reserves / starting capital'
+        ? unallocatedFund
+        : categoryFunds.find((f) => f.name === nextFrom);
+    if (nextSourceObj && nextSourceObj.accounts.length > 0) {
+      const hasCurrentAcc = nextSourceObj.accounts.some(
+        (a) => a.accountId === reallocateAccountId && a.amount > 0
+      );
+      if (!hasCurrentAcc) {
+        setReallocateAccountId(nextSourceObj.accounts[0].accountId);
+      }
+    }
   };
 
   const handleRecordDeposit = (e: React.FormEvent) => {
@@ -808,6 +901,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     if (isNaN(amountNum) || amountNum <= 0) return;
 
     const acc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
+    if (acc && amountNum > acc.balance) {
+      alert(`Withdrawal amount cannot exceed account balance (${currencySymbol}${formatNumber(acc.balance)}).`);
+      return;
+    }
     const { year, period } = parseDateYearAndPeriod(withdrawDate);
 
     onAddTransaction({
@@ -992,19 +1089,132 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   }, [totalCapital, simRate, simYears, simMonthly]);
 
   return (
-    <div className="space-y-4 sm:space-y-5">
+    <div className="space-y-3.5 sm:space-y-4">
+      {/* PRIMARY TOP-LEVEL VIEW SWITCHER: GOAL FUNDS vs BANK ACCOUNTS */}
+      <div className="bg-white dark:bg-slate-900 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => setActiveTab('sinking_funds')}
+            className={`min-h-[48px] px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between gap-2 cursor-pointer ${
+              activeTab === 'sinking_funds'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-slate-50 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Target
+                className={`w-4 h-4 shrink-0 ${
+                  activeTab === 'sinking_funds' ? 'text-white' : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              />
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-bold leading-tight truncate">
+                  Goal Funds
+                </div>
+                <div
+                  className={`text-[10px] leading-tight truncate mt-0.5 ${
+                    activeTab === 'sinking_funds'
+                      ? 'text-emerald-100'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  What it&apos;s for
+                </div>
+              </div>
+            </div>
+            <span
+              className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                activeTab === 'sinking_funds'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+              }`}
+            >
+              {categoryFunds.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('accounts')}
+            className={`min-h-[48px] px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between gap-2 cursor-pointer ${
+              activeTab === 'accounts'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-slate-50 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Landmark
+                className={`w-4 h-4 shrink-0 ${
+                  activeTab === 'accounts' ? 'text-white' : 'text-indigo-600 dark:text-indigo-400'
+                }`}
+              />
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-bold leading-tight truncate">
+                  Bank Accounts
+                </div>
+                <div
+                  className={`text-[10px] leading-tight truncate mt-0.5 ${
+                    activeTab === 'accounts'
+                      ? 'text-indigo-100'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  Where it&apos;s stored
+                </div>
+              </div>
+            </div>
+            <span
+              className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                activeTab === 'accounts'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+              }`}
+            >
+              {ledger.accounts.length}
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Compact Unified Capital & Action Header */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-xs">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          {/* Left: Total Capital + Milestone Progress */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
+          {/* Left: Total Capital + Secondary Tool Pills (History & Projector) */}
           <div className="space-y-2 min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
-              <PiggyBank className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>Total Bank &amp; Wallet Savings</span>
-              <span>&middot;</span>
-              <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
-                {ledger.accounts.length} {ledger.accounts.length === 1 ? 'account' : 'accounts'}
-              </span>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-medium">
+                <PiggyBank className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>Total Bank &amp; Wallet Savings</span>
+              </div>
+
+              {/* Compact Secondary Tools: History & Growth Projector */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(activeTab === 'transactions' ? 'sinking_funds' : 'transactions')}
+                  className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                    activeTab === 'transactions'
+                      ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  <History className="w-3 h-3 shrink-0" />
+                  <span>History ({transactions.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(activeTab === 'calculator' ? 'sinking_funds' : 'calculator')}
+                  className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                    activeTab === 'calculator'
+                      ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  <Calculator className="w-3 h-3 shrink-0" />
+                  <span>Projector</span>
+                </button>
+              </div>
             </div>
 
             <div className="flex items-baseline gap-3 flex-wrap">
@@ -1029,7 +1239,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <button
               type="button"
               onClick={() => handleOpenTransactionModal('deposit')}
-              className="min-h-[42px] px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shadow-xs"
+              className="min-h-[40px] px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shadow-xs"
             >
               <Coins className="w-3.5 h-3.5 shrink-0" />
               <span>Deposit</span>
@@ -1037,7 +1247,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <button
               type="button"
               onClick={() => handleOpenTransactionModal('withdraw')}
-              className="min-h-[42px] px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shadow-xs"
+              className="min-h-[40px] px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shadow-xs"
             >
               <ArrowDownRight className="w-3.5 h-3.5 shrink-0" />
               <span>Withdraw</span>
@@ -1045,7 +1255,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <button
               type="button"
               onClick={() => handleOpenTransactionModal('transfer')}
-              className="min-h-[42px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+              className="min-h-[40px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
               <ArrowLeftRight className="w-3.5 h-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" />
               <span>Transfer</span>
@@ -1053,7 +1263,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <button
               type="button"
               onClick={() => handleOpenReallocateModal()}
-              className="min-h-[42px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+              className="min-h-[40px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
               <Target className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
               <span>Reallocate</span>
@@ -1062,7 +1272,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         </div>
 
         {/* Compact 4-Metric Strip */}
-        <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
           <div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Assigned to Goal Funds</span>
             <span className="text-sm sm:text-base font-bold font-mono tabular-nums text-slate-900 dark:text-white">
@@ -1090,120 +1300,23 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         </div>
       </div>
 
-      {/* Segmented Navigation Bar (Responsive 2x2 on Mobile, 4-Across on Tablet & Desktop) */}
-      <div className="grid grid-cols-2 min-[540px]:grid-cols-4 gap-1.5 sm:gap-2 bg-slate-100 dark:bg-slate-800/90 p-1.5 rounded-2xl border border-slate-200/70 dark:border-slate-800">
-        <button
-          type="button"
-          onClick={() => setActiveTab('sinking_funds')}
-          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
-            activeTab === 'sinking_funds'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
-          }`}
-        >
-          <Target className="w-4 h-4 shrink-0" />
-          <span className="truncate">Funds</span>
-          <span
-            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full leading-none shrink-0 ${
-              activeTab === 'sinking_funds'
-                ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold'
-                : 'bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 font-medium'
-            }`}
-          >
-            {categoryFunds.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('accounts')}
-          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
-            activeTab === 'accounts'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
-          }`}
-        >
-          <Wallet className="w-4 h-4 shrink-0" />
-          <span className="truncate">Accounts</span>
-          <span
-            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full leading-none shrink-0 ${
-              activeTab === 'accounts'
-                ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold'
-                : 'bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 font-medium'
-            }`}
-          >
-            {ledger.accounts.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('transactions')}
-          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
-            activeTab === 'transactions'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
-          }`}
-        >
-          <History className="w-4 h-4 shrink-0" />
-          <span className="truncate">History</span>
-          <span
-            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full leading-none shrink-0 ${
-              activeTab === 'transactions'
-                ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold'
-                : 'bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 font-medium'
-            }`}
-          >
-            {transactions.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('calculator')}
-          className={`min-h-[42px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer ${
-            activeTab === 'calculator'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/60 dark:hover:bg-slate-800/60'
-          }`}
-        >
-          <Calculator className="w-4 h-4 shrink-0" />
-          <span className="truncate">
-            <span className="hidden sm:inline">Growth </span>Projector
-          </span>
-        </button>
-      </div>
-
       {/* TAB 1: SINKING FUNDS & ENVELOPES */}
       {activeTab === 'sinking_funds' && (
-        <div className="space-y-4">
-          {/* Compact Section Toolbar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800">
-            <div className="text-xs text-slate-600 dark:text-slate-300">
-              <span className="font-semibold text-slate-900 dark:text-white">Savings Goals &amp; Funds</span>
-              <span className="mx-1.5 text-slate-300 dark:text-slate-700">&middot;</span>
-              <span>
-                Track how much is set aside for each goal and which bank account holds it
-              </span>
+        <div className="space-y-3.5">
+          {/* Streamlined Single-Line Section Header */}
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="text-xs text-slate-600 dark:text-slate-300 truncate">
+              <span className="font-bold text-slate-900 dark:text-white">Goal Funds ({categoryFunds.length})</span>
+              <span className="hidden sm:inline text-slate-400"> &middot; Track how much is set aside for each goal</span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsManageFundsModalOpen(true)}
-                className="min-h-[38px] px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl border border-slate-200/70 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-              >
-                <Sliders className="w-3.5 h-3.5 shrink-0" />
-                <span>Manage Funds</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenReallocateModal()}
-                className="min-h-[38px] px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-              >
-                <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
-                <span>Reallocate</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setIsManageFundsModalOpen(true)}
+              className="h-8 px-3 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-800 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 shadow-2xs"
+            >
+              <Sliders className="w-3.5 h-3.5 shrink-0" />
+              <span>Manage Funds</span>
+            </button>
           </div>
 
           {/* Compact Category Funds Grid */}
@@ -1323,7 +1436,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                               key={acc.accountId}
                               className="py-1 flex items-center justify-between gap-2 text-xs"
                             >
-                              <div className="flex items-center gap-1.5 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab('accounts')}
+                                title="View in Bank Accounts"
+                                className="flex items-center gap-1.5 min-w-0 hover:underline text-left cursor-pointer"
+                              >
                                 <span
                                   className="w-2 h-2 rounded-full shrink-0"
                                   style={{ backgroundColor: acc.accountColor || '#10b981' }}
@@ -1331,7 +1449,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                                 <span className="text-slate-700 dark:text-slate-300 truncate">
                                   {acc.accountName}
                                 </span>
-                              </div>
+                              </button>
                               <div className="flex items-center gap-2 shrink-0">
                                 <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
                                   {currencySymbol}{formatNumber(acc.amount)}
@@ -1363,7 +1481,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
 
                   {/* Card Footer Quick Actions */}
-                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-3 gap-1.5">
+                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                     <button
                       type="button"
                       onClick={() => {
@@ -1377,8 +1495,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        const firstAcc = fund.accounts[0];
                         if (isUnallocated) {
-                          const firstAcc = fund.accounts[0];
                           handleOpenReallocateModal(
                             'General Reserves / Starting Capital',
                             undefined,
@@ -1386,7 +1504,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             firstAcc ? firstAcc.amount : fund.currentBalance
                           );
                         } else {
-                          handleOpenReallocateModal('General Reserves / Starting Capital', fund.name);
+                          handleOpenReallocateModal(
+                            fund.name,
+                            undefined,
+                            firstAcc ? firstAcc.accountId : ''
+                          );
                         }
                       }}
                       className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50/70 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-950 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
@@ -1396,10 +1518,25 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        const firstAcc = fund.accounts[0];
+                        handleOpenTransactionModal(
+                          'withdraw',
+                          firstAcc ? firstAcc.accountId : undefined,
+                          isUnallocated ? 'General Reserves / Starting Capital' : fund.name
+                        );
+                      }}
+                      className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      - Withdraw
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
                         setDepositType('manual_deposit');
                         setDepositCategory(isUnallocated ? '' : fund.name);
                         setDepositNote(isUnallocated ? '' : fund.name);
-                        handleOpenTransactionModal('deposit');
+                        const firstAcc = fund.accounts[0];
+                        handleOpenTransactionModal('deposit', firstAcc ? firstAcc.accountId : undefined);
                       }}
                       className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
                     >
@@ -1415,20 +1552,22 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
       {/* TAB 2: PHYSICAL ACCOUNTS */}
       {activeTab === 'accounts' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800">
-            <div className="text-xs text-slate-600 dark:text-slate-300">
-              <span className="font-semibold text-slate-900 dark:text-white">
-                Physical Bank &amp; Wallet Accounts ({ledger.accounts.length})
+        <div className="space-y-3.5">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="text-xs text-slate-600 dark:text-slate-300 truncate">
+              <span className="font-bold text-slate-900 dark:text-white">
+                Bank &amp; Wallet Accounts ({ledger.accounts.length})
               </span>
-              <span className="mx-1.5 text-slate-300 dark:text-slate-700">&middot;</span>
-              <span>Manage high-yield banks, e-wallets, MP2, and investment buckets</span>
+              <span className="hidden sm:inline text-slate-400">
+                {' '}
+                &middot; High-yield banks, e-wallets, MP2, and investment buckets
+              </span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => setIsManageAccountsModalOpen(true)}
-                className="min-h-[38px] px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors border border-slate-200/70 dark:border-slate-700 whitespace-nowrap"
+                className="h-8 px-2.5 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors border border-slate-200 dark:border-slate-800 whitespace-nowrap shadow-2xs"
               >
                 <Sliders className="w-3.5 h-3.5 shrink-0" />
                 <span>Manage</span>
@@ -1436,7 +1575,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <button
                 type="button"
                 onClick={handleOpenAddAccount}
-                className="min-h-[38px] px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors whitespace-nowrap"
+                className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1 cursor-pointer shadow-xs transition-colors whitespace-nowrap"
               >
                 <Plus className="w-3.5 h-3.5 shrink-0" />
                 <span>Add Account</span>
@@ -2311,7 +2450,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     </div>
                     <select
                       value={withdrawAccountId}
-                      onChange={(e) => setWithdrawAccountId(e.target.value)}
+                      onChange={(e) => {
+                        const nextAccId = e.target.value;
+                        setWithdrawAccountId(nextAccId);
+                        setWithdrawCategory(getDefaultFundForAccount(nextAccId));
+                      }}
                       className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                     >
                       {ledger.accounts.map((acc) => (
@@ -2334,7 +2477,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             onClick={() => setWithdrawAmount(selAcc.balance.toString())}
                             className="text-[10px] text-rose-600 dark:text-rose-400 hover:underline font-semibold cursor-pointer shrink-0 leading-none"
                           >
-                            Max
+                            Max Bank
                           </button>
                         );
                       })()}
@@ -2360,36 +2503,110 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     <div className="p-2 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
                       <span>
-                        Exceeds balance ({currencySymbol}{formatNumber(selAcc.balance)}).
+                        Exceeds account balance ({currencySymbol}{formatNumber(selAcc.balance)}).
                       </span>
                     </div>
                   );
                 })()}
 
-                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-2.5">
                   <div className="min-w-0">
-                    <div className="flex items-center justify-between h-4 mb-1">
-                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Fund / Reason</label>
+                    <div className="flex items-center justify-between gap-1 h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        Deduct From Fund (Earmark)
+                      </label>
+                      {(() => {
+                        const isGeneral =
+                          withdrawCategory.trim().toLowerCase() === 'general reserves / starting capital';
+                        const selectedFundObj = isGeneral
+                          ? unallocatedFund
+                          : categoryFunds.find((f) => f.name === withdrawCategory);
+                        const inSelectedAcc =
+                          selectedFundObj?.accounts.find((a) => a.accountId === withdrawAccountId)?.amount ?? 0;
+                        const maxFundAmt = inSelectedAcc > 0 ? inSelectedAcc : selectedFundObj?.currentBalance ?? 0;
+                        if (maxFundAmt <= 0) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setWithdrawAmount(String(maxFundAmt))}
+                            className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-semibold cursor-pointer shrink-0 leading-none"
+                          >
+                            Max Fund ({currencySymbol}{formatNumber(maxFundAmt)})
+                          </button>
+                        );
+                      })()}
                     </div>
-                    <select
-                      value={withdrawCategory}
-                      onChange={(e) => setWithdrawCategory(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                    >
-                      {Array.from(
+                    {(() => {
+                      const selAcc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
+                      const accLabel = selAcc ? selAcc.name : 'Selected Account';
+                      const namedFunds = categoryFunds.filter((f) => f.id !== 'fund-general-unallocated');
+                      const fundsInSelectedBank = namedFunds
+                        .map((f) => {
+                          const slice = f.accounts.find((a) => a.accountId === selAcc?.id);
+                          return { fund: f, inBankAmount: slice?.amount || 0 };
+                        })
+                        .filter((item) => item.inBankAmount > 0);
+
+                      const unallocInSelectedBank =
+                        unallocatedFund?.accounts.find((a) => a.accountId === selAcc?.id)?.amount || 0;
+                      const totalUnalloc = unallocatedFund?.currentBalance || 0;
+
+                      const otherFunds = namedFunds.filter(
+                        (f) => !fundsInSelectedBank.some((inBank) => inBank.fund.id === f.id)
+                      );
+
+                      const extraTemplateNames = Array.from(
                         new Set([
-                          ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
                           ...DEFAULT_SINKING_FUND_NAMES,
                           ...(budget?.customCategories?.saving || []),
-                          ...WITHDRAWAL_REASONS,
-                          ...(withdrawCategory ? [withdrawCategory] : []),
                         ])
-                      ).map((reason) => (
-                        <option key={reason} value={reason}>
-                          {reason}
-                        </option>
-                      ))}
-                    </select>
+                      ).filter(
+                        (name) =>
+                          name.trim().toLowerCase() !== 'general reserves / starting capital' &&
+                          !namedFunds.some((nf) => nf.name.toLowerCase() === name.trim().toLowerCase())
+                      );
+
+                      return (
+                        <select
+                          value={withdrawCategory}
+                          onChange={(e) => setWithdrawCategory(e.target.value)}
+                          className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                        >
+                          {(fundsInSelectedBank.length > 0 || unallocInSelectedBank > 0) && (
+                            <optgroup label={`Funds Held in ${accLabel}`}>
+                              {fundsInSelectedBank.map(({ fund, inBankAmount }) => (
+                                <option key={fund.id} value={fund.name}>
+                                  {fund.name} ({currencySymbol}{formatNumber(inBankAmount)} in {accLabel})
+                                </option>
+                              ))}
+                              {unallocInSelectedBank > 0 && (
+                                <option value="General Reserves / Starting Capital">
+                                  General Reserves / Unallocated ({currencySymbol}{formatNumber(unallocInSelectedBank)} in {accLabel})
+                                </option>
+                              )}
+                            </optgroup>
+                          )}
+
+                          <optgroup label="Other Goal Funds (Total Balance)">
+                            {unallocInSelectedBank <= 0 && (
+                              <option value="General Reserves / Starting Capital">
+                                General Reserves / Unallocated ({currencySymbol}{formatNumber(totalUnalloc)} total)
+                              </option>
+                            )}
+                            {otherFunds.map((f) => (
+                              <option key={f.id} value={f.name}>
+                                {f.name} ({currencySymbol}{formatNumber(f.currentBalance)} total)
+                              </option>
+                            ))}
+                            {extraTemplateNames.map((name) => (
+                              <option key={name} value={name}>
+                                {name} ({currencySymbol}0)
+                              </option>
+                            ))}
+                          </optgroup>
+                        </select>
+                      );
+                    })()}
                   </div>
 
                   <div className="min-w-0">
@@ -2408,17 +2625,94 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
                 </div>
 
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between h-4 mb-1">
-                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Memo (Optional)</label>
+                {/* Live Before -> After Reconciliation Preview */}
+                {(() => {
+                  const selAcc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
+                  const wAmt = parseFloat(withdrawAmount) || 0;
+                  const isGeneral =
+                    withdrawCategory.trim().toLowerCase() === 'general reserves / starting capital';
+                  const selectedFundObj = isGeneral
+                    ? unallocatedFund
+                    : categoryFunds.find((f) => f.name === withdrawCategory);
+                  const fundBalanceBefore = selectedFundObj?.currentBalance || 0;
+                  const fundInBankBefore =
+                    selectedFundObj?.accounts.find((a) => a.accountId === selAcc?.id)?.amount || 0;
+                  const accBalanceBefore = selAcc?.balance || 0;
+                  const accBalanceAfter = Math.max(0, accBalanceBefore - wAmt);
+                  const fundBalanceAfter = Math.max(0, fundBalanceBefore - wAmt);
+                  const displayFundName = isGeneral
+                    ? 'General Reserves (Unallocated)'
+                    : withdrawCategory;
+
+                  return (
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-1.5 text-[11px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-500 dark:text-slate-400 truncate">
+                          Bank: <strong className="text-slate-800 dark:text-slate-200">{selAcc?.name}</strong>
+                        </span>
+                        <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
+                          {currencySymbol}{formatNumber(accBalanceBefore)} &rarr;{' '}
+                          <strong className="text-rose-600 dark:text-rose-400">
+                            {currencySymbol}{formatNumber(accBalanceAfter)}
+                          </strong>
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-500 dark:text-slate-400 truncate">
+                          Fund: <strong className="text-slate-800 dark:text-slate-200">{displayFundName}</strong>
+                        </span>
+                        <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
+                          {currencySymbol}{formatNumber(fundBalanceBefore)} &rarr;{' '}
+                          <strong className="text-rose-600 dark:text-rose-400">
+                            {currencySymbol}{formatNumber(fundBalanceAfter)}
+                          </strong>
+                        </span>
+                      </div>
+                      {wAmt > 0 && wAmt > fundInBankBefore && fundInBankBefore > 0 && (
+                        <div className="pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-[10px] text-amber-700 dark:text-amber-300">
+                          Note: {displayFundName} currently holds {currencySymbol}{formatNumber(fundInBankBefore)} inside {selAcc?.name}.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div className="min-w-0 space-y-1.5">
+                  <div className="flex items-center justify-between h-4">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                      Purpose / Memo (Optional)
+                    </label>
                   </div>
                   <input
                     type="text"
-                    placeholder="e.g. Emergency expense or bill settlement"
+                    placeholder="e.g. Hospital ER bill, car tire replacement, tuition..."
                     value={withdrawNote}
                     onChange={(e) => setWithdrawNote(e.target.value)}
                     className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   />
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[10px] text-slate-400 mr-0.5">Quick reason:</span>
+                    {[
+                      'Emergency / Medical',
+                      'Home / Car Repair',
+                      'Bills & Living',
+                      'Family Support',
+                      'Major Purchase',
+                    ].map((reasonTag) => (
+                      <button
+                        key={reasonTag}
+                        type="button"
+                        onClick={() => setWithdrawNote(reasonTag)}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors cursor-pointer ${
+                          withdrawNote === reasonTag
+                            ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {reasonTag}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
@@ -2431,7 +2725,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="h-8 sm:h-9 px-4 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    disabled={(() => {
+                      const selAcc = ledger.accounts.find((a) => a.id === withdrawAccountId) || ledger.accounts[0];
+                      const wAmt = parseFloat(withdrawAmount) || 0;
+                      return !selAcc || wAmt <= 0 || wAmt > selAcc.balance;
+                    })()}
+                    className="h-8 sm:h-9 px-4 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <ArrowDownRight className="w-3.5 h-3.5" />
                     <span>Confirm Withdrawal</span>
@@ -3073,73 +3372,121 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             </div>
 
             <form onSubmit={handleRecordReallocation} className="mt-3 space-y-2.5 sm:space-y-3">
-              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between h-4 mb-1">
-                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                      From Fund (Source)
-                    </label>
-                  </div>
-                  <select
-                    value={reallocateFromCategory}
-                    onChange={(e) => {
-                      const nextFrom = e.target.value;
-                      setReallocateFromCategory(nextFrom);
-                      if (reallocateToCategory === nextFrom) {
-                        const fallbackTarget = categoryFunds.find((f) => f.name !== nextFrom);
-                        setReallocateToCategory(fallbackTarget ? fallbackTarget.name : '__custom__');
-                      }
-                    }}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                  >
-                    {!categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
-                      <option value="General Reserves / Starting Capital">General Reserves / Starting Capital ({currencySymbol}0)</option>
-                    )}
-                    {categoryFunds.map((f) => (
-                      <option key={f.id} value={f.name}>
-                        {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between h-4 mb-1">
-                    <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                      To Fund (Target)
-                    </label>
-                  </div>
-                  <select
-                    value={reallocateToCategory}
-                    onChange={(e) => setReallocateToCategory(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                  >
-                    <option value="">-- Select Target --</option>
-                    {categoryFunds
-                      .filter((f) => f.name !== reallocateFromCategory)
-                      .map((f) => (
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-end gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        From Fund (Source)
+                      </label>
+                    </div>
+                    <select
+                      value={reallocateFromCategory}
+                      onChange={(e) => {
+                        const nextFrom = e.target.value;
+                        setReallocateFromCategory(nextFrom);
+                        if (reallocateToCategory === nextFrom) {
+                          const fallbackTarget = categoryFunds.find((f) => f.name !== nextFrom);
+                          setReallocateToCategory(
+                            fallbackTarget
+                              ? fallbackTarget.name
+                              : nextFrom !== 'General Reserves / Starting Capital'
+                                ? 'General Reserves / Starting Capital'
+                                : '__custom__'
+                          );
+                        }
+                        const nextSourceObj =
+                          nextFrom.trim().toLowerCase() === 'general reserves / starting capital'
+                            ? unallocatedFund
+                            : categoryFunds.find((f) => f.name === nextFrom);
+                        if (nextSourceObj && nextSourceObj.accounts.length > 0) {
+                          const hasAcc = nextSourceObj.accounts.some(
+                            (a) => a.accountId === reallocateAccountId && a.amount > 0
+                          );
+                          if (!hasAcc) {
+                            setReallocateAccountId(nextSourceObj.accounts[0].accountId);
+                          }
+                        }
+                      }}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    >
+                      {!categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
+                        <option value="General Reserves / Starting Capital">
+                          General Reserves / Starting Capital ({currencySymbol}0)
+                        </option>
+                      )}
+                      {categoryFunds.map((f) => (
                         <option key={f.id} value={f.name}>
                           {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                         </option>
                       ))}
-                    {Array.from(
-                      new Set([
-                        ...DEFAULT_SINKING_FUND_NAMES,
-                        ...(budget?.customCategories?.saving || []),
-                      ])
-                    )
-                      .filter(
-                        (cat) =>
-                          cat !== reallocateFromCategory &&
-                          !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
+                      {reallocateFromCategory &&
+                        reallocateFromCategory !== 'General Reserves / Starting Capital' &&
+                        !categoryFunds.some((f) => f.name === reallocateFromCategory) && (
+                          <option value={reallocateFromCategory}>
+                            {reallocateFromCategory} ({currencySymbol}0)
+                          </option>
+                        )}
+                    </select>
+                  </div>
+
+                  <div className="flex justify-center sm:pb-0.5">
+                    <button
+                      type="button"
+                      onClick={handleSwapReallocateFunds}
+                      disabled={!reallocateToCategory || reallocateToCategory === '__custom__'}
+                      title="Switch From Fund and To Fund"
+                      className="h-8 px-2.5 sm:px-2 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/80 rounded-xl flex items-center justify-center gap-1 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                      <span className="sm:hidden">Switch Direction</span>
+                    </button>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        To Fund (Target)
+                      </label>
+                    </div>
+                    <select
+                      value={reallocateToCategory}
+                      onChange={(e) => setReallocateToCategory(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    >
+                      <option value="">-- Select Target --</option>
+                      {reallocateFromCategory !== 'General Reserves / Starting Capital' &&
+                        !categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
+                          <option value="General Reserves / Starting Capital">
+                            General Reserves / Starting Capital ({currencySymbol}0)
+                          </option>
+                        )}
+                      {categoryFunds
+                        .filter((f) => f.name !== reallocateFromCategory)
+                        .map((f) => (
+                          <option key={f.id} value={f.name}>
+                            {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
+                          </option>
+                        ))}
+                      {Array.from(
+                        new Set([
+                          ...DEFAULT_SINKING_FUND_NAMES,
+                          ...(budget?.customCategories?.saving || []),
+                        ])
                       )
-                      .map((cat) => (
-                        <option key={`custom-${cat}`} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    <option value="__custom__">+ New Fund...</option>
-                  </select>
+                        .filter(
+                          (cat) =>
+                            cat !== reallocateFromCategory &&
+                            !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
+                        )
+                        .map((cat) => (
+                          <option key={`custom-${cat}`} value={cat}>
+                            {cat} ({currencySymbol}0)
+                          </option>
+                        ))}
+                      <option value="__custom__">+ New Fund...</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -3179,13 +3526,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 >
                   <option value="">All / Unspecified Account</option>
                   {ledger.accounts.map((acc) => {
-                    const accUnalloc = unallocatedFund?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
                     const isFromUnallocated =
                       reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
+                    const sourceFundObj = isFromUnallocated
+                      ? unallocatedFund
+                      : categoryFunds.find((f) => f.name === reallocateFromCategory);
+                    const heldInAcc =
+                      sourceFundObj?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
                     return (
                       <option key={acc.id} value={acc.id}>
                         {acc.name} ({currencySymbol}{formatNumber(acc.balance)}
-                        {isFromUnallocated ? ` · Unallocated: ${currencySymbol}${formatNumber(accUnalloc)}` : ''})
+                        {` · In ${isFromUnallocated ? 'Unallocated' : reallocateFromCategory}: ${currencySymbol}${formatNumber(heldInAcc)}`})
                       </option>
                     );
                   })}
@@ -3199,11 +3550,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       Amount ({currencySymbol})
                     </label>
                     {(() => {
-                      const sourceFund = categoryFunds.find((f) => f.name === reallocateFromCategory);
+                      const sourceFund =
+                        reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
+                          ? unallocatedFund
+                          : categoryFunds.find((f) => f.name === reallocateFromCategory);
                       const accSlice = reallocateAccountId
                         ? sourceFund?.accounts.find((a) => a.accountId === reallocateAccountId)
                         : undefined;
-                      const maxAvail = accSlice ? accSlice.amount : sourceFund?.currentBalance || 0;
+                      const maxAvail = accSlice && accSlice.amount > 0 ? accSlice.amount : sourceFund?.currentBalance || 0;
                       if (maxAvail <= 0) return null;
                       return (
                         <button
@@ -3211,7 +3565,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           onClick={() => setReallocateAmount(String(maxAvail))}
                           className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer shrink-0 leading-none"
                         >
-                          Max
+                          Max ({currencySymbol}{formatNumber(maxAvail)})
                         </button>
                       );
                     })()}
@@ -3244,6 +3598,57 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Live Before -> After Reallocation Preview */}
+              {(() => {
+                const rAmt = parseFloat(reallocateAmount) || 0;
+                const isFromGeneral =
+                  reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
+                const fromObj = isFromGeneral
+                  ? unallocatedFund
+                  : categoryFunds.find((f) => f.name === reallocateFromCategory);
+                const fromBefore = fromObj?.currentBalance || 0;
+                const fromAfter = Math.max(0, fromBefore - rAmt);
+
+                const resolvedToName =
+                  reallocateToCategory === '__custom__'
+                    ? reallocateCustomCategory.trim() || 'New Fund'
+                    : reallocateToCategory || 'Select Target';
+                const isToGeneral =
+                  resolvedToName.trim().toLowerCase() === 'general reserves / starting capital';
+                const toObj = isToGeneral
+                  ? unallocatedFund
+                  : categoryFunds.find((f) => f.name === resolvedToName);
+                const toBefore = toObj?.currentBalance || 0;
+                const toAfter = toBefore + rAmt;
+
+                return (
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-1.5 text-[11px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500 dark:text-slate-400 truncate">
+                        From: <strong className="text-slate-800 dark:text-slate-200">{reallocateFromCategory}</strong>
+                      </span>
+                      <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
+                        {currencySymbol}{formatNumber(fromBefore)} &rarr;{' '}
+                        <strong className="text-rose-600 dark:text-rose-400">
+                          {currencySymbol}{formatNumber(fromAfter)}
+                        </strong>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500 dark:text-slate-400 truncate">
+                        To: <strong className="text-slate-800 dark:text-slate-200">{resolvedToName}</strong>
+                      </span>
+                      <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
+                        {currencySymbol}{formatNumber(toBefore)} &rarr;{' '}
+                        <strong className="text-emerald-600 dark:text-emerald-400">
+                          {currencySymbol}{formatNumber(toAfter)}
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div>
                 <div className="flex items-center justify-between h-4 mb-1">

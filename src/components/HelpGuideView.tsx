@@ -803,20 +803,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
-                    <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                      FULL-YEAR PULSE STRIP (4 CARDS)
-                    </div>
-                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
-                      YTD Income, Paid Expenses, Moved to Savings &amp; Remaining Cash
-                    </h5>
-                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                      Tracks settled (<code className="font-mono">Paid</code>) totals across the entire {currentYear} year: <strong>YTD Income</strong> received, <strong>Paid Expenses</strong>, <strong>Moved to Savings</strong> (with Savings Rate <code className="font-mono">%</code>), and <strong>Remaining Cash</strong> (<code className="font-mono">Leftover</code> vs. <code className="font-mono">Over Budget</code>).
-                    </p>
-                    <div className="pt-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                      Remaining = YTD Income − Paid Expenses − Savings
-                    </div>
-                  </div>
+
 
                   <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50/40 dark:bg-slate-800/20 space-y-1.5">
                     <div className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">

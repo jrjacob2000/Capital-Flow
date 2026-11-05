@@ -2055,4 +2055,97 @@ describe('20. Per-Period Budget Item Deletion & Restoration (deleteBudgetPeriodI
   });
 });
 
+describe('21. Sinking Fund Withdrawal Deduction & Reallocation Mechanics', () => {
+  it('deducts withdrawal transactions from the specified sinking fund without altering unaffected funds', () => {
+    memoryStorage.clear();
+    const { ledger: initialLedger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const bpiAcc = initialLedger.accounts[0];
+    assert.ok(bpiAcc);
+
+    // Initial deposit to Emergency Fund
+    const depRes = FinanceStorageService.addLedgerTransaction({
+      date: '2026-03-01',
+      year: 2026,
+      period: 'Mar',
+      amount: 50000,
+      accountId: bpiAcc.id,
+      accountName: bpiAcc.name,
+      source: 'manual_deposit',
+      category: 'Emergency Fund',
+      note: 'Emergency Fund Deposit',
+    });
+
+    const emFundBefore = depRes.ledger.transactions
+      .filter((t) => t.category === 'Emergency Fund')
+      .reduce((s, t) => s + (t.source === 'withdrawal' ? -t.amount : t.amount), 0);
+    assert.equal(emFundBefore, 50000);
+
+    // Record an unexpected withdrawal from Emergency Fund
+    const withRes = FinanceStorageService.addLedgerTransaction({
+      date: '2026-03-15',
+      year: 2026,
+      period: 'Mar',
+      amount: 15000,
+      accountId: bpiAcc.id,
+      accountName: bpiAcc.name,
+      source: 'withdrawal',
+      category: 'Emergency Fund',
+      note: 'Hospital ER Bill',
+    });
+
+    const emFundAfter = withRes.ledger.transactions
+      .filter((t) => t.category === 'Emergency Fund')
+      .reduce((s, t) => s + (t.source === 'withdrawal' ? -t.amount : t.amount), 0);
+    assert.equal(emFundAfter, 35000);
+
+    const updatedBpi = withRes.ledger.accounts.find((a) => a.id === bpiAcc.id);
+    assert.equal(updatedBpi?.balance, bpiAcc.balance + 35000);
+  });
+
+  it('correctly executes virtual reallocation between goal funds when direction is swapped', () => {
+    memoryStorage.clear();
+    const { ledger: initialLedger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const acc = initialLedger.accounts[0];
+    assert.ok(acc);
+
+    // Seed Travel Fund with 20,000
+    FinanceStorageService.addLedgerTransaction({
+      date: '2026-04-01',
+      year: 2026,
+      period: 'Apr',
+      amount: 20000,
+      accountId: acc.id,
+      accountName: acc.name,
+      source: 'manual_deposit',
+      category: 'Travel Fund',
+      note: 'Initial Travel Fund',
+    });
+
+    // Reallocate from Travel Fund (Source) to Emergency Fund (Target)
+    const reallocRes = FinanceStorageService.addLedgerTransaction({
+      date: '2026-04-10',
+      year: 2026,
+      period: 'Apr',
+      amount: 8000,
+      accountId: acc.id,
+      accountName: acc.name,
+      source: 'reallocation',
+      category: 'Travel Fund',
+      toCategory: 'Emergency Fund',
+      note: 'Shifted from Travel to Emergency',
+    });
+
+    // Bank account balance is unchanged by virtual reallocation
+    const updatedAcc = reallocRes.ledger.accounts.find((a) => a.id === acc.id);
+    assert.equal(updatedAcc?.balance, acc.balance + 20000);
+
+    // Reallocation audit trail exists
+    const reallocTx = reallocRes.ledger.transactions.find((t) => t.source === 'reallocation');
+    assert.ok(reallocTx);
+    assert.equal(reallocTx.category, 'Travel Fund');
+    assert.equal(reallocTx.toCategory, 'Emergency Fund');
+    assert.equal(reallocTx.amount, 8000);
+  });
+});
+
 

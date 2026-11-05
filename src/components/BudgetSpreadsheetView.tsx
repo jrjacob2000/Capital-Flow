@@ -1673,20 +1673,73 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         )}
       </div>
 
-      {/* TOP 3-CARD PERIOD SUMMARY: REMAINING SALARY & TOTALS */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 sm:gap-4">
-        
+      {/* MOBILE UNIFIED HERO STRIP (Single high-clarity card on mobile, removes redundant In/Out cards) */}
+      <div className="md:hidden bg-gradient-to-br from-emerald-600 via-teal-700 to-slate-900 rounded-2xl p-4 text-white shadow-md">
+        <div className="flex items-center justify-between text-xs text-emerald-100 mb-1">
+          <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider">
+            <span>Remaining Cash ({selectedPeriod})</span>
+            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+          </div>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+            currentRemainingPaid >= 0 ? 'bg-white/20 text-white' : 'bg-rose-500/90 text-white'
+          }`}>
+            {currentRemainingPaid >= 0 ? 'Surplus' : 'Deficit'}
+          </span>
+        </div>
+
+        {/* Main Headline Metric */}
+        <div className="flex items-baseline gap-2 mt-1">
+          <div className="text-2xl font-black font-mono tracking-tight">
+            {currencySymbol}{formatNumber(currentRemainingPaid)}
+            {!hasAnyIncomeRecorded && <span className="text-xs text-emerald-100 ml-1 font-normal font-sans">(Est)</span>}
+          </div>
+          <div className="text-[11px] text-emerald-100/90 font-mono">
+            &middot; Projected net: {currencySymbol}{formatNumber(projectedRemainingAll)}
+          </div>
+        </div>
+
+        {/* Compact In vs Out Progress & Readout Strip */}
+        <div className="mt-3 pt-2.5 border-t border-white/15 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] font-mono">
+            <span className="text-emerald-200">
+              In: <strong>{currencySymbol}{formatNumber(hasAnyIncomeRecorded ? totalIncomeActual : totalIncomeEstimated)}</strong>
+            </span>
+            <span className="text-rose-200">
+              Out: <strong>{currencySymbol}{formatNumber(hasAnyExpenseRecorded ? totalExpenseActual : totalExpenseEstimated)}</strong>
+            </span>
+          </div>
+          {(() => {
+            const inAmt = hasAnyIncomeRecorded ? totalIncomeActual : totalIncomeEstimated;
+            const outAmt = hasAnyExpenseRecorded ? totalExpenseActual : totalExpenseEstimated;
+            const spentPct = inAmt > 0 ? Math.min(100, Math.round((outAmt / inAmt) * 100)) : 0;
+            return (
+              <div className="w-full bg-white/20 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    spentPct > 90 ? 'bg-rose-400' : spentPct > 70 ? 'bg-amber-300' : 'bg-emerald-300'
+                  }`}
+                  style={{ width: `${spentPct}%` }}
+                  title={`${spentPct}% of income committed`}
+                />
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+
+      {/* DESKTOP 3-CARD PERIOD SUMMARY (Maintained for spacious desktop view) */}
+      <div className="hidden md:grid md:grid-cols-3 gap-4">
         {/* CARD 1: SALARY & INCOME */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 mb-1">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
             <span className="font-semibold uppercase tracking-wider truncate">Income ({selectedPeriod})</span>
             <TrendingUp className="w-4 h-4 text-emerald-500 shrink-0" />
           </div>
-          <div className="text-lg sm:text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400 truncate">
+          <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400 truncate">
             {currencySymbol}{formatNumber(hasAnyIncomeRecorded ? totalIncomeActual : totalIncomeEstimated)}
             {!hasAnyIncomeRecorded && <span className="text-[11px] text-slate-400 ml-1 font-normal">(Est)</span>}
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[10px] sm:text-[11px] text-slate-400 mt-1 gap-0.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
             <span>Est: {currencySymbol}{formatNumber(totalIncomeEstimated)}</span>
             <span className={hasAnyIncomeRecorded ? 'text-emerald-600 font-semibold' : 'text-slate-400 font-semibold'}>
               Act: {hasAnyIncomeRecorded ? `${currencySymbol}${formatNumber(totalIncomeActual)}` : '—'}
@@ -1695,16 +1748,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         </div>
 
         {/* CARD 2: TOTAL EXPENSES & SAVINGS */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 mb-1">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
             <span className="font-semibold uppercase tracking-wider truncate">Outflow &amp; Funds</span>
             <Receipt className="w-4 h-4 text-rose-500 shrink-0" />
           </div>
-          <div className="text-lg sm:text-xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate">
+          <div className="text-xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate">
             {currencySymbol}{formatNumber(hasAnyExpenseRecorded ? totalExpenseActual : totalExpenseEstimated)}
             {!hasAnyExpenseRecorded && <span className="text-[11px] text-slate-400 ml-1 font-normal">(Est)</span>}
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[10px] sm:text-[11px] text-slate-400 mt-1 gap-0.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
             <span>Est: {currencySymbol}{formatNumber(totalExpenseEstimated)}</span>
             <span className={hasAnyExpenseRecorded ? 'text-slate-700 dark:text-slate-300 font-semibold' : 'text-slate-400'}>
               Act: {hasAnyExpenseRecorded ? `${currencySymbol}${formatNumber(totalExpenseActual)}` : '—'}
@@ -1713,7 +1766,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         </div>
 
         {/* CARD 3: REMAINING TO SALARY */}
-        <div className="col-span-2 md:col-span-1 bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl p-3.5 sm:p-4 text-white shadow-md">
+        <div className="bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl p-4 text-white shadow-md">
           <div className="flex items-center justify-between text-xs text-emerald-100 mb-1">
             <span className="font-bold uppercase tracking-wider">Remaining to Salary ({selectedPeriod})</span>
             <Sparkles className="w-4 h-4 text-amber-300" />
@@ -1729,7 +1782,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             </span>
           </div>
         </div>
-
       </div>
 
       {/* SPREADSHEET MAIN CONTAINER */}

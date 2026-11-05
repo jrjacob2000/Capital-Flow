@@ -17,6 +17,7 @@ import {
 import { YearBudgetData, SavingsLedgerData, EntryFrequency, EntryType, LoanRecord } from '../types/finance';
 import {
   resolveCanonicalSinkingFundName,
+  findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
   DEFAULT_SINKING_FUND_NAMES,
 } from '../services/sampleData';
@@ -248,13 +249,42 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         fundName = tx.category && tx.category.trim() ? tx.category.trim() : 'Compounding Yields & Dividend';
         category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
-        fundName =
-          resolveCanonicalSinkingFundName(
-            tx.category || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
-            tx.category,
-            knownCanonicalPool
-          ) || 'General Withdrawal';
-        category = tx.category || 'Withdrawal';
+        const rawWithdrawCat = (tx.category || '').trim();
+        const legacyReasons = [
+          'emergency fund / medical',
+          'bills & living expenses',
+          'tuition / school fees',
+          'family support / remittance',
+          'major purchase / appliance',
+          'debt / loan settlement',
+          'home maintenance / repairs',
+          'travel / vacation',
+          'cash on hand',
+          'other',
+        ];
+        if (
+          !rawWithdrawCat ||
+          rawWithdrawCat.toLowerCase() === 'general reserves / starting capital' ||
+          rawWithdrawCat.toLowerCase() === 'general unallocated withdrawal' ||
+          legacyReasons.includes(rawWithdrawCat.toLowerCase())
+        ) {
+          const matchedKnown = rawWithdrawCat
+            ? findClosestSinkingFundMatch(rawWithdrawCat, knownCanonicalPool)
+            : null;
+          if (!matchedKnown) {
+            return;
+          }
+          fundName = matchedKnown;
+          category = matchedKnown;
+        } else {
+          fundName =
+            resolveCanonicalSinkingFundName(
+              rawWithdrawCat || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
+              rawWithdrawCat,
+              knownCanonicalPool
+            ) || 'General Withdrawal';
+          category = rawWithdrawCat || 'Withdrawal';
+        }
       } else {
         const linkedEntry = tx.budgetEntryId
           ? budget?.entries?.find((e) => e.id === tx.budgetEntryId)
@@ -590,87 +620,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 2. Annual Budget Cashflow Pulse (Compact 4-Stat Strip) */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
-        <div className="flex items-center justify-between gap-2 mb-2.5">
-          <div className="flex items-center gap-1.5">
-            <TrendingUp className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-            <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-              {budget.year} Full-Year Cashflow ({frequency === 'bi-weekly' ? 'Bi-Weekly Budget' : 'Monthly Budget'})
-            </h3>
-          </div>
-          <button
-            type="button"
-            onClick={onNavigateToBudget}
-            className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5 cursor-pointer"
-          >
-            <span>Budget Sheet</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-          <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
-            <div className="text-[11px] text-slate-500 dark:text-slate-400">Year-to-Date Income</div>
-            <div className="mt-0.5 text-sm sm:text-base font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 truncate">
-              {currencySymbol}{formatNumber(totalIncome)}
-            </div>
-          </div>
-
-          <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
-            <div className="text-[11px] text-slate-500 dark:text-slate-400">Paid Expenses</div>
-            <div className="mt-0.5 text-sm sm:text-base font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400 truncate">
-              {currencySymbol}{formatNumber(totalExpenses)}
-            </div>
-          </div>
-
-          <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
-            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-              <span>Moved to Savings</span>
-              <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                {savingsRate.toFixed(0)}%
-              </span>
-            </div>
-            <div className="mt-0.5 text-sm sm:text-base font-bold font-mono tabular-nums text-indigo-600 dark:text-indigo-400 truncate">
-              {currencySymbol}{formatNumber(totalSavings)}
-            </div>
-          </div>
-
-          <div
-            onClick={onNavigateToBudget}
-            className="p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
-          >
-            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-              <span>Remaining Cash</span>
-              <span
-                className={`text-[10px] font-semibold ${
-                  unallocatedBudgetSurplus > 0.005
-                    ? 'text-amber-600 dark:text-amber-400'
-                    : unallocatedBudgetSurplus < -0.005
-                    ? 'text-rose-600 dark:text-rose-400'
-                    : 'text-emerald-600 dark:text-emerald-400'
-                }`}
-              >
-                {unallocatedBudgetSurplus > 0.005
-                  ? 'Leftover'
-                  : unallocatedBudgetSurplus < -0.005
-                  ? 'Over Budget'
-                  : 'Balanced'}
-              </span>
-            </div>
-            <div
-              className={`mt-0.5 text-sm sm:text-base font-bold font-mono tabular-nums truncate ${
-                unallocatedBudgetSurplus < -0.005
-                  ? 'text-rose-600 dark:text-rose-400'
-                  : 'text-slate-900 dark:text-white'
-              }`}
-            >
-              {unallocatedBudgetSurplus < 0 ? '-' : ''}
-              {currencySymbol}{formatNumber(Math.abs(unallocatedBudgetSurplus))}
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* 3. At-A-Glance Priority Lists: Top Funds/Accounts & Active Loans */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
