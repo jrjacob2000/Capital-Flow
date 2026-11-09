@@ -223,7 +223,11 @@ export default function App() {
           syncMessage: 'Connecting to Firebase Cloud Database...',
         }));
 
-        const remoteWorkspace = await FirestoreSyncService.fetchWorkspace(user.uid);
+        // High-performance parallel retrieval: fetch workspace and current-year budget concurrently
+        const [remoteWorkspace, initialBudget] = await Promise.all([
+          FirestoreSyncService.fetchWorkspace(user.uid),
+          FirestoreSyncService.fetchAnnualBudget(user.uid, currentYear),
+        ]);
         let localBudgetNow = FinanceStorageService.loadLocalBudget(currentYear);
         let localLedgerNow = FinanceStorageService.loadLocalSavingsLedger();
         let localTemplateNow = FinanceStorageService.loadLocalTemplateData(localBudgetNow);
@@ -231,7 +235,10 @@ export default function App() {
 
         if (remoteWorkspace) {
           const targetYr = remoteWorkspace.activeYear || currentYear;
-          const remoteBudget = await FirestoreSyncService.fetchAnnualBudget(user.uid, targetYr);
+          const remoteBudget =
+            targetYr === currentYear
+              ? initialBudget
+              : await FirestoreSyncService.fetchAnnualBudget(user.uid, targetYr);
 
           // Register all known years from Firebase workspace
           if (Array.isArray(remoteWorkspace.knownYears)) {
@@ -730,6 +737,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    FirestoreSyncService.clearMemoryCache();
     await logout();
     FinanceStorageService.setCloudSessionActive(false);
     FinanceStorageService.clearDriveFolderCache();

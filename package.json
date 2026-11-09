@@ -4,7 +4,7 @@
   "version": "1.21.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "vite",
     "build": "vite build",
     "postbuild": "node -e \"import('fs').then(fs => { fs.copyFileSync('dist/index.html', 'dist/404.html'); if (fs.existsSync('public/privacy.html')) fs.copyFileSync('public/privacy.html', 'dist/privacy.html'); if (fs.existsSync('public/terms.html')) fs.copyFileSync('public/terms.html', 'dist/terms.html'); })\"",
     "preview": "vite preview",

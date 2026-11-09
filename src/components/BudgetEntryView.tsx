@@ -68,40 +68,107 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
   onUpdateTemplates,
   currencySymbol = '₱',
 }) => {
-  const currentMonthName =
-    budget.entries?.some((e) => e.period === 'Oct')
-      ? 'Oct'
-      : MONTH_NAMES[new Date().getMonth()] || 'Oct';
-  const currentBiWeeklyPeriod = `${currentMonthName}-${new Date().getDate() <= 15 ? 'P1' : 'P2'}`;
-  const defaultPeriod = frequency === 'monthly' ? currentMonthName : currentBiWeeklyPeriod;
-  const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<string>(defaultPeriod);
+  // Determine the default period cleanly without hardcoded month fallbacks
+  const resolveInitialPeriod = useCallback(() => {
+    // 1. Try to restore user's last selected period for this year
+    try {
+      const saved = localStorage.getItem(`capitalflow_active_period_${budget.year}`);
+      if (saved) {
+        if (frequency === 'monthly' && MONTH_NAMES.includes(saved)) {
+          return saved;
+        }
+        if (frequency === 'bi-weekly' && BIWEEKLY_PERIODS.some((p) => p.id === saved)) {
+          return saved;
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
 
-  const handleSelectPeriodFilter = useCallback((p: string) => {
-    setSelectedPeriodFilter(p);
-  }, []);
+    const currentCalendarYear = new Date().getFullYear();
+    const currentCalendarMonth = MONTH_NAMES[new Date().getMonth()] || 'Jan';
+    const currentBiWeeklyPeriod = `${currentCalendarMonth}-${new Date().getDate() <= 15 ? 'P1' : 'P2'}`;
+
+    // 2. If viewing the current calendar year, default to current real-world period
+    if (budget.year === currentCalendarYear) {
+      return frequency === 'monthly' ? currentCalendarMonth : currentBiWeeklyPeriod;
+    }
+
+    // 3. If viewing another year, default to the latest period that has entries
+    if (budget.entries && budget.entries.length > 0) {
+      for (let i = MONTH_NAMES.length - 1; i >= 0; i--) {
+        const m = MONTH_NAMES[i];
+        const hasData = budget.entries.some((e) => e.period === m || e.period.startsWith(`${m}-`));
+        if (hasData) {
+          return frequency === 'monthly' ? m : `${m}-P1`;
+        }
+      }
+    }
+
+    return frequency === 'monthly' ? 'Jan' : 'Jan-P1';
+  }, [budget.year, budget.entries, frequency]);
+
+  const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<string>(resolveInitialPeriod);
+
+  // Update selected period and persist to localStorage
+  const handleSelectPeriodFilter = useCallback(
+    (p: string) => {
+      setSelectedPeriodFilter(p);
+      try {
+        localStorage.setItem(`capitalflow_active_period_${budget.year}`, p);
+      } catch {
+        // Ignore storage access errors
+      }
+    },
+    [budget.year]
+  );
 
   // Sync default period when frequency changes while preserving the active month
   useEffect(() => {
+    const currentCalendarMonth = MONTH_NAMES[new Date().getMonth()] || 'Jan';
+    const currentBiWeeklyPeriod = `${currentCalendarMonth}-${new Date().getDate() <= 15 ? 'P1' : 'P2'}`;
+
     if (frequency === 'monthly') {
       if (!MONTH_NAMES.includes(selectedPeriodFilter) && selectedPeriodFilter !== 'all') {
         const stripped = selectedPeriodFilter.replace(/-P[12]$/i, '');
-        setSelectedPeriodFilter(MONTH_NAMES.includes(stripped) ? stripped : currentMonthName);
+        const nextPeriod = MONTH_NAMES.includes(stripped) ? stripped : currentCalendarMonth;
+        setSelectedPeriodFilter(nextPeriod);
+        try {
+          localStorage.setItem(`capitalflow_active_period_${budget.year}`, nextPeriod);
+        } catch {
+          // Ignore
+        }
       }
     } else {
       if (!BIWEEKLY_PERIODS.some((p) => p.id === selectedPeriodFilter) && selectedPeriodFilter !== 'all') {
-        setSelectedPeriodFilter(
-          MONTH_NAMES.includes(selectedPeriodFilter) ? `${selectedPeriodFilter}-P1` : currentBiWeeklyPeriod
-        );
+        const nextPeriod = MONTH_NAMES.includes(selectedPeriodFilter)
+          ? `${selectedPeriodFilter}-P1`
+          : currentBiWeeklyPeriod;
+        setSelectedPeriodFilter(nextPeriod);
+        try {
+          localStorage.setItem(`capitalflow_active_period_${budget.year}`, nextPeriod);
+        } catch {
+          // Ignore
+        }
       }
     }
-  }, [frequency, currentMonthName, currentBiWeeklyPeriod, selectedPeriodFilter]);
+  }, [frequency, budget.year, selectedPeriodFilter]);
+
+  // Reset selected period when switching budget years
+  const prevYearRef = React.useRef(budget.year);
+  useEffect(() => {
+    if (prevYearRef.current !== budget.year) {
+      prevYearRef.current = budget.year;
+      setSelectedPeriodFilter(resolveInitialPeriod());
+    }
+  }, [budget.year, resolveInitialPeriod]);
 
   return (
     <div key="spreadsheet-layout-root" className="space-y-4">
       <BudgetSpreadsheetView
         budget={budget}
         accounts={accounts}
-        selectedPeriod={selectedPeriodFilter === 'all' ? defaultPeriod : selectedPeriodFilter}
+        selectedPeriod={selectedPeriodFilter}
         onSelectPeriod={handleSelectPeriodFilter}
         frequency={frequency}
         onChangeFrequency={onChangeFrequency}

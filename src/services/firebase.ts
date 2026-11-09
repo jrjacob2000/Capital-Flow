@@ -14,6 +14,9 @@ import {
   Firestore,
   doc,
   getDocFromServer,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
 } from 'firebase/firestore';
 
 // Load local firebase-applet-config.json if present (e.g. in AI Studio),
@@ -358,16 +361,31 @@ const primaryApp =
 export let auth: Auth | null = primaryApp ? getAuth(primaryApp) : null;
 export let db: Firestore | null = (() => {
   if (!primaryApp) return null;
+  // Enable fast multi-tab persistent IndexedDB cache in browsers; fall back gracefully to memory cache
   try {
     return initializeFirestore(
       primaryApp,
       {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
         experimentalAutoDetectLongPolling: true,
       },
       FIRESTORE_DATABASE_ID
     );
   } catch {
-    return getFirestore(primaryApp, FIRESTORE_DATABASE_ID);
+    try {
+      return initializeFirestore(
+        primaryApp,
+        {
+          localCache: memoryLocalCache(),
+          experimentalAutoDetectLongPolling: true,
+        },
+        FIRESTORE_DATABASE_ID
+      );
+    } catch {
+      return getFirestore(primaryApp, FIRESTORE_DATABASE_ID);
+    }
   }
 })();
 let activeProjectId = initialConfig.projectId || '';

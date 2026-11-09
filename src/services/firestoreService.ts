@@ -36,6 +36,17 @@ export const KNOWN_YEARS_MAX_SIZE = 20;
 
 const knownExistingWorkspaces = new Set<string>();
 const knownExistingBudgetDocs = new Set<string>();
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+const workspaceMemoryCache = new Map<string, CacheEntry<FirestoreWorkspaceRecord | null>>();
+const budgetMemoryCache = new Map<string, CacheEntry<YearBudgetData | null>>();
+const inFlightWorkspaceFetches = new Map<string, Promise<FirestoreWorkspaceRecord | null>>();
+const inFlightBudgetFetches = new Map<string, Promise<YearBudgetData | null>>();
+const CACHE_TTL_MS = 30000; // 30-second hot in-memory cache window
+
 let writeQueue: Promise<void> = Promise.resolve();
 
 function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
@@ -117,37 +128,63 @@ export class FirestoreSyncService {
 
   /**
    * Fetches the user's primary workspace document from `/workspaces/{userId}`
+   * Employs hot in-memory caching and in-flight request deduplication for high-performance reads.
    */
-  static async fetchWorkspace(userId: string): Promise<FirestoreWorkspaceRecord | null> {
+  static async fetchWorkspace(userId: string, options?: { forceRefresh?: boolean }): Promise<FirestoreWorkspaceRecord | null> {
     if (!db) return null;
     const validUid = validateOwnerId(userId);
-    const path = `workspaces/${validUid}`;
-    try {
-      const snap = await getDoc(doc(db, 'workspaces', validUid));
-      if (!snap.exists()) {
-        knownExistingWorkspaces.delete(validUid);
-        return null;
+
+    // 1. Hot in-memory cache check
+    if (!options?.forceRefresh) {
+      const cached = workspaceMemoryCache.get(validUid);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+        return cached.data;
       }
-      knownExistingWorkspaces.add(validUid);
-      const data = snap.data();
-      const updatedAtIso =
-        data.updatedAt && typeof data.updatedAt.toDate === 'function'
-          ? data.updatedAt.toDate().toISOString()
-          : undefined;
-      return {
-        ownerId: data.ownerId,
-        activeYear: typeof data.activeYear === 'number' ? data.activeYear : 2026,
-        frequency: data.frequency === 'bi-weekly' ? 'bi-weekly' : 'monthly',
-        currency: typeof data.currency === 'string' ? data.currency : '₱',
-        knownYears: Array.isArray(data.knownYears) ? data.knownYears : [2026],
-        templateData: data.templateData as BudgetTemplateData,
-        ledgerData: data.ledgerData as SavingsLedgerData,
-        lastDriveBackupAt: data.lastDriveBackupAt,
-        updatedAtIso,
-      };
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
     }
+
+    // 2. In-flight fetch deduplication to prevent parallel duplicate network calls
+    const inFlight = inFlightWorkspaceFetches.get(validUid);
+    if (inFlight && !options?.forceRefresh) {
+      return inFlight;
+    }
+
+    const path = `workspaces/${validUid}`;
+    const fetchPromise = (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'workspaces', validUid));
+        if (!snap.exists()) {
+          knownExistingWorkspaces.delete(validUid);
+          workspaceMemoryCache.set(validUid, { data: null, timestamp: Date.now() });
+          return null;
+        }
+        knownExistingWorkspaces.add(validUid);
+        const data = snap.data();
+        const updatedAtIso =
+          data.updatedAt && typeof data.updatedAt.toDate === 'function'
+            ? data.updatedAt.toDate().toISOString()
+            : undefined;
+        const record: FirestoreWorkspaceRecord = {
+          ownerId: data.ownerId,
+          activeYear: typeof data.activeYear === 'number' ? data.activeYear : 2026,
+          frequency: data.frequency === 'bi-weekly' ? 'bi-weekly' : 'monthly',
+          currency: typeof data.currency === 'string' ? data.currency : '₱',
+          knownYears: Array.isArray(data.knownYears) ? data.knownYears : [2026],
+          templateData: data.templateData as BudgetTemplateData,
+          ledgerData: data.ledgerData as SavingsLedgerData,
+          lastDriveBackupAt: data.lastDriveBackupAt,
+          updatedAtIso,
+        };
+        workspaceMemoryCache.set(validUid, { data: record, timestamp: Date.now() });
+        return record;
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, path);
+      } finally {
+        inFlightWorkspaceFetches.delete(validUid);
+      }
+    })();
+
+    inFlightWorkspaceFetches.set(validUid, fetchPromise);
+    return fetchPromise;
   }
 
   /**
@@ -286,49 +323,83 @@ export class FirestoreSyncService {
 
   /**
    * Fetches a specific year's budget document from `/workspaces/{userId}/budgets/{yearId}`
+   * Employs hot in-memory caching and in-flight request deduplication for high-performance reads.
    */
-  static async fetchAnnualBudget(userId: string, year: number): Promise<YearBudgetData | null> {
+  static async fetchAnnualBudget(userId: string, year: number, options?: { forceRefresh?: boolean }): Promise<YearBudgetData | null> {
     if (!db) return null;
     const validUid = validateOwnerId(userId);
     const yearStr = String(Math.min(2100, Math.max(2000, Math.round(Number(year) || 2026))));
     const cacheKey = `${validUid}_${yearStr}`;
-    const path = `workspaces/${validUid}/budgets/${yearStr}`;
-    try {
-      const snap = await getDoc(doc(db, 'workspaces', validUid, 'budgets', yearStr));
-      if (!snap.exists()) {
-        knownExistingBudgetDocs.delete(cacheKey);
-        return null;
+
+    // 1. Hot in-memory cache check
+    if (!options?.forceRefresh) {
+      const cached = budgetMemoryCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+        return cached.data;
       }
-      knownExistingBudgetDocs.add(cacheKey);
-      const data = snap.data();
-      const payload = (data.budgetPayload || {}) as Partial<YearBudgetData>;
-      return {
-        year: typeof data.year === 'number' ? data.year : year,
-        version: typeof data.version === 'string' ? data.version : APP_VERSION,
-        lastUpdated:
-          typeof data.lastUpdated === 'string' ? data.lastUpdated : new Date().toISOString(),
-        entryMode: data.entryMode === 'bi-weekly' ? 'bi-weekly' : 'monthly',
-        currency: typeof data.currency === 'string' ? data.currency : '₱',
-        entries: Array.isArray(payload.entries) ? payload.entries : [],
-        budgets: Array.isArray(payload.budgets) ? payload.budgets : [],
-        customCategories: payload.customCategories,
-        itemTemplates: Array.isArray(payload.itemTemplates) ? payload.itemTemplates : [],
-        excludedPeriodItems: payload.excludedPeriodItems || {},
-        isPersonalizedTemplate: Boolean(payload.isPersonalizedTemplate),
-        isDefaultStarterData: Boolean(payload.isDefaultStarterData),
-        notes: payload.notes,
-      };
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
     }
+
+    // 2. In-flight fetch deduplication to prevent parallel duplicate network calls
+    const inFlight = inFlightBudgetFetches.get(cacheKey);
+    if (inFlight && !options?.forceRefresh) {
+      return inFlight;
+    }
+
+    const path = `workspaces/${validUid}/budgets/${yearStr}`;
+    const fetchPromise = (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'workspaces', validUid, 'budgets', yearStr));
+        if (!snap.exists()) {
+          knownExistingBudgetDocs.delete(cacheKey);
+          budgetMemoryCache.set(cacheKey, { data: null, timestamp: Date.now() });
+          return null;
+        }
+        knownExistingBudgetDocs.add(cacheKey);
+        const data = snap.data();
+        const payload = (data.budgetPayload || {}) as Partial<YearBudgetData>;
+        const record: YearBudgetData = {
+          year: typeof data.year === 'number' ? data.year : year,
+          version: typeof data.version === 'string' ? data.version : APP_VERSION,
+          lastUpdated:
+            typeof data.lastUpdated === 'string' ? data.lastUpdated : new Date().toISOString(),
+          entryMode: data.entryMode === 'bi-weekly' ? 'bi-weekly' : 'monthly',
+          currency: typeof data.currency === 'string' ? data.currency : '₱',
+          entries: Array.isArray(payload.entries) ? payload.entries : [],
+          budgets: Array.isArray(payload.budgets) ? payload.budgets : [],
+          customCategories: payload.customCategories,
+          itemTemplates: Array.isArray(payload.itemTemplates) ? payload.itemTemplates : [],
+          excludedPeriodItems: payload.excludedPeriodItems || {},
+          isPersonalizedTemplate: Boolean(payload.isPersonalizedTemplate),
+          isDefaultStarterData: Boolean(payload.isDefaultStarterData),
+          notes: payload.notes,
+        };
+        budgetMemoryCache.set(cacheKey, { data: record, timestamp: Date.now() });
+        return record;
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, path);
+      } finally {
+        inFlightBudgetFetches.delete(cacheKey);
+      }
+    })();
+
+    inFlightBudgetFetches.set(cacheKey, fetchPromise);
+    return fetchPromise;
   }
 
   /**
    * Lists all annual budget years stored in `/workspaces/{userId}/budgets`
+   * Uses cached workspace knownYears for instantaneous response when available.
    */
   static async listBudgetYears(userId: string): Promise<number[]> {
     if (!db) return [];
     const validUid = validateOwnerId(userId);
+
+    // Fast-path: Check cached workspace knownYears to avoid costly full-collection scan
+    const cachedWs = workspaceMemoryCache.get(validUid)?.data;
+    if (cachedWs && Array.isArray(cachedWs.knownYears) && cachedWs.knownYears.length > 0) {
+      return [...cachedWs.knownYears].sort((a, b) => b - a);
+    }
+
     const path = `workspaces/${validUid}/budgets`;
     try {
       const q = query(
@@ -499,7 +570,7 @@ export class FirestoreSyncService {
           data.updatedAt && typeof data.updatedAt.toDate === 'function'
             ? data.updatedAt.toDate().toISOString()
             : undefined;
-        onUpdate({
+        const record: FirestoreWorkspaceRecord = {
           ownerId: data.ownerId,
           activeYear: typeof data.activeYear === 'number' ? data.activeYear : 2026,
           frequency: data.frequency === 'bi-weekly' ? 'bi-weekly' : 'monthly',
@@ -509,7 +580,9 @@ export class FirestoreSyncService {
           ledgerData: data.ledgerData as SavingsLedgerData,
           lastDriveBackupAt: data.lastDriveBackupAt,
           updatedAtIso,
-        });
+        };
+        workspaceMemoryCache.set(validUid, { data: record, timestamp: Date.now() });
+        onUpdate(record);
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, path);
@@ -537,7 +610,7 @@ export class FirestoreSyncService {
         knownExistingBudgetDocs.add(cacheKey);
         const data = snap.data();
         const payload = (data.budgetPayload || {}) as Partial<YearBudgetData>;
-        onUpdate({
+        const record: YearBudgetData = {
           year: typeof data.year === 'number' ? data.year : year,
           version: typeof data.version === 'string' ? data.version : APP_VERSION,
           lastUpdated:
@@ -552,11 +625,23 @@ export class FirestoreSyncService {
           isPersonalizedTemplate: Boolean(payload.isPersonalizedTemplate),
           isDefaultStarterData: Boolean(payload.isDefaultStarterData),
           notes: payload.notes,
-        });
+        };
+        budgetMemoryCache.set(cacheKey, { data: record, timestamp: Date.now() });
+        onUpdate(record);
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, path);
       }
     );
+  }
+
+  /**
+   * Clears all in-memory hot caches (e.g. upon user sign-out).
+   */
+  static clearMemoryCache(): void {
+    workspaceMemoryCache.clear();
+    budgetMemoryCache.clear();
+    inFlightWorkspaceFetches.clear();
+    inFlightBudgetFetches.clear();
   }
 }
