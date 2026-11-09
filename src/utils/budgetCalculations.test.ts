@@ -41,6 +41,8 @@ import {
   getBrowserEnvironmentInfo,
   isMissingInitialStateOrStorageError,
   resolveAuthDomain,
+  handleFirestoreError,
+  OperationType,
 } from '../services/firebase';
 import { BudgetEntry, BudgetItemTemplate, LoanRecord, SavingsLedgerData } from '../types/finance';
 
@@ -2148,4 +2150,191 @@ describe('21. Sinking Fund Withdrawal Deduction & Reallocation Mechanics', () =>
   });
 });
 
+describe('21. Firebase Direct CRUD & Redundant localStorage Cache Purge (setCloudSessionActive & clearRedundantLocalCache)', () => {
+  it('purges redundant localStorage cache keys when Firebase cloud session is active while keeping in-memory CRUD reads/writes intact', () => {
+    memoryStorage.clear();
+    FinanceStorageService.setCloudSessionActive(false);
 
+    // 1. Seed initial data in guest mode (populates localStorage)
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    assert.ok(localStorage.getItem('capitalflow_local_budget_2026'));
+    assert.ok(localStorage.getItem('capitalflow_local_savings_ledger'));
+
+    // 2. Activate Firebase Cloud Session -> purges redundant localStorage cache keys
+    FinanceStorageService.setCloudSessionActive(true);
+    assert.equal(FinanceStorageService.isCloudSessionActive(), true);
+    assert.equal(localStorage.getItem('capitalflow_local_budget_2026'), null);
+    assert.equal(localStorage.getItem('capitalflow_local_savings_ledger'), null);
+    assert.equal(localStorage.getItem('capitalflow_user_template_profile'), null);
+    assert.equal(localStorage.getItem('capitalflow_known_years'), null);
+
+    // 3. Perform CRUD while cloud session is active -> updates in-memory runtime without re-writing localStorage cache
+    const updatedBudget = {
+      ...budget,
+      entries: [
+        {
+          id: 'cloud-entry-1',
+          year: 2026,
+          period: 'Nov',
+          periodIndex: 10,
+          date: '2026-11-01',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: 'Direct Firestore Salary',
+          description: 'Direct Firestore Salary',
+          amount: 85000,
+          actualCost: 85000,
+          status: 'Paid' as const,
+          frequency: 'monthly' as const,
+          createdAt: '2026-11-01T00:00:00.000Z',
+        },
+      ],
+    };
+    FinanceStorageService.saveLocalBudget(updatedBudget, { skipFirestoreWrite: true });
+    assert.equal(localStorage.getItem('capitalflow_local_budget_2026'), null);
+
+    const loadedBudget = FinanceStorageService.loadLocalBudget(2026);
+    assert.equal(loadedBudget.entries.length, 1);
+    assert.equal(loadedBudget.entries[0].item, 'Direct Firestore Salary');
+    assert.equal(loadedBudget.entries[0].amount, 85000);
+
+    // Reset cloud session flag for any subsequent guest-mode tests
+    FinanceStorageService.setCloudSessionActive(false);
+    assert.equal(ledger.accounts.length > 0, true);
+  });
+});
+
+describe('22. Security Sanitization, Atomic Multi-Year Backup Restore & Cloud-Safe Reset', () => {
+  beforeEach(() => {
+    memoryStorage.clear();
+    FinanceStorageService.setCloudSessionActive(false);
+  });
+
+  it('does not leak user PII (email, userId, tenantId, providerData) in handleFirestoreError payloads', () => {
+    let thrownMessage = '';
+    try {
+      handleFirestoreError(
+        new Error('Missing or insufficient permissions.'),
+        OperationType.WRITE,
+        'users/secret-uid-123'
+      );
+    } catch (err: any) {
+      thrownMessage = err?.message || '';
+    }
+
+    assert.ok(thrownMessage.length > 0);
+    const parsed = JSON.parse(thrownMessage);
+    assert.equal(parsed.error, 'Missing or insufficient permissions.');
+    assert.equal(parsed.operationType, 'write');
+    assert.equal(parsed.path, 'users/secret-uid-123');
+    // Must not expose PII keys in authInfo
+    assert.equal('userId' in parsed.authInfo, false);
+    assert.equal('email' in parsed.authInfo, false);
+    assert.equal('tenantId' in parsed.authInfo, false);
+    assert.equal('providerInfo' in parsed.authInfo, false);
+    assert.equal(typeof parsed.authInfo.isSignedIn, 'boolean');
+  });
+
+  it('atomically restores a multi-year full backup across different years without losing templates or entries', () => {
+    // Start in 2026
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+
+    // Simulate restoring a Full Backup where primary budget is 2025 and budgetsByYear also contains 2026
+    const backup2025 = {
+      ...FinanceStorageService.loadLocalBudget(2025),
+      year: 2025,
+      entries: [
+        makeEntry({
+          id: 'b-2025-1',
+          year: 2025,
+          period: 'Dec',
+          type: 'income',
+          category: 'Salary & Wages',
+          item: '2025 Year-End Pay',
+          actualCost: 60000,
+          amount: 60000,
+        }),
+      ],
+    };
+    const backup2026 = {
+      ...FinanceStorageService.loadLocalBudget(2026),
+      year: 2026,
+      entries: [
+        makeEntry({
+          id: 'b-2026-1',
+          year: 2026,
+          period: 'Jan',
+          type: 'expense',
+          category: 'Utilities & Bills',
+          item: '2026 Jan Electric',
+          actualCost: 3400,
+          amount: 3400,
+        }),
+      ],
+    };
+    const backupTemplate = {
+      version: '1.0.0',
+      lastUpdated: new Date().toISOString(),
+      isPersonalizedTemplate: true,
+      customCategories: {
+        income: ['Salary & Wages'],
+        expense: ['Utilities & Bills'],
+        saving: ['Emergency & Safety Net'],
+      },
+      itemTemplates: [
+        {
+          id: 'tpl-restored-1',
+          type: 'expense' as const,
+          category: 'Utilities & Bills',
+          item: 'Restored Meralco Template',
+          defaultEstimatedCost: 3500,
+        },
+      ],
+    };
+
+    // 1. Save additional years from budgetsByYear
+    const { budget: norm2026 } = FinanceStorageService.normalizeBudgetTemplates({
+      ...backup2026,
+      isDefaultStarterData: false,
+    });
+    FinanceStorageService.registerKnownYear(2026, { skipFirestoreWrite: true });
+    FinanceStorageService.saveLocalBudget(norm2026, {
+      skipTemplateProfileUpdate: true,
+      skipFirestoreWrite: true,
+    });
+
+    // 2. Save primary year (2025) and apply templateData onto 2025 (not stale 2026)
+    const { budget: norm2025 } = FinanceStorageService.normalizeBudgetTemplates({
+      ...backup2025,
+      isDefaultStarterData: false,
+    });
+    FinanceStorageService.registerKnownYear(2025, { skipFirestoreWrite: true });
+    const final2025 = FinanceStorageService.applyTemplateDataToBudget(backupTemplate, norm2025, {
+      skipFirestoreWrite: true,
+    });
+    FinanceStorageService.saveLocalBudget(final2025, { skipFirestoreWrite: true });
+
+    const reloaded2025 = FinanceStorageService.loadLocalBudget(2025);
+    const reloaded2026 = FinanceStorageService.loadLocalBudget(2026);
+    assert.equal(reloaded2025.entries.length, 1);
+    assert.equal(reloaded2025.entries[0].item, '2025 Year-End Pay');
+    assert.equal(reloaded2025.itemTemplates?.length, 1);
+    assert.equal(reloaded2025.itemTemplates?.[0].item, 'Restored Meralco Template');
+    assert.equal(reloaded2026.entries.length, 1);
+    assert.equal(reloaded2026.entries[0].item, '2026 Jan Electric');
+    assert.deepEqual(FinanceStorageService.getKnownYears(), [2026, 2025]);
+  });
+
+  it('produces a fresh non-epoch timestamp when resetting and starting a blank workspace so cloud listeners do not overwrite reset data', () => {
+    FinanceStorageService.resetAllDataForGoLive();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    assert.equal(budget.isDefaultStarterData, false);
+    assert.equal(ledger.isDefaultStarterData, false);
+    assert.notEqual(budget.lastUpdated, '1970-01-01T00:00:00.000Z');
+    assert.notEqual(ledger.lastUpdated, '1970-01-01T00:00:00.000Z');
+    assert.equal(
+      FinanceStorageService.compareTimestamps(budget.lastUpdated, '2025-01-01T00:00:00.000Z'),
+      'local_newer'
+    );
+  });
+});

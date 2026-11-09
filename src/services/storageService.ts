@@ -49,6 +49,8 @@ import {
   isDefaultStarterLedger,
 } from './sampleData';
 import { getPeriodItemExclusionKeys, shouldTemplateDisplayInBudget } from '../utils/budgetCalculations';
+import { auth } from './firebase';
+import { FirestoreSyncService } from './firestoreService';
 
 const LOCAL_STORAGE_KEY_PREFIX = 'capitalflow_local_budget_';
 const LOCAL_STORAGE_KEY_LEDGER = 'capitalflow_local_savings_ledger';
@@ -73,12 +75,69 @@ export interface UserTemplateProfile {
 
 export class FinanceStorageService {
   /**
-   * Loads the user's saved personalized template profile from localStorage if available
+   * When signed into Firebase Firestore, Firestore (with its native IndexedDB persistentLocalCache)
+   * is the single source of truth. We keep an in-memory runtime mirror for synchronous reads
+   * and purge redundant custom localStorage cache keys to prevent stale data or quota overhead.
+   */
+  private static cloudMemoryActive: boolean = false;
+  private static cloudMemoryBudgets: Map<number, YearBudgetData> = new Map();
+  private static cloudMemoryLedger: SavingsLedgerData | null = null;
+  private static cloudMemoryTemplateProfile: UserTemplateProfile | null = null;
+  private static cloudMemoryKnownYears: number[] = [2026];
+
+  static setCloudSessionActive(active: boolean): void {
+    FinanceStorageService.cloudMemoryActive = active;
+    if (active) {
+      FinanceStorageService.clearRedundantLocalCache();
+    }
+  }
+
+  static isCloudSessionActive(): boolean {
+    return FinanceStorageService.cloudMemoryActive;
+  }
+
+  /**
+   * Removes redundant custom localStorage cache keys once Firebase Firestore is active,
+   * relying on Firestore's built-in IndexedDB persistentLocalCache + real-time listeners instead.
+   */
+  static clearRedundantLocalCache(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (
+          key &&
+          (key.startsWith(LOCAL_STORAGE_KEY_PREFIX) ||
+            key === LOCAL_STORAGE_KEY_LEDGER ||
+            key === LOCAL_STORAGE_KEY_USER_TEMPLATE ||
+            key === LOCAL_STORAGE_KEY_YEARS ||
+            key === 'capitalflow_drive_folder_id')
+        ) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => localStorage.removeItem(key));
+    } catch (e) {
+      console.warn('Could not clear redundant localStorage cache:', e);
+    }
+  }
+
+  /**
+   * Loads the user's saved personalized template profile from in-memory cloud runtime or localStorage fallback
    */
   static loadUserTemplateProfile(): UserTemplateProfile | null {
     try {
+      if (FinanceStorageService.cloudMemoryActive && FinanceStorageService.cloudMemoryTemplateProfile) {
+        return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryTemplateProfile)) as UserTemplateProfile;
+      }
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY_USER_TEMPLATE);
-      if (!raw) return null;
+      if (!raw) {
+        if (FinanceStorageService.cloudMemoryTemplateProfile) {
+          return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryTemplateProfile)) as UserTemplateProfile;
+        }
+        return null;
+      }
       const parsed = JSON.parse(raw) as UserTemplateProfile;
       if (parsed && Array.isArray(parsed.itemTemplates)) {
         let didUpdateCategories = false;
@@ -152,7 +211,8 @@ export class FinanceStorageService {
           isPersonalizedTemplate: Boolean(parsed.isPersonalizedTemplate && cleanedTemplates.length > 0),
           isDefaultStarterData: isStarterTpl,
         };
-        if (hadDefaultItems || didUpdateCategories) {
+        FinanceStorageService.cloudMemoryTemplateProfile = JSON.parse(JSON.stringify(normalizedProfile));
+        if ((hadDefaultItems || didUpdateCategories) && !FinanceStorageService.cloudMemoryActive) {
           localStorage.setItem(LOCAL_STORAGE_KEY_USER_TEMPLATE, JSON.stringify(normalizedProfile));
         }
         return normalizedProfile;
@@ -164,9 +224,12 @@ export class FinanceStorageService {
   }
 
   /**
-   * Saves the user's personalized template profile to localStorage
+   * Saves the user's personalized template profile and directly persists to Firebase Firestore when signed in
    */
-  static saveUserTemplateProfile(profile: UserTemplateProfile): BudgetTemplateData {
+  static saveUserTemplateProfile(
+    profile: UserTemplateProfile,
+    options?: { skipFirestoreWrite?: boolean }
+  ): BudgetTemplateData {
     const cleanedTemplates: BudgetItemTemplate[] = [];
     stripDefaultStarterTemplates(profile.itemTemplates).forEach((t) => {
       if (t.type === 'saving') {
@@ -225,11 +288,24 @@ export class FinanceStorageService {
       },
       itemTemplates: cleanedTemplates,
     };
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_USER_TEMPLATE, JSON.stringify(fullData));
-    } catch (e) {
-      console.warn('Could not save user template profile:', e);
+
+    FinanceStorageService.cloudMemoryTemplateProfile = JSON.parse(JSON.stringify(fullData));
+
+    if (!FinanceStorageService.cloudMemoryActive) {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY_USER_TEMPLATE, JSON.stringify(fullData));
+      } catch (e) {
+        console.warn('Could not save user template profile:', e);
+      }
     }
+
+    if (auth?.currentUser && !options?.skipFirestoreWrite) {
+      const uid = auth.currentUser.uid;
+      void FirestoreSyncService.saveWorkspace(uid, {
+        templateData: fullData,
+      }).catch((err) => console.warn('Direct Firestore template CRUD write note:', err));
+    }
+
     return fullData;
   }
 
@@ -291,11 +367,12 @@ export class FinanceStorageService {
   }
 
   /**
-   * Applies a standalone BudgetTemplateData object to local profile storage and the active year budget
+   * Applies a standalone BudgetTemplateData object to profile storage and the active year budget
    */
   static applyTemplateDataToBudget(
     templateData: BudgetTemplateData,
-    currentBudget: YearBudgetData
+    currentBudget: YearBudgetData,
+    options?: { skipFirestoreWrite?: boolean }
   ): YearBudgetData {
     const normalizedCategories = {
       expense: [...(templateData.customCategories?.expense || EXPENSE_CATEGORIES)],
@@ -322,14 +399,17 @@ export class FinanceStorageService {
     }));
     const hasPersonalized = Boolean((templateData.isPersonalizedTemplate ?? true) && normalizedTemplates.length > 0);
 
-    FinanceStorageService.saveUserTemplateProfile({
-      version: templateData.version || '1.0.0',
-      lastUpdated: templateData.lastUpdated || new Date().toISOString(),
-      customCategories: normalizedCategories,
-      itemTemplates: normalizedTemplates,
-      isPersonalizedTemplate: hasPersonalized,
-      isDefaultStarterData: false,
-    });
+    FinanceStorageService.saveUserTemplateProfile(
+      {
+        version: templateData.version || '1.0.0',
+        lastUpdated: templateData.lastUpdated || new Date().toISOString(),
+        customCategories: normalizedCategories,
+        itemTemplates: normalizedTemplates,
+        isPersonalizedTemplate: hasPersonalized,
+        isDefaultStarterData: false,
+      },
+      { skipFirestoreWrite: true }
+    );
 
     const updatedBudget: YearBudgetData = {
       ...currentBudget,
@@ -341,7 +421,10 @@ export class FinanceStorageService {
       lastUpdated: templateData.lastUpdated || new Date().toISOString(),
     };
 
-    FinanceStorageService.saveLocalBudget(updatedBudget, { preserveTimestamp: Boolean(templateData.lastUpdated) });
+    FinanceStorageService.saveLocalBudget(updatedBudget, {
+      preserveTimestamp: Boolean(templateData.lastUpdated),
+      skipFirestoreWrite: options?.skipFirestoreWrite,
+    });
     return updatedBudget;
   }
 
@@ -527,12 +610,15 @@ export class FinanceStorageService {
     }
 
     if (didMigrate && budget.customCategories && Array.isArray(budget.itemTemplates)) {
-      FinanceStorageService.saveUserTemplateProfile({
-        customCategories: budget.customCategories,
-        itemTemplates: budget.itemTemplates,
-        isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
-        isDefaultStarterData: Boolean(budget.isDefaultStarterData),
-      });
+      FinanceStorageService.saveUserTemplateProfile(
+        {
+          customCategories: budget.customCategories,
+          itemTemplates: budget.itemTemplates,
+          isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
+          isDefaultStarterData: Boolean(budget.isDefaultStarterData),
+        },
+        { skipFirestoreWrite: true }
+      );
     }
 
     budget.budgets = deriveCategoryBudgetsFromTemplates(budget.itemTemplates || []);
@@ -561,9 +647,8 @@ export class FinanceStorageService {
   }
 
   /**
-   * Complete reset: deletes all local data stored in localStorage (all annual budgets,
-   * personalized estimate budget templates, custom categories, and savings ledger records)
-   * to provide a completely clean local state with 0 entries, 0 templates, and ₱0 balances
+   * Complete reset: deletes all local data stored in localStorage and resets in-memory runtime state
+   * to provide a completely clean state with 0 entries, 0 templates, and ₱0 balances
    * while preserving starter-data flags so Google Drive backups remain protected.
    */
   static resetAllDataForGoLive(): { budget: YearBudgetData; ledger: SavingsLedgerData } {
@@ -582,6 +667,11 @@ export class FinanceStorageService {
     } catch (e) {
       console.warn('Error clearing localStorage during reset:', e);
     }
+
+    FinanceStorageService.cloudMemoryBudgets.clear();
+    FinanceStorageService.cloudMemoryLedger = null;
+    FinanceStorageService.cloudMemoryTemplateProfile = null;
+    FinanceStorageService.cloudMemoryKnownYears = [2026];
 
     const cleanBudget: YearBudgetData = {
       ...createEmptyYearBudget(2026),
@@ -606,7 +696,9 @@ export class FinanceStorageService {
     const cleanLedger = generateInitialSavingsLedger(cleanBudget);
     FinanceStorageService.saveLocalSavingsLedger(cleanLedger, { isDefaultStarter: true });
 
-    localStorage.setItem(LOCAL_STORAGE_KEY_YEARS, JSON.stringify([2026]));
+    if (!FinanceStorageService.cloudMemoryActive) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_YEARS, JSON.stringify([2026]));
+    }
 
     return { budget: cleanBudget, ledger: cleanLedger };
   }
@@ -664,10 +756,16 @@ export class FinanceStorageService {
 
   /**
    * Load budget for a specific year.
-   * Priority: LocalStorage -> User's Personalized Template Profile -> Default Common Estimate Budget.
+   * Priority: In-memory Cloud Store (when Firebase active) -> LocalStorage fallback -> User's Personalized Template Profile -> Default Common Estimate Budget.
    */
   static loadLocalBudget(year: number): YearBudgetData {
     FinanceStorageService.checkAndPerformAutoClean();
+
+    if (FinanceStorageService.cloudMemoryActive && FinanceStorageService.cloudMemoryBudgets.has(year)) {
+      const memBudget = FinanceStorageService.cloudMemoryBudgets.get(year)!;
+      return JSON.parse(JSON.stringify(memBudget)) as YearBudgetData;
+    }
+
     const raw = localStorage.getItem(`${LOCAL_STORAGE_KEY_PREFIX}${year}`);
     if (raw) {
       try {
@@ -715,13 +813,16 @@ export class FinanceStorageService {
               normalized.customCategories!.expense.push(cat);
             }
           });
-          FinanceStorageService.saveUserTemplateProfile({
-            lastUpdated: DEFAULT_STARTER_EPOCH,
-            customCategories: normalized.customCategories,
-            itemTemplates: normalized.itemTemplates,
-            isPersonalizedTemplate: true,
-            isDefaultStarterData: true,
-          });
+          FinanceStorageService.saveUserTemplateProfile(
+            {
+              lastUpdated: DEFAULT_STARTER_EPOCH,
+              customCategories: normalized.customCategories,
+              itemTemplates: normalized.itemTemplates,
+              isPersonalizedTemplate: true,
+              isDefaultStarterData: true,
+            },
+            { skipFirestoreWrite: true }
+          );
           localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
           shouldSave = true;
         } else if (year === 2026 && !isStarter) {
@@ -736,13 +837,18 @@ export class FinanceStorageService {
           }
         }
 
-        if (shouldSave) {
+        FinanceStorageService.cloudMemoryBudgets.set(year, JSON.parse(JSON.stringify(normalized)));
+        if (shouldSave && !FinanceStorageService.cloudMemoryActive) {
           localStorage.setItem(`${LOCAL_STORAGE_KEY_PREFIX}${year}`, JSON.stringify(normalized));
         }
         return normalized;
       } catch (e) {
         console.error('Failed to parse cached budget for year', year, e);
       }
+    }
+
+    if (FinanceStorageService.cloudMemoryBudgets.has(year)) {
+      return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryBudgets.get(year)!)) as YearBudgetData;
     }
 
     const savedProfile = FinanceStorageService.loadUserTemplateProfile();
@@ -753,14 +859,23 @@ export class FinanceStorageService {
     }
     FinanceStorageService.saveLocalBudget(cleanBudget, {
       isDefaultStarter: isDefaultStarterBudget(cleanBudget),
+      skipFirestoreWrite: true,
     });
-    FinanceStorageService.registerKnownYear(year);
+    FinanceStorageService.registerKnownYear(year, { skipFirestoreWrite: true });
     return cleanBudget;
   }
 
+  /**
+   * Saves the annual budget and directly persists the CRUD update to Firebase Firestore when signed in.
+   */
   static saveLocalBudget(
     budget: YearBudgetData,
-    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean; skipTemplateProfileUpdate?: boolean }
+    options?: {
+      isDefaultStarter?: boolean;
+      preserveTimestamp?: boolean;
+      skipTemplateProfileUpdate?: boolean;
+      skipFirestoreWrite?: boolean;
+    }
   ): void {
     const isStarter = Boolean(options?.isDefaultStarter);
     budget.isDefaultStarterData = isStarter;
@@ -771,45 +886,87 @@ export class FinanceStorageService {
       : new Date().toISOString();
     budget.budgets = deriveCategoryBudgetsFromTemplates(budget.itemTemplates || []);
     if (!options?.skipTemplateProfileUpdate && budget.customCategories && Array.isArray(budget.itemTemplates)) {
-      FinanceStorageService.saveUserTemplateProfile({
-        lastUpdated: budget.lastUpdated,
-        customCategories: budget.customCategories,
-        itemTemplates: budget.itemTemplates,
-        isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
-        isDefaultStarterData: isStarter,
-      });
+      FinanceStorageService.saveUserTemplateProfile(
+        {
+          lastUpdated: budget.lastUpdated,
+          customCategories: budget.customCategories,
+          itemTemplates: budget.itemTemplates,
+          isPersonalizedTemplate: Boolean(budget.isPersonalizedTemplate && budget.itemTemplates.length > 0),
+          isDefaultStarterData: isStarter,
+        },
+        { skipFirestoreWrite: true }
+      );
     }
-    localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
-    localStorage.setItem(`${LOCAL_STORAGE_KEY_PREFIX}${budget.year}`, JSON.stringify(budget));
-    FinanceStorageService.registerKnownYear(budget.year);
+
+    FinanceStorageService.cloudMemoryBudgets.set(budget.year, JSON.parse(JSON.stringify(budget)));
+    FinanceStorageService.registerKnownYear(budget.year, { skipFirestoreWrite: true });
+
+    if (!FinanceStorageService.cloudMemoryActive) {
+      localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
+      localStorage.setItem(`${LOCAL_STORAGE_KEY_PREFIX}${budget.year}`, JSON.stringify(budget));
+    }
+
+    if (auth?.currentUser && !options?.skipFirestoreWrite) {
+      const uid = auth.currentUser.uid;
+      const latestTemplate = FinanceStorageService.loadLocalTemplateData(budget);
+      const knownYears = FinanceStorageService.getKnownYears();
+      void FirestoreSyncService.saveWorkspace(uid, {
+        activeYear: budget.year,
+        knownYears,
+        templateData: latestTemplate,
+      })
+        .then(() => FirestoreSyncService.saveAnnualBudget(uid, budget))
+        .catch((err) => console.warn('Direct Firestore budget CRUD write note:', err));
+    }
   }
 
-  static registerKnownYear(year: number): void {
+  static registerKnownYear(year: number, options?: { skipFirestoreWrite?: boolean }): void {
     const years = FinanceStorageService.getKnownYears();
     if (!years.includes(year)) {
       years.push(year);
       years.sort((a, b) => b - a); // descending
-      localStorage.setItem(LOCAL_STORAGE_KEY_YEARS, JSON.stringify(years));
+      FinanceStorageService.cloudMemoryKnownYears = [...years];
+      if (!FinanceStorageService.cloudMemoryActive) {
+        localStorage.setItem(LOCAL_STORAGE_KEY_YEARS, JSON.stringify(years));
+      }
+      if (auth?.currentUser && !options?.skipFirestoreWrite) {
+        const uid = auth.currentUser.uid;
+        void FirestoreSyncService.saveWorkspace(uid, { knownYears: years }).catch((err) =>
+          console.warn('Direct Firestore knownYears CRUD write note:', err)
+        );
+      }
     }
   }
 
   static getKnownYears(): number[] {
+    if (FinanceStorageService.cloudMemoryActive && FinanceStorageService.cloudMemoryKnownYears.length > 0) {
+      return [...FinanceStorageService.cloudMemoryKnownYears];
+    }
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_YEARS);
     if (raw) {
       try {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw) as number[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          FinanceStorageService.cloudMemoryKnownYears = [...parsed];
+          return parsed;
+        }
       } catch (e) {
         console.error('Failed to parse known years', e);
       }
     }
-    return [2026];
+    return [...FinanceStorageService.cloudMemoryKnownYears];
   }
 
   /**
-   * Load savings ledger.
+   * Load savings ledger from in-memory cloud runtime or localStorage fallback.
    */
   static loadLocalSavingsLedger(): SavingsLedgerData {
     FinanceStorageService.checkAndPerformAutoClean();
+
+    if (FinanceStorageService.cloudMemoryActive && FinanceStorageService.cloudMemoryLedger) {
+      return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryLedger)) as SavingsLedgerData;
+    }
+
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_LEDGER);
     if (raw) {
       try {
@@ -853,8 +1010,12 @@ export class FinanceStorageService {
             ledgerMigrated = true;
           }
         }
+        FinanceStorageService.cloudMemoryLedger = JSON.parse(JSON.stringify(parsed));
         if (ledgerMigrated) {
-          FinanceStorageService.saveLocalSavingsLedger(parsed, { isDefaultStarter: isStarter });
+          FinanceStorageService.saveLocalSavingsLedger(parsed, {
+            isDefaultStarter: isStarter,
+            skipFirestoreWrite: true,
+          });
         }
         return parsed;
       } catch (e) {
@@ -862,10 +1023,17 @@ export class FinanceStorageService {
       }
     }
 
+    if (FinanceStorageService.cloudMemoryLedger) {
+      return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryLedger)) as SavingsLedgerData;
+    }
+
     const budget2026 = FinanceStorageService.loadLocalBudget(2026);
     const initialLedger = generateInitialSavingsLedger(budget2026);
     initialLedger.loans = [];
-    FinanceStorageService.saveLocalSavingsLedger(initialLedger, { isDefaultStarter: true });
+    FinanceStorageService.saveLocalSavingsLedger(initialLedger, {
+      isDefaultStarter: true,
+      skipFirestoreWrite: true,
+    });
     return initialLedger;
   }
 
@@ -889,9 +1057,12 @@ export class FinanceStorageService {
     return clean as T;
   }
 
+  /**
+   * Saves the savings & loans ledger and directly persists the CRUD update to Firebase Firestore when signed in.
+   */
   static saveLocalSavingsLedger(
     ledger: SavingsLedgerData,
-    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean }
+    options?: { isDefaultStarter?: boolean; preserveTimestamp?: boolean; skipFirestoreWrite?: boolean }
   ): void {
     const isStarter = Boolean(options?.isDefaultStarter);
     ledger.isDefaultStarterData = isStarter;
@@ -917,8 +1088,20 @@ export class FinanceStorageService {
       tx.runningTotalCapital = running;
     });
     ledger.transactions = sorted;
-    localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
-    localStorage.setItem(LOCAL_STORAGE_KEY_LEDGER, JSON.stringify(ledger));
+
+    FinanceStorageService.cloudMemoryLedger = JSON.parse(JSON.stringify(ledger));
+
+    if (!FinanceStorageService.cloudMemoryActive) {
+      localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
+      localStorage.setItem(LOCAL_STORAGE_KEY_LEDGER, JSON.stringify(ledger));
+    }
+
+    if (auth?.currentUser && !options?.skipFirestoreWrite) {
+      const uid = auth.currentUser.uid;
+      void FirestoreSyncService.saveWorkspace(uid, {
+        ledgerData: ledger,
+      }).catch((err) => console.warn('Direct Firestore ledger CRUD write note:', err));
+    }
   }
 
   /**
@@ -2758,7 +2941,9 @@ export class FinanceStorageService {
     files.forEach((file) => {
       const match = file.name.match(/capitalflow_budget_(\d{4})\.json/);
       if (match && match[1]) {
-        FinanceStorageService.registerKnownYear(parseInt(match[1], 10));
+        FinanceStorageService.registerKnownYear(parseInt(match[1], 10), {
+          skipFirestoreWrite: true,
+        });
       }
     });
     return files;
@@ -2787,7 +2972,9 @@ export class FinanceStorageService {
     res.files.forEach((file) => {
       const match = file.name.match(/capitalflow_budget_(\d{4})\.json/);
       if (match && match[1]) {
-        FinanceStorageService.registerKnownYear(parseInt(match[1], 10));
+        FinanceStorageService.registerKnownYear(parseInt(match[1], 10), {
+          skipFirestoreWrite: true,
+        });
       }
     });
     return res;

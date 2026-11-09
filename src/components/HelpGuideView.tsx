@@ -25,6 +25,15 @@ import {
   Upload,
   Compass,
   Cloud,
+  Lightbulb,
+  Check,
+  Pencil,
+  Trash2,
+  Wallet,
+  DollarSign,
+  PlayCircle,
+  MousePointerClick,
+  Smile,
 } from 'lucide-react';
 import { EntryFrequency, APP_VERSION } from '../types/finance';
 import {
@@ -50,6 +59,7 @@ interface HelpGuideViewProps {
 
 type GuideSectionId =
   | 'all'
+  | 'simple'
   | 'quickstart'
   | 'glossary'
   | 'cards'
@@ -259,6 +269,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeSection, setActiveSection] = useState<GuideSectionId>('all');
+  const [interactivePaid, setInteractivePaid] = useState<boolean>(false);
   const [cardGuideScreen, setCardGuideScreen] = useState<'all' | 'dashboard' | 'budget' | 'funds' | 'loans'>('all');
   const [expandedFaqs, setExpandedFaqs] = useState<Record<string, boolean>>({
     'faq-new-user-blank': true,
@@ -298,7 +309,8 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
 
   const sectionTabs: { id: GuideSectionId; label: string }[] = [
     { id: 'all', label: 'All Topics' },
-    { id: 'quickstart', label: 'New User Start' },
+    { id: 'simple', label: '🟢 Simple Tutorial (Start Here!)' },
+    { id: 'quickstart', label: 'Starting Paths' },
     { id: 'glossary', label: '5 Golden Rules' },
     { id: 'cards', label: 'Card-by-Card Guide' },
     { id: 'budget', label: 'Budget, Excel & Split' },
@@ -314,23 +326,46 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
       {/* Top Hero & Search Header */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-          <div className="space-y-2 max-w-2xl">
+          <div className="space-y-3 max-w-2xl">
             <div className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
               <BookOpen className="w-4 h-4 shrink-0" />
               <span>CapitalFlow User Guide</span>
               <span aria-hidden="true">&middot;</span>
               <span className="font-mono tabular-nums">v{APP_VERSION}</span>
               <span aria-hidden="true">&middot;</span>
-              <span>Beginner Friendly</span>
+              <span className="inline-flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Beginner Friendly
+              </span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
-              Welcome to CapitalFlow — How Everything Works
+              Welcome to CapitalFlow — Simple Money Tracking
             </h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              New here? Start with the <strong>3 Starting Paths</strong> and the <strong>5 Golden Rules</strong> below.
-              In under two minutes, you will know how to start a clean {currentYear} budget, import any Excel or CSV sheet,
-              track Monthly or Bi-Weekly (15th/30th) paydays, and sync safely with Google Drive.
+              Never used a budget app before? No problem at all! Follow the <strong>🟢 Simple Tutorial</strong> below.
+              In 3 minutes, you will know how to wipe out the sample numbers, enter your real salary, track your bills,
+              and see exactly how much cash is left in your pocket.
             </p>
+            <div className="pt-1 flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setActiveSection('simple')}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-all cursor-pointer"
+              >
+                <PlayCircle className="w-4 h-4 shrink-0" />
+                <span>3-Minute Beginner Tutorial</span>
+              </button>
+              {isStarterSampleActive && onStartBlankWorkspace && (
+                <button
+                  type="button"
+                  onClick={onStartBlankWorkspace}
+                  className="px-4 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Start Blank {currencySymbol}0 Budget</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Interactive Search Input */}
@@ -383,6 +418,457 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
           })}
         </div>
       </section>
+
+      {/* 0. ULTRA-SIMPLE BEGINNER TUTORIAL: HOW CAPITALFLOW WORKS */}
+      {showSection(
+        'simple',
+        'simple tutorial beginner idiot walkthrough basic 4 steps how to start first time rules try it sandbox panic fix mistakes easy'
+      ) && (
+        <section className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-900/60 rounded-2xl p-6 sm:p-8 shadow-xs space-y-7 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-bold mb-1.5">
+                <Smile className="w-3.5 h-3.5 shrink-0" />
+                <span>Beginner Walkthrough &middot; 3-Minute Read</span>
+              </div>
+              <h3 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+                The Ultra-Simple Guide (If You Have Zero Experience)
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-1">
+                No accounting degree or complicated math needed. If you know how to send a text message, you can manage your budget with CapitalFlow.
+              </p>
+            </div>
+            <div className="shrink-0 flex items-center gap-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60">
+              <Lightbulb className="w-4 h-4 shrink-0" />
+              <span>100% Jargon-Free</span>
+            </div>
+          </div>
+
+          {/* 3 Golden Rules In Plain Human Words */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              The 3 Golden Rules (Remember These and You Are Set!)
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold text-sm shrink-0">
+                    1
+                  </div>
+                  <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
+                    Income In, Expense Out
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Think of your wallet: <strong>Income</strong> is your salary or side-hustle coming IN. <strong>Expense</strong> is money leaving your wallet to pay bills or food.
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 flex items-center justify-center font-bold text-sm shrink-0">
+                    2
+                  </div>
+                  <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
+                    Yellow = Later, Green = Paid
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Bills start as <strong>Yellow (Pending)</strong> so you don't forget them. Once you actually hand over cash or swipe your card, click it to turn it <strong>Green (Paid)</strong>!
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-sm shrink-0">
+                    3
+                  </div>
+                  <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
+                    You Cannot Break Anything
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Made a typo? Click the little <strong>Pencil ✏️</strong> to fix it. Made a duplicate? Click the <strong>Trash Can 🗑️</strong>. The app automatically saves every second.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* 4 Big Steps */}
+          <div className="space-y-4 pt-2">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              How to Track Your First Month in 4 Easy Steps
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Step 1 */}
+              <div className="border border-slate-200 dark:border-slate-700/80 rounded-xl p-4 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                      STEP 1
+                    </span>
+                    <Sparkles className="w-4 h-4 text-emerald-500" />
+                  </div>
+                  <h5 className="font-bold text-sm text-slate-900 dark:text-white">
+                    Wipe Out Fake Numbers
+                  </h5>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    When you first open the app, it comes with fake sample numbers so you can see the graphs. Click the green button below to start with a clean <strong>{currencySymbol}0 slate</strong> for yourself.
+                  </p>
+                </div>
+                <div className="pt-2">
+                  {onStartBlankWorkspace && isStarterSampleActive ? (
+                    <button
+                      type="button"
+                      onClick={onStartBlankWorkspace}
+                      className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      Start Blank Budget Now
+                    </button>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
+                      <Check className="w-3.5 h-3.5" />
+                      Clean Budget Ready!
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Step 2 */}
+              <div className="border border-slate-200 dark:border-slate-700/80 rounded-xl p-4 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                      STEP 2
+                    </span>
+                    <Wallet className="w-4 h-4 text-emerald-500" />
+                  </div>
+                  <h5 className="font-bold text-sm text-slate-900 dark:text-white">
+                    Add Your Paycheck
+                  </h5>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Click the <strong>Budget</strong> tab. Click the blue <strong>+ Add Entry</strong> button. Pick <strong>Income</strong>, type your paycheck (e.g. 20,000), and hit <strong>Save</strong>. Now the app knows your money!
+                  </p>
+                </div>
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('budget')}
+                    className="w-full py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <span>Open Budget Tab</span>
+                    <ArrowRight className="w-3 h-3 text-slate-400" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Step 3 */}
+              <div className="border border-slate-200 dark:border-slate-700/80 rounded-xl p-4 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                      STEP 3
+                    </span>
+                    <FileSpreadsheet className="w-4 h-4 text-amber-500" />
+                  </div>
+                  <h5 className="font-bold text-sm text-slate-900 dark:text-white">
+                    Add Your Upcoming Bills
+                  </h5>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Have Rent, Electricity, Internet, or Groceries? Click <strong>+ Add Entry</strong>, pick <strong>Expense</strong>, type the name and cost, and hit <strong>Save</strong>. They start as yellow reminders!
+                  </p>
+                </div>
+                <div className="pt-2">
+                  <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium inline-block">
+                    💡 Starts as Pending (Planned)
+                  </span>
+                </div>
+              </div>
+
+              {/* Step 4 */}
+              <div className="border border-slate-200 dark:border-slate-700/80 rounded-xl p-4 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+                      STEP 4
+                    </span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                  </div>
+                  <h5 className="font-bold text-sm text-slate-900 dark:text-white">
+                    Flip Switch When Paid!
+                  </h5>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    When you actually pay the bill with cash or bank transfer, click the yellow <strong>Pending</strong> button to turn it <strong>Paid</strong>. Your remaining cash updates instantly!
+                  </p>
+                </div>
+                <div className="pt-2">
+                  <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold inline-block">
+                    ✅ That's 90% of the entire app!
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Hands-On Interactive Sandbox: Practice Right Here */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-slate-50 via-emerald-50/20 to-indigo-50/20 dark:from-slate-800/80 dark:via-slate-800/50 dark:to-slate-800/80 border border-slate-200 dark:border-slate-700 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 dark:border-slate-700/60 pb-3">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                  <MousePointerClick className="w-4 h-4" />
+                  <span>Interactive Practice Box (Try It Yourself!)</span>
+                </div>
+                <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                  See What Happens When You Click &ldquo;Paid&rdquo;
+                </h4>
+              </div>
+              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Click the button below to see the math change in real time!
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+              {/* Practice Item Card */}
+              <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-950 flex items-center justify-center text-amber-600 dark:text-amber-400 text-sm font-bold">
+                      ⚡
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-900 dark:text-white">Electric Bill</p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">Monthly Utility Expense</p>
+                    </div>
+                  </div>
+                  <span className="text-sm font-mono font-bold text-slate-900 dark:text-white">
+                    {currencySymbol}2,500
+                  </span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">Status Switch:</span>
+                  <button
+                    type="button"
+                    onClick={() => setInteractivePaid((prev) => !prev)}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+                      interactivePaid
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white animate-pulse'
+                        : 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 hover:bg-amber-200'
+                    }`}
+                  >
+                    {interactivePaid ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>PAID (Click to Undo)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>PENDING (Click to Pay!)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Wallet Result Box */}
+              <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>Your Starting Salary:</span>
+                  <span className="font-mono font-semibold">{currencySymbol}25,000</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>Electric Bill ({interactivePaid ? 'Paid' : 'Pending'}):</span>
+                  <span className="font-mono font-semibold text-rose-500">-{currencySymbol}2,500</span>
+                </div>
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                    {interactivePaid ? 'Actual Cash in Pocket:' : 'Current Cash in Pocket:'}
+                  </span>
+                  <span
+                    className={`text-lg font-mono font-bold tracking-tight transition-colors ${
+                      interactivePaid ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-900 dark:text-white'
+                    }`}
+                  >
+                    {currencySymbol}{interactivePaid ? '22,500' : '25,000'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed pt-1">
+                  {interactivePaid ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                      🎉 Awesome! Because it is Paid, the app deducted the {currencySymbol}2,500 bill. You now know exactly how much cash you actually have left!
+                    </span>
+                  ) : (
+                    <span>
+                      💡 The bill is still <strong>Pending</strong>, so your cash is still {currencySymbol}25,000. CapitalFlow keeps it visible so you remember to pay it. Click the button above to pay it!
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Plain English Cheat Sheet: What Each Screen Does */}
+          <div className="space-y-3 pt-1">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Cheat Sheet: What Does Each Tab at the Top Do?
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+              <div
+                onClick={() => onNavigateTab('dashboard')}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 hover:border-indigo-400 transition-colors cursor-pointer space-y-1"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-indigo-600 dark:text-indigo-400">
+                  <LayoutDashboard className="w-4 h-4 shrink-0" />
+                  <span>Dashboard</span>
+                </div>
+                <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  &ldquo;The Scoreboard&rdquo;
+                </p>
+                <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
+                  No typing here! Just look at the colorful charts to see if you are making or losing money this year.
+                </p>
+              </div>
+
+              <div
+                onClick={() => onNavigateTab('budget')}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 hover:border-emerald-400 transition-colors cursor-pointer space-y-1"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-emerald-600 dark:text-emerald-400">
+                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                  <span>Budget</span>
+                </div>
+                <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  &ldquo;Your Daily Notebook&rdquo;
+                </p>
+                <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
+                  Spend 90% of your time here. Type your paychecks, add your bills, and mark them paid.
+                </p>
+              </div>
+
+              <div
+                onClick={() => onNavigateTab('savings')}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 hover:border-sky-400 transition-colors cursor-pointer space-y-1"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-sky-600 dark:text-sky-400">
+                  <PiggyBank className="w-4 h-4 shrink-0" />
+                  <span>Funds &amp; Ledger</span>
+                </div>
+                <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  &ldquo;Your Savings Envelopes&rdquo;
+                </p>
+                <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
+                  Put money away for Christmas gifts, a vacation, or emergency savings so you don't accidentally spend it.
+                </p>
+              </div>
+
+              <div
+                onClick={() => onNavigateTab('loans')}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 hover:border-amber-400 transition-colors cursor-pointer space-y-1"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-amber-600 dark:text-amber-400">
+                  <HandCoins className="w-4 h-4 shrink-0" />
+                  <span>Loans &amp; Debt</span>
+                </div>
+                <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  &ldquo;Who Owes Who&rdquo;
+                </p>
+                <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
+                  Track money you lent to a friend, or keep track of your loan payments so you never forget who paid.
+                </p>
+              </div>
+
+              <div
+                onClick={() => onNavigateTab('drive')}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 hover:border-indigo-400 transition-colors cursor-pointer space-y-1"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-indigo-600 dark:text-indigo-400">
+                  <HardDrive className="w-4 h-4 shrink-0" />
+                  <span>Cloud Sync</span>
+                </div>
+                <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  &ldquo;The Safe Lockbox&rdquo;
+                </p>
+                <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
+                  Sign in with Google to backup your budget. Even if you lose your phone, your numbers are safely saved.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Common Mistakes & Easy Fixes (The "Don't Panic" Guide) */}
+          <div className="space-y-3 pt-1">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Oops! What Do I Do If...? (The Beginner Panic Button)
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                  <Pencil className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  <span>I made a typo in the amount!</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Don't panic! Just click the small <strong>Pencil icon ✏️</strong> on that line in your budget. Change the number and click Save.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                  <span>I entered the same bill twice!</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Click the small <strong>Trash Can icon 🗑️</strong> on the duplicate row. It will disappear immediately.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                  <HelpCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>My Dashboard shows {currencySymbol}0 remaining?</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Did you mark your bills as <strong>Paid</strong>? The Dashboard only counts money you actually paid. Yellow bills are still waiting.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                  <Calendar className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                  <span>What does P1 and P2 mean?</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  If you get paid twice a month: <strong>P1</strong> is your 1st–15th payday. <strong>P2</strong> is your 16th–30th payday. (You can switch to Monthly at the top!)
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <span>Where is the Save button?</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  You don't need one! CapitalFlow automatically saves every single click and number as you type. Nothing is ever lost.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                  <Smartphone className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  <span>Can I use this on my phone?</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Yes! Open this link on your iPhone or Android. In Safari or Chrome, tap <strong>Share</strong> ➔ <strong>Add to Home Screen</strong> to use it like an app!
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* 1. NEW USER QUICK START: CHOOSE HOW YOU WANT TO BEGIN */}
       {showSection(

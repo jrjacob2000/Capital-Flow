@@ -1,0 +1,248 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidYearId(id) {
+      return id is string && id.size() == 4 && id.matches('^[0-9]{4}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isParentWorkspaceOwner(userId) {
+      return exists(/databases/$(database)/documents/workspaces/$(userId)) &&
+        get(/databases/$(database)/documents/workspaces/$(userId)).data.ownerId == request.auth.uid;
+    }
+
+    // 3. Entity Validation Blueprints (Pillar 2: Anti-Update-Gap & Blueprint Synchronicity)
+    function isValidUserWorkspace(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'activeYear',
+          'frequency',
+          'currency',
+          'knownYears',
+          'templateData',
+          'ledgerData',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'activeYear',
+          'frequency',
+          'currency',
+          'knownYears',
+          'templateData',
+          'ledgerData',
+          'lastDriveBackupAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId.size() >= 1 &&
+        data.ownerId.size() <= 128 &&
+        data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId == request.auth.uid &&
+        data.activeYear is int &&
+        data.activeYear >= 2000 &&
+        data.activeYear <= 2100 &&
+        data.frequency is string &&
+        data.frequency.size() >= 7 &&
+        data.frequency.size() <= 20 &&
+        (data.frequency == 'monthly' || data.frequency == 'bi-weekly') &&
+        data.currency is string &&
+        data.currency.size() >= 1 &&
+        data.currency.size() <= 10 &&
+        data.knownYears is list &&
+        data.knownYears.size() >= 1 &&
+        data.knownYears.size() <= 20 &&
+        data.knownYears[0] is int &&
+        data.templateData is map &&
+        data.templateData.size() <= 50 &&
+        data.ledgerData is map &&
+        data.ledgerData.size() <= 50 &&
+        (!('lastDriveBackupAt' in data) || (
+          data.lastDriveBackupAt is string &&
+          data.lastDriveBackupAt.size() >= 1 &&
+          data.lastDriveBackupAt.size() <= 64
+        )) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAnnualBudgetDoc(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'year',
+          'version',
+          'lastUpdated',
+          'entryMode',
+          'currency',
+          'budgetPayload',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'year',
+          'version',
+          'lastUpdated',
+          'entryMode',
+          'currency',
+          'budgetPayload',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId.size() >= 1 &&
+        data.ownerId.size() <= 128 &&
+        data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId == request.auth.uid &&
+        data.year is int &&
+        data.year >= 2000 &&
+        data.year <= 2100 &&
+        data.version is string &&
+        data.version.size() >= 1 &&
+        data.version.size() <= 32 &&
+        data.lastUpdated is string &&
+        data.lastUpdated.size() >= 1 &&
+        data.lastUpdated.size() <= 64 &&
+        data.entryMode is string &&
+        data.entryMode.size() >= 7 &&
+        data.entryMode.size() <= 20 &&
+        (data.entryMode == 'monthly' || data.entryMode == 'bi-weekly') &&
+        data.currency is string &&
+        data.currency.size() >= 1 &&
+        data.currency.size() <= 10 &&
+        data.budgetPayload is map &&
+        data.budgetPayload.size() <= 50 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // 4. Primary User Workspace Collection
+    match /workspaces/{userId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserWorkspace(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserWorkspace(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action: Sync Workspace State
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'activeYear',
+            'frequency',
+            'currency',
+            'knownYears',
+            'templateData',
+            'ledgerData',
+            'lastDriveBackupAt',
+            'updatedAt'
+          ]) ||
+          // Action: Update Drive Backup Timestamp
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'lastDriveBackupAt',
+            'updatedAt'
+          ])
+        )
+      );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        existing().ownerId == request.auth.uid;
+
+      // 5. Subcollection: Annual Budgets per Year (Pillar 1 Master Gate Relational Sync)
+      match /budgets/{yearId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidYearId(yearId) &&
+          request.auth.uid == userId;
+
+        // Pillar 8: Secure List Queries (No get()/exists() in list, explicit resource.data check)
+        allow list: if isVerifiedUser() &&
+          isValidId(userId) &&
+          request.auth.uid == userId &&
+          resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidYearId(yearId) &&
+          request.auth.uid == userId &&
+          isValidAnnualBudgetDoc(incoming()) &&
+          yearId == string(incoming().year) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isParentWorkspaceOwner(userId);
+
+        allow update: if (
+          isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidYearId(yearId) &&
+          request.auth.uid == userId &&
+          isValidAnnualBudgetDoc(incoming()) &&
+          yearId == string(incoming().year) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().year == existing().year &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          isParentWorkspaceOwner(userId) && (
+            // Action: Update Annual Budget Payload & Metadata
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'version',
+              'lastUpdated',
+              'entryMode',
+              'currency',
+              'budgetPayload',
+              'updatedAt'
+            ])
+          )
+        );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidYearId(yearId) &&
+          request.auth.uid == userId &&
+          existing().ownerId == request.auth.uid &&
+          isParentWorkspaceOwner(userId);
+      }
+    }
+  }
+}

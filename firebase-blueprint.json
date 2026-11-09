@@ -1,0 +1,152 @@
+{
+  "entities": {
+    "UserWorkspace": {
+      "title": "UserWorkspace",
+      "description": "Stores the authenticated user's primary CapitalFlow cloud workspace including active year, frequency mode, known years, global budget template, and savings/loans ledger.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the workspace owner",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "activeYear": {
+          "type": "integer",
+          "description": "Currently selected budget year (2000-2100)"
+        },
+        "frequency": {
+          "type": "string",
+          "description": "Active budget frequency mode",
+          "enum": ["monthly", "bi-weekly"],
+          "minLength": 7,
+          "maxLength": 20
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency symbol for the workspace",
+          "minLength": 1,
+          "maxLength": 10
+        },
+        "knownYears": {
+          "type": "array",
+          "description": "Bounded list of initialized budget years (max 20 years)"
+        },
+        "templateData": {
+          "type": "object",
+          "description": "Native map storing the user's personalized Estimate Budget Template and custom categories"
+        },
+        "ledgerData": {
+          "type": "object",
+          "description": "Native map storing the user's multi-year Savings Accounts, Transactions, and Loans ledger"
+        },
+        "lastDriveBackupAt": {
+          "type": "string",
+          "description": "Optional ISO timestamp of the last optional Google Drive backup",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the workspace was created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the workspace was last updated"
+        }
+      },
+      "required": [
+        "ownerId",
+        "activeYear",
+        "frequency",
+        "currency",
+        "knownYears",
+        "templateData",
+        "ledgerData",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AnnualBudgetDoc": {
+      "title": "AnnualBudgetDoc",
+      "description": "Stores a single year's budget entries, category budgets, templates, and period exclusions under a user's workspace.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the workspace owner",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "year": {
+          "type": "integer",
+          "description": "4-digit budget year (2000-2100)"
+        },
+        "version": {
+          "type": "string",
+          "description": "Schema version string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "lastUpdated": {
+          "type": "string",
+          "description": "ISO timestamp of the latest budget edit",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "entryMode": {
+          "type": "string",
+          "description": "Entry mode for the annual budget",
+          "enum": ["monthly", "bi-weekly"],
+          "minLength": 7,
+          "maxLength": 20
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency symbol for the annual budget",
+          "minLength": 1,
+          "maxLength": 10
+        },
+        "budgetPayload": {
+          "type": "object",
+          "description": "Native map containing entries, budgets, customCategories, itemTemplates, excludedPeriodItems, isPersonalizedTemplate, and isDefaultStarterData"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the annual budget document was created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the annual budget document was last updated"
+        }
+      },
+      "required": [
+        "ownerId",
+        "year",
+        "version",
+        "lastUpdated",
+        "entryMode",
+        "currency",
+        "budgetPayload",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/workspaces/{userId}": {
+      "schema": "UserWorkspace",
+      "description": "Primary per-user CapitalFlow workspace document indexed by Firebase Auth UID"
+    },
+    "/workspaces/{userId}/budgets/{yearId}": {
+      "schema": "AnnualBudgetDoc",
+      "description": "Subcollection of annual budget documents belonging to the user's workspace"
+    }
+  }
+}

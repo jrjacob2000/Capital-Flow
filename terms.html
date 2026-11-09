@@ -93,12 +93,12 @@
 
       <h2>2. Description of Service</h2>
       <p>
-        CapitalFlow is a client-side personal finance ledger tool that enables users to track monthly and bi-weekly income, expenses, and savings, with optional synchronization of user-owned JSON data files to the user's personal Google Drive account.
+        CapitalFlow is a personal finance ledger tool that enables users to track monthly and bi-weekly income, expenses, and savings, with direct cloud database synchronization via Google Firebase Firestore and optional user-owned JSON backup synchronization to the user's personal Google Drive account.
       </p>
 
-      <h2>3. User Data and Google Drive Responsibility</h2>
+      <h2>3. User Data, Cloud Database &amp; Google Drive Responsibility</h2>
       <p>
-        You retain complete ownership of all financial data you enter into CapitalFlow. When you connect your Google account, CapitalFlow stores your backup files in your own Google Drive inside the <code>/CapitalFlow/</code> folder. You are responsible for maintaining the security of your Google account and managing your backup files.
+        You retain complete ownership of all financial data you enter into CapitalFlow. When you sign in with your Google account, CapitalFlow stores your active workspace data in your private Firebase Firestore database path (protected by user-owner authentication rules) and, if optionally chosen by you, saves JSON backup files in your own Google Drive inside the <code>/CapitalFlow Financial Database/</code> folder. You are responsible for maintaining the security of your Google account credentials and managing your backup files.
       </p>
 
       <h2>4. Disclaimer of Warranties &amp; Financial Advice</h2>

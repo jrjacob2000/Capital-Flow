@@ -146,14 +146,8 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Cloud className="w-3.5 h-3.5" />
-                <span className="xl:hidden">Drive</span>
-                <span className="hidden xl:inline">Drive Storage</span>
-                {driveStatus.isSignedIn && hasUnsavedChanges && !driveStatus.isSyncing && (
-                  <span
-                    className="w-2 h-2 rounded-full bg-amber-500"
-                    title="Local changes not yet synced to Google Drive"
-                  />
-                )}
+                <span className="xl:hidden">Backup</span>
+                <span className="hidden xl:inline">Backup &amp; Restore</span>
               </button>
               <button
                 onClick={() => onSelectTab('help')}
@@ -253,7 +247,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
               </div>
 
-              {/* Google Drive Status & User Profile */}
+              {/* Firebase Cloud Status & User Profile */}
               {driveStatus.isSignedIn ? (
                 <div className="relative">
                   <button
@@ -280,21 +274,14 @@ export const Header: React.FC<HeaderProps> = ({
                     <div className="flex items-center gap-1.5 text-xs">
                       <span
                         className={`w-2 h-2 rounded-full shrink-0 ${
-                          driveStatus.isSyncing
+                          driveStatus.isSyncing || driveStatus.isFirebaseSyncing
                             ? 'bg-indigo-500 animate-pulse'
-                            : hasUnsavedChanges
-                            ? 'bg-amber-500'
                             : 'bg-emerald-500'
                         }`}
                       />
                       <span className="font-medium text-slate-700 dark:text-slate-200 max-w-[100px] truncate hidden lg:inline">
                         {driveStatus.userName || driveStatus.userEmail || 'Connected'}
                       </span>
-                      {hasUnsavedChanges && !driveStatus.isSyncing && (
-                        <span className="hidden sm:inline-block px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
-                          Unsaved
-                        </span>
-                      )}
                     </div>
                     <ChevronDown className="w-3 h-3 text-slate-400" />
                   </button>
@@ -309,53 +296,34 @@ export const Header: React.FC<HeaderProps> = ({
                           {driveStatus.userEmail}
                         </div>
                         <div className="mt-1 flex items-center gap-1 text-[10px] font-medium">
-                          {driveStatus.isSyncing ? (
+                          {driveStatus.isSyncing || driveStatus.isFirebaseSyncing ? (
                             <span className="text-indigo-600 dark:text-indigo-400 flex items-center gap-1 font-semibold">
-                              <span>{driveStatus.syncMessage || 'Syncing with Google Drive...'}</span>
-                            </span>
-                          ) : hasUnsavedChanges ? (
-                            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                              <span className="w-2 h-2 rounded-full bg-amber-500" />
-                              Unsaved local changes
+                              <span>{driveStatus.syncMessage || 'Syncing with Firebase Cloud...'}</span>
                             </span>
                           ) : (
                             <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" />
-                              Connected to Google Drive
+                              <span>Firebase Cloud DB Active</span>
                             </span>
                           )}
                         </div>
+                        {driveStatus.lastFirebaseSyncedAt && (
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Last synced: {driveStatus.lastFirebaseSyncedAt}
+                          </div>
+                        )}
                       </div>
 
                       <div className="py-2 space-y-1">
                         <button
                           onClick={() => {
                             setShowUserDropdown(false);
-                            onTriggerSync();
-                          }}
-                          disabled={driveStatus.isSyncing}
-                          className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center justify-between transition-colors disabled:opacity-50"
-                        >
-                          <span className="flex items-center gap-2">
-                            <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{driveStatus.isSyncing ? 'Syncing in progress...' : 'Sync Changes Now'}</span>
-                          </span>
-                          {hasUnsavedChanges && !driveStatus.isSyncing && (
-                            <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
-                              Pending
-                            </span>
-                          )}
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setShowUserDropdown(false);
                             onOpenDriveModal();
                           }}
-                          className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2 transition-colors"
+                          className="w-full text-left px-2.5 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
                         >
-                          <FolderSync className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Manage Drive Files</span>
+                          <FolderSync className="w-3.5 h-3.5 text-indigo-500" />
+                          <span>Backup &amp; Restore</span>
                         </button>
                       </div>
 
@@ -365,7 +333,7 @@ export const Header: React.FC<HeaderProps> = ({
                             setShowUserDropdown(false);
                             onSignOut();
                           }}
-                          className="w-full text-left px-2.5 py-2 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg flex items-center gap-2 transition-colors font-medium"
+                          className="w-full text-left px-2.5 py-2 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg flex items-center gap-2 transition-colors font-medium cursor-pointer"
                         >
                           <LogOut className="w-3.5 h-3.5" />
                           <span>Disconnect Account</span>
@@ -515,11 +483,8 @@ export const Header: React.FC<HeaderProps> = ({
             )}
             <div className="relative">
               <Cloud className="w-5 h-5" />
-              {driveStatus.isSignedIn && hasUnsavedChanges && !driveStatus.isSyncing && (
-                <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white dark:ring-slate-900" />
-              )}
             </div>
-            <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Drive</span>
+            <span className="text-[10px] tracking-tight mt-1 whitespace-nowrap">Backup</span>
           </button>
 
           <button

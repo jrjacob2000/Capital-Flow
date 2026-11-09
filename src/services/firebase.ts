@@ -8,9 +8,16 @@ import {
   User,
   Auth,
 } from 'firebase/auth';
+import {
+  getFirestore,
+  initializeFirestore,
+  Firestore,
+  doc,
+  getDocFromServer,
+} from 'firebase/firestore';
 
-// Optionally load local firebase-applet-config.json if present (e.g. in AI Studio),
-// without failing the build when the file is gitignored in a public repository or running in Node tests.
+// Load local firebase-applet-config.json if present (e.g. in AI Studio),
+// without failing the build when the file is gitignored or running in Node tests.
 const localConfigModules =
   typeof (import.meta as any).glob === 'function'
     ? (import.meta as any).glob('../../firebase-applet-config.json', { eager: true })
@@ -49,9 +56,6 @@ export const resolveAuthDomain = (
   ).toLowerCase();
   if (!host || !projectId) return fallback;
   const pid = projectId.toLowerCase();
-  // When accessed via Firebase Hosting (.web.app or .firebaseapp.com) for the same project,
-  // use the current hostname as authDomain so /__/auth/handler runs on the exact same origin
-  // and avoids cross-origin sessionStorage partitioning on iOS Safari / mobile browsers.
   if (host === `${pid}.web.app` || host === `${pid}.firebaseapp.com`) {
     return host;
   }
@@ -79,15 +83,65 @@ const fileConfig: FirebaseOptions = {
   appId: localFileConfig.appId || '',
 };
 
-const defaultProjectId = 'capital-flow-37dfa';
+const defaultProjectId = 'gen-lang-client-0866727915';
+export const effectiveProjectId = fileProjectId || envProjectId || defaultProjectId;
+
 const defaultClientConfig: FirebaseOptions = {
-  apiKey: ['AIzaSyDPKtUrI', '_2vG11xYEvQHLfsD', '-Xn3YIsztg'].join(''),
-  authDomain: resolveAuthDomain('capital-flow-37dfa.firebaseapp.com', defaultProjectId),
+  apiKey: localFileConfig.apiKey || ['AIzaSyCMcS8YrL', '7IZVVaXa2QOHjTT', '-QkB1c9ao4'].join(''),
+  authDomain: resolveAuthDomain('gen-lang-client-0866727915.firebaseapp.com', defaultProjectId),
   projectId: defaultProjectId,
-  storageBucket: 'capital-flow-37dfa.firebasestorage.app',
-  messagingSenderId: '956386978461',
-  appId: '1:956386978461:web:b400e96927be5945b94274',
+  storageBucket: 'gen-lang-client-0866727915.firebasestorage.app',
+  messagingSenderId: '479188424952',
+  appId: '1:479188424952:web:438583f756f4463ca8c30d',
 };
+
+const configuredDbId =
+  localFileConfig.firestoreDatabaseId || cleanEnvValue(viteEnv.VITE_FIREBASE_DATABASE_ID);
+
+export const FIRESTORE_DATABASE_ID = configuredDbId
+  ? (configuredDbId.toLowerCase() === 'default' ? '(default)' : configuredDbId)
+  : (effectiveProjectId === defaultProjectId
+      ? 'ai-studio-capitalflowincom-eed97db7-0c49-435d-ac34-34ec2440faae'
+      : '(default)');
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    isSignedIn: boolean;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      isSignedIn: Boolean(auth?.currentUser),
+      emailVerified: auth?.currentUser?.emailVerified ?? null,
+      isAnonymous: auth?.currentUser?.isAnonymous ?? null,
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error:', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export interface BrowserEnvironmentInfo {
   isInAppBrowser: boolean;
@@ -114,12 +168,6 @@ export const checkSessionStorageAvailable = (): boolean => {
   }
 };
 
-/**
- * Detects embedded in-app browsers (Facebook Messenger, Facebook, Instagram, TikTok, LINE, WeChat,
- * Telegram, LinkedIn, X/Twitter, Android WebView, and iOS WKWebView) where Google OAuth popups
- * and Firebase /__/auth/handler fail with "Unable to process request due to missing initial state"
- * due to partitioned/cleared sessionStorage and severed window.opener references.
- */
 export const getBrowserEnvironmentInfo = (
   customUserAgent?: string,
   customReferrer?: string
@@ -207,7 +255,6 @@ export const getBrowserEnvironmentInfo = (
     !/(CriOS|FxiOS|EdgiOS|OPiOS)/i.test(ua) &&
     !isStandalone
   ) {
-    // iOS WKWebView inside apps (like Messenger when FB tokens are stripped) omits "Safari/"
     isInAppBrowser = true;
     browserName = /messenger\.com/i.test(ref)
       ? 'Messenger'
@@ -217,8 +264,9 @@ export const getBrowserEnvironmentInfo = (
   }
 
   const rawUrl =
-    typeof window !== 'undefined' ? window.location.href : 'https://capital-flow-37dfa.firebaseapp.com';
-  // Strip Facebook click tracking param (?fbclid=...) for a cleaner external link
+    typeof window !== 'undefined'
+      ? window.location.href
+      : 'https://gen-lang-client-0866727915.firebaseapp.com';
   let cleanUrl = rawUrl;
   try {
     const parsedUrl = new URL(rawUrl);
@@ -274,17 +322,29 @@ export const isMissingInitialStateOrStorageError = (error: any): boolean => {
   );
 };
 
-const hasEnvConfig = Boolean(envConfig.apiKey && envConfig.projectId);
-const hasFileConfig = Boolean(fileConfig.apiKey && fileConfig.projectId);
-const isDifferentProject =
-  hasEnvConfig && hasFileConfig && envConfig.projectId !== fileConfig.projectId;
-
-// Prioritize VITE_FIREBASE_* environment variables, then local config file, then default project client config.
-const initialConfig: FirebaseOptions = hasEnvConfig
-  ? envConfig
-  : hasFileConfig
-    ? fileConfig
-    : defaultClientConfig;
+// Resilient configuration resolution: prioritizes local file config, then env vars, with complete default fallbacks
+const initialConfig: FirebaseOptions = {
+  apiKey: fileConfig.apiKey || envConfig.apiKey || defaultClientConfig.apiKey,
+  authDomain:
+    resolveAuthDomain(
+      fileConfig.authDomain || envConfig.authDomain,
+      effectiveProjectId
+    ) || defaultClientConfig.authDomain,
+  projectId: effectiveProjectId,
+  storageBucket:
+    fileConfig.storageBucket ||
+    envConfig.storageBucket ||
+    (effectiveProjectId ? `${effectiveProjectId}.firebasestorage.app` : '') ||
+    defaultClientConfig.storageBucket,
+  messagingSenderId:
+    fileConfig.messagingSenderId ||
+    envConfig.messagingSenderId ||
+    defaultClientConfig.messagingSenderId,
+  appId:
+    fileConfig.appId ||
+    envConfig.appId ||
+    defaultClientConfig.appId,
+};
 
 const isFirebaseConfigured = Boolean(initialConfig.apiKey && initialConfig.projectId);
 
@@ -295,19 +355,48 @@ const primaryApp =
       : initializeApp(initialConfig)
     : null;
 
-const fallbackApp =
-  isDifferentProject && fileConfig.apiKey && fileConfig.projectId && typeof window !== 'undefined'
-    ? initializeApp(
-        fileConfig,
-        initialConfig.projectId === fileConfig.projectId ? 'fallback-local' : 'local-applet-config'
-      )
-    : null;
-
 export let auth: Auth | null = primaryApp ? getAuth(primaryApp) : null;
+export let db: Firestore | null = (() => {
+  if (!primaryApp) return null;
+  try {
+    return initializeFirestore(
+      primaryApp,
+      {
+        experimentalAutoDetectLongPolling: true,
+      },
+      FIRESTORE_DATABASE_ID
+    );
+  } catch {
+    return getFirestore(primaryApp, FIRESTORE_DATABASE_ID);
+  }
+})();
 let activeProjectId = initialConfig.projectId || '';
 
+// Validate connection to Firestore on boot as required
+async function testConnection() {
+  if (!db || typeof window === 'undefined') return;
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      // Retry once after network / long-polling channel settles on initial iframe boot
+      setTimeout(async () => {
+        if (!db || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+        try {
+          await getDocFromServer(doc(db, 'test', 'connection'));
+        } catch (retryErr) {
+          if (retryErr instanceof Error && retryErr.message.includes('the client is offline')) {
+            console.warn('Firestore connection check: client is currently offline.');
+          }
+        }
+      }, 2500);
+    }
+  }
+}
+testConnection();
+
 let authStateCallbacks: {
-  onAuthSuccess?: (user: User, token: string) => void;
+  onAuthSuccess?: (user: User, token: string | null) => void;
   onAuthFailure?: () => void;
 } | null = null;
 let currentUnsubscribe: (() => void) | null = null;
@@ -324,11 +413,9 @@ const bindAuthListener = () => {
   const { onAuthSuccess, onAuthFailure } = authStateCallbacks;
   currentUnsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken && !isDriveTokenExpired()) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        if (onAuthFailure) onAuthFailure();
-      }
+      const validDriveToken =
+        cachedAccessToken && !isDriveTokenExpired() ? cachedAccessToken : null;
+      if (onAuthSuccess) onAuthSuccess(user, validDriveToken);
     } else {
       clearCachedToken();
       if (onAuthFailure) onAuthFailure();
@@ -336,68 +423,15 @@ const bindAuthListener = () => {
   });
 };
 
-const isDomainAuthorized = (hostname: string, authorizedDomains: string[]): boolean => {
-  const lowerHost = hostname.toLowerCase();
-  return authorizedDomains.some((domain) => {
-    const d = domain.trim().toLowerCase();
-    if (!d) return false;
-    return lowerHost === d || lowerHost.endsWith(`.${d}`);
-  });
-};
-
-// If both envConfig and fileConfig exist for different projects, probe envConfig's Identity Toolkit setup
-if (isDifferentProject && typeof window !== 'undefined') {
-  fetch(
-    `https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig?key=${encodeURIComponent(
-      envConfig.apiKey || ''
-    )}`
-  )
-    .then((res) => res.json())
-    .then((data) => {
-      const domains: string[] = Array.isArray(data?.authorizedDomains)
-        ? data.authorizedDomains
-        : [];
-      const currentHost = window.location.hostname;
-      if (data?.error?.message === 'CONFIGURATION_NOT_FOUND') {
-        console.warn(
-          `[Firebase Auth] Project "${envConfig.projectId}" does not have Firebase Authentication enabled yet (CONFIGURATION_NOT_FOUND). Using "${fileConfig.projectId}" from firebase-applet-config.json.`
-        );
-        if (fallbackApp && activeProjectId !== fileConfig.projectId) {
-          auth = getAuth(fallbackApp);
-          activeProjectId = fileConfig.projectId || '';
-          bindAuthListener();
-        }
-      } else if (domains.length > 0 && !isDomainAuthorized(currentHost, domains)) {
-        console.warn(
-          `[Firebase Auth] Hostname "${currentHost}" is not yet matched by authorizedDomains (${domains.join(', ')}) for project "${envConfig.projectId}". Using "${fileConfig.projectId}" for this preview session.`
-        );
-        if (fallbackApp && activeProjectId !== fileConfig.projectId) {
-          auth = getAuth(fallbackApp);
-          activeProjectId = fileConfig.projectId || '';
-          bindAuthListener();
-        }
-      } else if (isDomainAuthorized(currentHost, domains) && activeProjectId !== envConfig.projectId) {
-        const envApp = initializeApp(envConfig, 'verified-env-config');
-        auth = getAuth(envApp);
-        activeProjectId = envConfig.projectId || '';
-        bindAuthListener();
-      }
-    })
-    .catch(() => {
-      // Ignore network probe errors
-    });
-}
-
 export const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
+// Standard Firebase Auth Google provider (also requests drive.file scope so Drive backup works seamlessly)
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
-// Standard Google Account selection prompt
 provider.setCustomParameters({
   prompt: 'select_account',
 });
 
-// Flag to indicate if we are in the middle of a sign-in flow
 let isSigningIn = false;
 const TOKEN_STORAGE_KEY = 'capitalflow_drive_access_token';
 const TOKEN_TIME_STORAGE_KEY = 'capitalflow_drive_token_time';
@@ -407,7 +441,9 @@ const TOKEN_MAX_AGE_MS = 55 * 60 * 1000;
 
 let cachedAccessToken: string | null = (() => {
   try {
-    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    return typeof sessionStorage !== 'undefined'
+      ? sessionStorage.getItem(TOKEN_STORAGE_KEY)
+      : null;
   } catch {
     return null;
   }
@@ -415,7 +451,10 @@ let cachedAccessToken: string | null = (() => {
 
 let tokenAcquiredAt: number | null = (() => {
   try {
-    const raw = sessionStorage.getItem(TOKEN_TIME_STORAGE_KEY);
+    const raw =
+      typeof sessionStorage !== 'undefined'
+        ? sessionStorage.getItem(TOKEN_TIME_STORAGE_KEY)
+        : null;
     return raw ? parseInt(raw, 10) : null;
   } catch {
     return null;
@@ -432,15 +471,17 @@ export const clearCachedToken = () => {
   cachedAccessToken = null;
   tokenAcquiredAt = null;
   try {
-    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-    sessionStorage.removeItem(TOKEN_TIME_STORAGE_KEY);
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      sessionStorage.removeItem(TOKEN_TIME_STORAGE_KEY);
+    }
   } catch {
     // Ignore storage errors
   }
 };
 
 export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void
 ) => {
   authStateCallbacks = { onAuthSuccess, onAuthFailure };
@@ -454,7 +495,10 @@ export const initAuth = (
   };
 };
 
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+export const googleSignIn = async (): Promise<{
+  user: User;
+  accessToken: string | null;
+} | null> => {
   if (!auth) {
     throw new Error(
       'Firebase configuration is missing. Please configure VITE_FIREBASE_* environment variables or firebase-applet-config.json.'
@@ -464,21 +508,18 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Failed to get Google Drive access token from authentication');
-    }
-
-    cachedAccessToken = credential.accessToken;
-    tokenAcquiredAt = Date.now();
-    try {
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, cachedAccessToken);
-      sessionStorage.setItem(TOKEN_TIME_STORAGE_KEY, String(tokenAcquiredAt));
-    } catch {
-      // Ignore storage errors
+    if (credential?.accessToken) {
+      cachedAccessToken = credential.accessToken;
+      tokenAcquiredAt = Date.now();
+      try {
+        sessionStorage.setItem(TOKEN_STORAGE_KEY, cachedAccessToken);
+        sessionStorage.setItem(TOKEN_TIME_STORAGE_KEY, String(tokenAcquiredAt));
+      } catch {
+        // Ignore storage errors
+      }
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
-    // If the user cancelled or closed the popup window, handle gracefully
     if (
       error?.code === 'auth/user-cancelled' ||
       error?.code === 'auth/popup-closed-by-user' ||
@@ -498,22 +539,12 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
       throw customErr;
     }
     if (error?.code === 'auth/configuration-not-found') {
-      if (fallbackApp && activeProjectId !== fileConfig.projectId) {
-        auth = getAuth(fallbackApp);
-        activeProjectId = fileConfig.projectId || '';
-        bindAuthListener();
-      }
       throw new Error(
         `Firebase Auth is not enabled for project "${activeProjectId}". In Firebase Console → Authentication → Sign-in method, click "Get started" and enable the Google provider.`
       );
     }
     if (error?.code === 'auth/unauthorized-domain') {
       const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
-      if (fallbackApp && activeProjectId !== fileConfig.projectId) {
-        auth = getAuth(fallbackApp);
-        activeProjectId = fileConfig.projectId || '';
-        bindAuthListener();
-      }
       throw new Error(
         `Domain "${host}" is not authorized in Firebase project "${activeProjectId}". Add "${host}" in Firebase Console → Authentication → Settings → Authorized domains.`
       );
@@ -531,6 +562,17 @@ export const getAccessToken = async (): Promise<string | null> => {
     return null;
   }
   return cachedAccessToken;
+};
+
+/**
+ * Acquires a Google Drive access token on demand when the user explicitly triggers
+ * an optional Google Drive backup/restore action and the 1-hour Drive OAuth token has expired.
+ */
+export const ensureDriveAccessToken = async (): Promise<string | null> => {
+  const existing = await getAccessToken();
+  if (existing) return existing;
+  const result = await googleSignIn();
+  return result?.accessToken || null;
 };
 
 export const logout = async () => {

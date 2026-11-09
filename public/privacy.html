@@ -99,30 +99,35 @@
       <p>When you use CapitalFlow, we only access the minimum information required to provide the application's features:</p>
       <ul>
         <li>
-          <strong>Basic Google Profile Information:</strong> When you sign in with Google Authentication, we receive your basic profile information (display name, email address, and profile avatar URL) solely to display your active signed-in session inside the application interface.
+          <strong>Basic Google Profile Information:</strong> When you sign in with Google Authentication via Firebase Auth, we receive your basic profile information (display name, email address, and profile avatar URL) solely to identify your account and authenticate your database session.
+        </li>
+        <li>
+          <strong>Cloud Database Storage (Firebase Firestore):</strong> When signed in, CapitalFlow synchronizes your workspace data (annual budgets, recurring templates, and funds/loans ledger) directly to a dedicated Google Cloud Firestore database under your authenticated user ID (<code>/workspaces/{userId}</code>).
         </li>
         <li>
           <strong>App-Created Google Drive Files (<code>https://www.googleapis.com/auth/drive.file</code>):</strong>
-          CapitalFlow requests the non-sensitive <code>drive.file</code> scope, which grants access <strong>exclusively to files and folders created or opened by CapitalFlow</strong> in your own Google Drive account (specifically the <code>/CapitalFlow/</code> folder containing your JSON budget, template, and savings ledger files). CapitalFlow cannot view, list, read, modify, or delete any other files or folders in your Google Drive.
+          CapitalFlow offers optional secondary backups to your personal Google Drive using the restricted <code>drive.file</code> scope. This grants access <strong>exclusively to files and folders created or opened by CapitalFlow</strong> in your Google Drive (specifically the <code>/CapitalFlow Financial Database/</code> folder containing your JSON backups). CapitalFlow cannot view, list, read, modify, or delete any other files or folders in your Google Drive.
         </li>
         <li>
-          <strong>Local Browser Storage:</strong> Your budget entries, templates, and savings ledger entries are stored locally in your browser's <code>localStorage</code> so you can work offline and sync on demand.
+          <strong>Local Browser Storage:</strong> If you use CapitalFlow without signing in (or when offline), your budget entries, templates, and funds ledger are kept locally on your device so you can track your finances privately.
         </li>
       </ul>
 
       <h2>2. How We Use Your Data</h2>
       <p>Your information and financial ledger data are used strictly for the following user-facing purposes:</p>
       <ul>
-        <li>Saving, reading, and backing up your personal budget JSON files (e.g., <code>capitalflow_budget_YYYY.json</code>), budget templates (<code>capitalflow_budget_template.json</code>), and savings ledger (<code>capitalflow_savings_ledger.json</code>) directly inside your personal Google Drive account.</li>
+        <li>Persisting and retrieving your multi-year budgets, custom categories, recurring templates, and savings/loans ledger in your private Firebase Firestore cloud database.</li>
+        <li>Exporting and importing optional JSON backup files (e.g., <code>capitalflow_budget_YYYY.json</code>, <code>capitalflow_budget_template.json</code>, and <code>capitalflow_savings_ledger.json</code>) inside your personal Google Drive folder.</li>
         <li>Displaying your name, email address, and avatar in the application header so you know which Google account is currently connected.</li>
-        <li>Comparing timestamps between your local browser storage and your Google Drive backup files to prevent accidental data overwrites.</li>
+        <li>Comparing timestamps between your active session and your backup files to prevent accidental data overwrites.</li>
       </ul>
 
-      <h2>3. Data Storage, Sharing, and Third-Party Disclosure</h2>
+      <h2>3. Data Storage, Security, and Third-Party Disclosure</h2>
       <ul>
-        <li><strong>Zero External Server Storage:</strong> CapitalFlow is a client-side web application. Your financial data flows directly between your web browser and your personal Google Drive account via official Google APIs. We do not operate a backend database that stores your financial records.</li>
-        <li><strong>No Selling or Sharing of Data:</strong> We never sell, rent, trade, or transfer your Google user data or financial data to any third parties, advertisers, or data brokers.</li>
-        <li><strong>No AI Training:</strong> Your Google user data and Google Drive files are never used to train artificial intelligence or machine learning models.</li>
+        <li><strong>Owner-Isolated Cloud Database:</strong> Your cloud records in Firebase Firestore are strictly protected by server-side Firebase Security Rules. Only your authenticated user account (<code>request.auth.uid == userId</code>) with a verified email address can read or write your workspace documents. No other user can access your financial records.</li>
+        <li><strong>Encryption in Transit and at Rest:</strong> All database operations and API calls are encrypted in transit via HTTPS/TLS and encrypted at rest by Google Cloud / Firebase infrastructure.</li>
+        <li><strong>No Selling or Sharing of Data:</strong> We never sell, rent, trade, or transfer your personal or financial data to any third parties, advertisers, or data brokers.</li>
+        <li><strong>No AI Training:</strong> Your financial data and Google Drive files are never used to train artificial intelligence or machine learning models.</li>
       </ul>
 
       <h2>4. Google API Services User Data Policy (Limited Use Disclosure)</h2>
@@ -134,14 +139,15 @@
 
       <h2>5. Data Retention, Revocation, and Deletion</h2>
       <ul>
-        <li><strong>Full User Control:</strong> Because your backup files reside in your own Google Drive under the <code>/CapitalFlow/</code> folder, you retain 100% ownership and control over your data at all times. You may view, export, or permanently delete these files directly from your Google Drive at any time.</li>
-        <li><strong>Clearing Local Data:</strong> You can clear your local browser data at any time using the "Reset Data" option inside the application or by clearing your browser's site storage.</li>
+        <li><strong>Full User Control:</strong> You retain complete ownership and control over your data at all times. You can export a complete JSON backup at any time from the Backup &amp; Restore menu.</li>
+        <li><strong>Permanent Deletion:</strong> You can delete all your stored data anytime using the "Delete All Data &amp; Reset Workspace" option inside the application, which permanently clears both your local data and your cloud database records in Firestore.</li>
+        <li><strong>Google Drive Files:</strong> Any backup files stored in your Google Drive under the <code>/CapitalFlow Financial Database/</code> folder can be viewed, exported, or deleted directly from your Google Drive.</li>
         <li><strong>Revoking Google Access:</strong> You may sign out within the app at any time or revoke CapitalFlow's access to your Google account at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">https://myaccount.google.com/permissions</a>.</li>
       </ul>
 
       <h2>6. Security</h2>
       <p>
-        All communication between your browser, Firebase Authentication, and Google Drive APIs is encrypted in transit using HTTPS/TLS. OAuth 2.0 access tokens are held only in your browser session for direct requests to Google's APIs.
+        All communication between your browser, Firebase Authentication, Cloud Firestore, and Google Drive APIs is encrypted in transit using industry-standard HTTPS/TLS. OAuth 2.0 access tokens for Google Drive are held only in temporary browser session memory (cleared on sign-out or session end) and never stored in long-term plain text.
       </p>
 
       <h2>7. Contact Information</h2>

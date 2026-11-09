@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.20.0';
+export const APP_VERSION = '1.21.0';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
@@ -261,6 +261,10 @@ export interface DriveSyncStatus {
   folderId?: string | null;
   folderName?: string;
   isSessionExpired?: boolean;
+  isFirebaseConnected?: boolean;
+  isFirebaseSyncing?: boolean;
+  lastFirebaseSyncedAt?: string | null;
+  isDriveBackupReady?: boolean;
 }
 
 

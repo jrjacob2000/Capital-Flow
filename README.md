@@ -47,6 +47,7 @@ In your GitHub repository, navigate to **Settings** → **Secrets and variables*
 - `VITE_FIREBASE_STORAGE_BUCKET`
 - `VITE_FIREBASE_MESSAGING_SENDER_ID`
 - `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_DATABASE_ID`
 
 #### 2. Authorized Domains & Origins
 1. Open the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) or Firebase Authentication Console.
