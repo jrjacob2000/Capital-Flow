@@ -86,26 +86,14 @@ const fileConfig: FirebaseOptions = {
   appId: localFileConfig.appId || '',
 };
 
-const defaultProjectId = 'gen-lang-client-0866727915';
-export const effectiveProjectId = fileProjectId || envProjectId || defaultProjectId;
-
-const defaultClientConfig: FirebaseOptions = {
-  apiKey: localFileConfig.apiKey || ['AIzaSyCMcS8YrL', '7IZVVaXa2QOHjTT', '-QkB1c9ao4'].join(''),
-  authDomain: resolveAuthDomain('gen-lang-client-0866727915.firebaseapp.com', defaultProjectId),
-  projectId: defaultProjectId,
-  storageBucket: 'gen-lang-client-0866727915.firebasestorage.app',
-  messagingSenderId: '479188424952',
-  appId: '1:479188424952:web:438583f756f4463ca8c30d',
-};
+export const effectiveProjectId = fileProjectId || envProjectId || '';
 
 const configuredDbId =
   localFileConfig.firestoreDatabaseId || cleanEnvValue(viteEnv.VITE_FIREBASE_DATABASE_ID);
 
 export const FIRESTORE_DATABASE_ID = configuredDbId
   ? (configuredDbId.toLowerCase() === 'default' ? '(default)' : configuredDbId)
-  : (effectiveProjectId === defaultProjectId
-      ? 'ai-studio-capitalflowincom-eed97db7-0c49-435d-ac34-34ec2440faae'
-      : '(default)');
+  : '(default)';
 
 export enum OperationType {
   CREATE = 'create',
@@ -269,29 +257,30 @@ export const getBrowserEnvironmentInfo = (
   const rawUrl =
     typeof window !== 'undefined'
       ? window.location.href
-      : 'https://gen-lang-client-0866727915.firebaseapp.com';
+      : effectiveProjectId
+        ? `https://${effectiveProjectId}.firebaseapp.com`
+        : 'http://localhost:3000';
   let cleanUrl = rawUrl;
-  try {
-    const parsedUrl = new URL(rawUrl);
-    parsedUrl.searchParams.delete('fbclid');
-    cleanUrl = parsedUrl.toString();
-  } catch {
-    cleanUrl = rawUrl;
-  }
-
   let chromeIntentUrl: string | null = null;
   let safariSchemeUrl: string | null = null;
   try {
-    const parsed = new URL(cleanUrl);
-    const hostAndPath = `${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
-    if (isAndroid) {
-      chromeIntentUrl = `intent://${hostAndPath}#Intent;scheme=${parsed.protocol.replace(':', '')};package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(cleanUrl)};end`;
-    }
-    if (isIOS) {
-      safariSchemeUrl = `x-safari-${cleanUrl}`;
+    const parsedUrl = new URL(rawUrl);
+    // Enforce strict http/https protocol to prevent arbitrary scheme or intent injection
+    if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+      parsedUrl.searchParams.delete('fbclid');
+      cleanUrl = parsedUrl.toString();
+
+      const hostAndPath = `${parsedUrl.host}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+      const safeProtocol = parsedUrl.protocol.replace(':', '');
+      if (isAndroid) {
+        chromeIntentUrl = `intent://${hostAndPath}#Intent;scheme=${safeProtocol};package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(cleanUrl)};end`;
+      }
+      if (isIOS) {
+        safariSchemeUrl = `x-safari-${cleanUrl}`;
+      }
     }
   } catch {
-    // Ignore URL construction errors
+    cleanUrl = rawUrl;
   }
 
   return {
@@ -325,28 +314,26 @@ export const isMissingInitialStateOrStorageError = (error: any): boolean => {
   );
 };
 
-// Resilient configuration resolution: prioritizes local file config, then env vars, with complete default fallbacks
+// Resilient configuration resolution: prioritizes local file config, then env vars
 const initialConfig: FirebaseOptions = {
-  apiKey: fileConfig.apiKey || envConfig.apiKey || defaultClientConfig.apiKey,
-  authDomain:
-    resolveAuthDomain(
-      fileConfig.authDomain || envConfig.authDomain,
-      effectiveProjectId
-    ) || defaultClientConfig.authDomain,
+  apiKey: fileConfig.apiKey || envConfig.apiKey || '',
+  authDomain: resolveAuthDomain(
+    fileConfig.authDomain || envConfig.authDomain,
+    effectiveProjectId
+  ),
   projectId: effectiveProjectId,
   storageBucket:
     fileConfig.storageBucket ||
     envConfig.storageBucket ||
-    (effectiveProjectId ? `${effectiveProjectId}.firebasestorage.app` : '') ||
-    defaultClientConfig.storageBucket,
+    (effectiveProjectId ? `${effectiveProjectId}.firebasestorage.app` : ''),
   messagingSenderId:
     fileConfig.messagingSenderId ||
     envConfig.messagingSenderId ||
-    defaultClientConfig.messagingSenderId,
+    '',
   appId:
     fileConfig.appId ||
     envConfig.appId ||
-    defaultClientConfig.appId,
+    '',
 };
 
 const isFirebaseConfigured = Boolean(initialConfig.apiKey && initialConfig.projectId);
@@ -567,7 +554,10 @@ export const googleSignIn = async (): Promise<{
         `Domain "${host}" is not authorized in Firebase project "${activeProjectId}". Add "${host}" in Firebase Console → Authentication → Settings → Authorized domains.`
       );
     }
-    console.error('Google Sign-in error:', error);
+    console.error('Google Sign-in error:', {
+      code: error?.code,
+      message: error?.message,
+    });
     throw error;
   } finally {
     isSigningIn = false;

@@ -1418,8 +1418,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       return Number(num).toFixed(2);
     };
 
+    // Sanitize string cells to prevent CSV / Formula Injection in Excel and Google Sheets
+    const formatCsvCell = (val: string | undefined | null): string => {
+      if (val === undefined || val === null) return '""';
+      let clean = String(val).replace(/"/g, '""');
+      if (/^[=+\-@\t\r]/.test(clean)) {
+        clean = `'${clean}`;
+      }
+      return `"${clean}"`;
+    };
+
     const lines: string[] = [];
-    lines.push(`Period,${selectedPeriod} (${budget.year}),Frequency,${frequency === 'monthly' ? 'Monthly' : 'Bi-Weekly'}`);
+    lines.push(`Period,${formatCsvCell(`${selectedPeriod} (${budget.year})`)},Frequency,${frequency === 'monthly' ? 'Monthly' : 'Bi-Weekly'}`);
     lines.push('');
     lines.push('--- INCOME ---');
     lines.push('Income Source,Estimated,Actual Recorded,Difference');
@@ -1429,7 +1439,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       const act = inc.hasActualCost && inc.status === 'Paid' ? inc.actualCost : 0;
       const diff = act - est;
       lines.push(
-        `"${inc.item.replace(/"/g, '""')}",${formatCsvNum(est)},${formatCsvNum(act)},${formatCsvNum(diff)}`
+        `${formatCsvCell(inc.item)},${formatCsvNum(est)},${formatCsvNum(act)},${formatCsvNum(diff)}`
       );
     });
 
@@ -1454,7 +1464,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       const diff = est - act;
 
       lines.push(
-        `"${exp.category.replace(/"/g, '""')}","${exp.item.replace(/"/g, '""')}",${formatCsvNum(est)},${formatCsvNum(act)},${cash ? formatCsvNum(cash) : '0.00'},${cc ? formatCsvNum(cc) : '0.00'},${gcash ? formatCsvNum(gcash) : '0.00'},${kath ? formatCsvNum(kath) : '0.00'},${chk ? formatCsvNum(chk) : '0.00'},${bank ? formatCsvNum(bank) : '0.00'},${formatCsvNum(diff)},"${exp.status || 'Paid'}","${(exp.reference || '').replace(/"/g, '""')}",${exp.date}`
+        `${formatCsvCell(exp.category)},${formatCsvCell(exp.item)},${formatCsvNum(est)},${formatCsvNum(act)},${cash ? formatCsvNum(cash) : '0.00'},${cc ? formatCsvNum(cc) : '0.00'},${gcash ? formatCsvNum(gcash) : '0.00'},${kath ? formatCsvNum(kath) : '0.00'},${chk ? formatCsvNum(chk) : '0.00'},${bank ? formatCsvNum(bank) : '0.00'},${formatCsvNum(diff)},${formatCsvCell(exp.status || 'Paid')},${formatCsvCell(exp.reference || '')},${formatCsvCell(exp.date)}`
       );
     });
 
