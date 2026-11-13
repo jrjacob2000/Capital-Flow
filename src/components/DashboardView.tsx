@@ -486,42 +486,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               )}
             </div>
 
-            {/* Quick Navigation Actions */}
-            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-1 sm:pt-0">
-              {onOpenAddEntry && (
+            {/* Quick Action */}
+            {onOpenAddEntry && (
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-1 sm:pt-0">
                 <button
                   type="button"
                   onClick={() => onOpenAddEntry('expense')}
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs transition-colors cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
                   <span>Add Entry</span>
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={onNavigateToBudget}
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/15 text-white font-semibold rounded-xl text-xs border border-white/10 transition-colors cursor-pointer"
-              >
-                <span>Budget</span>
-              </button>
-              <button
-                type="button"
-                onClick={onNavigateToSavings}
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/15 text-white font-semibold rounded-xl text-xs border border-white/10 transition-colors cursor-pointer"
-              >
-                <span>Funds</span>
-              </button>
-              {onNavigateToLoans && (
-                <button
-                  type="button"
-                  onClick={onNavigateToLoans}
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/15 text-white font-semibold rounded-xl text-xs border border-white/10 transition-colors cursor-pointer"
-                >
-                  <span>Loans</span>
-                </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -625,7 +602,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* 3. At-A-Glance Priority Lists: Top Funds/Accounts & Active Loans */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Left: Compact Funds & Accounts Switcher */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between h-auto">
           <div>
             <div className="flex items-center justify-between gap-2 mb-3">
               <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
@@ -638,7 +615,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       : 'text-slate-600 dark:text-slate-400'
                   }`}
                 >
-                  Top Funds ({categoryFunds.filter((f) => f.currentBalance > 0).length})
+                  Goal Funds ({categoryFunds.filter((f) => f.currentBalance > 0).length})
                 </button>
                 <button
                   type="button"
@@ -658,7 +635,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 onClick={onNavigateToSavings}
                 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5 cursor-pointer"
               >
-                <span>View All</span>
+                <span>Manage</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -668,7 +645,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
                   {categoryFunds
                     .filter((f) => f.currentBalance > 0)
-                    .slice(0, 5)
                     .map((fund) => {
                       const target = fund.plannedAnnualTarget || 0;
                       const pct = target > 0 ? Math.min(100, (fund.currentBalance / target) * 100) : null;
@@ -706,7 +682,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               )
             ) : ledger.accounts.length > 0 ? (
               <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                {ledger.accounts.slice(0, 5).map((acc) => {
+                {ledger.accounts.map((acc) => {
                   const share = currentTotalCapital > 0 ? (acc.balance / currentTotalCapital) * 100 : 0;
                   return (
                     <div

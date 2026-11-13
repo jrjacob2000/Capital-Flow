@@ -850,6 +850,7 @@ export default function App() {
 
   // Add Budget Entry
   const handleAddBudgetEntry = (entryData: Omit<BudgetEntry, 'id' | 'createdAt'>) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const syncedAmount = entryData.actualCost ?? entryData.amount ?? 0;
     const newEntry: BudgetEntry = {
       ...entryData,
@@ -859,9 +860,9 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
 
-    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    const updatedExcluded: Record<string, string[]> = { ...(latestBudget.excludedPeriodItems || {}) };
     if (updatedExcluded[newEntry.period] && updatedExcluded[newEntry.period].length > 0) {
-      const matchedTpl = (budget.itemTemplates || []).find(
+      const matchedTpl = (latestBudget.itemTemplates || []).find(
         (t) =>
           t.type === newEntry.type &&
           ((newEntry.loanId && t.loanId === newEntry.loanId) ||
@@ -882,13 +883,14 @@ export default function App() {
     }
 
     const updatedBudget: YearBudgetData = {
-      ...budget,
-      entries: [newEntry, ...budget.entries],
+      ...latestBudget,
+      entries: [newEntry, ...latestBudget.entries],
       excludedPeriodItems: updatedExcluded,
     };
 
     setBudget(updatedBudget);
     FinanceStorageService.saveLocalBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
     setHasUnsavedChanges(true);
 
     // If paid saving entry with positive amount: accumulate in the separate Savings Ledger!
@@ -911,8 +913,9 @@ export default function App() {
 
   // Update Budget Entry
   const handleUpdateBudgetEntry = (entryId: string, updated: Partial<BudgetEntry>) => {
-    const oldEntry = budget.entries.find((e) => e.id === entryId);
-    const updatedEntries = budget.entries.map((e) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
+    const oldEntry = latestBudget.entries.find((e) => e.id === entryId);
+    const updatedEntries = latestBudget.entries.map((e) => {
       if (e.id === entryId) {
         const merged = { ...e, ...updated };
         if (updated.actualCost !== undefined && updated.amount === undefined) {
@@ -926,9 +929,9 @@ export default function App() {
     });
 
     const target = updatedEntries.find((e) => e.id === entryId);
-    const updatedExcluded: Record<string, string[]> = { ...(budget.excludedPeriodItems || {}) };
+    const updatedExcluded: Record<string, string[]> = { ...(latestBudget.excludedPeriodItems || {}) };
     if (target && updatedExcluded[target.period] && updatedExcluded[target.period].length > 0) {
-      const matchedTpl = (budget.itemTemplates || []).find(
+      const matchedTpl = (latestBudget.itemTemplates || []).find(
         (t) =>
           t.type === target.type &&
           ((target.loanId && t.loanId === target.loanId) ||
@@ -949,13 +952,14 @@ export default function App() {
     }
 
     const updatedBudget: YearBudgetData = {
-      ...budget,
+      ...latestBudget,
       entries: updatedEntries,
       excludedPeriodItems: updatedExcluded,
     };
 
     setBudget(updatedBudget);
     FinanceStorageService.saveLocalBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
     setHasUnsavedChanges(true);
     if (oldEntry?.type === 'saving' && target && target.type !== 'saving') {
       const rolledBackLedger = FinanceStorageService.accumulateBudgetSavingToLedger(oldEntry, true);
@@ -1205,25 +1209,26 @@ export default function App() {
     },
     renamed?: { type: EntryType; oldName: string; newName: string }
   ) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const updatedEntries = renamed
-      ? budget.entries.map((e) =>
+      ? latestBudget.entries.map((e) =>
           e.type === renamed.type && e.category === renamed.oldName
             ? { ...e, category: renamed.newName }
             : e
         )
-      : budget.entries;
+      : latestBudget.entries;
 
     const updatedTemplates =
-      renamed && budget.itemTemplates
-        ? budget.itemTemplates.map((t) =>
+      renamed && latestBudget.itemTemplates
+        ? latestBudget.itemTemplates.map((t) =>
             t.type === renamed.type && t.category === renamed.oldName
               ? { ...t, category: renamed.newName }
               : t
           )
-        : budget.itemTemplates;
+        : latestBudget.itemTemplates;
 
     const updatedBudget: YearBudgetData = {
-      ...budget,
+      ...latestBudget,
       entries: updatedEntries,
       itemTemplates: updatedTemplates,
       customCategories: customCats,
@@ -1264,8 +1269,9 @@ export default function App() {
 
   // Update Item Templates / Estimated Budgets
   const handleUpdateTemplates = (templates: BudgetItemTemplate[]) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const updatedBudget: YearBudgetData = {
-      ...budget,
+      ...latestBudget,
       itemTemplates: templates,
       isPersonalizedTemplate: templates.length > 0,
       lastUpdated: new Date().toISOString(),
@@ -1292,9 +1298,10 @@ export default function App() {
     const newClean = newFundName.trim();
     if (!oldClean || !newClean) return;
 
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const { budget: updatedBudget, ledger: updatedLedger } =
       FinanceStorageService.renameOrMergeSinkingFund(
-        budget,
+        latestBudget,
         oldClean,
         newClean,
         newMonthlyTarget,
@@ -1315,11 +1322,12 @@ export default function App() {
   // Delete a Sinking Fund and optionally reassign its balance to another fund or General Reserves
   const handleDeleteFund = (fundName: string, reassignToFund?: string) => {
     if (!fundName.trim()) return;
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const {
       budget: updatedBudget,
       ledger: updatedLedger,
       destination,
-    } = FinanceStorageService.deleteSinkingFund(budget, fundName, reassignToFund);
+    } = FinanceStorageService.deleteSinkingFund(latestBudget, fundName, reassignToFund);
 
     const isDestUnallocated = destination.toLowerCase() === 'general reserves / starting capital';
     setLedger({ ...updatedLedger });
@@ -1338,13 +1346,15 @@ export default function App() {
     entriesData: Omit<BudgetEntry, 'id' | 'createdAt'>[],
     options?: { replacePeriod?: string; customExpenseCategories?: string[] }
   ) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const {
       budget: updatedBudget,
       ledger: updatedLedger,
       newEntries,
-    } = FinanceStorageService.addMultipleBudgetEntries(budget, entriesData, options);
+    } = FinanceStorageService.addMultipleBudgetEntries(latestBudget, entriesData, options);
 
     setBudget(updatedBudget);
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
     setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
     showToast(
@@ -1363,13 +1373,14 @@ export default function App() {
       disburseFromAccountId?: string;
     }
   ) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const {
       ledger: updatedLedger,
       budget: updatedBudget,
       isUpdate,
       disbursedAccountName,
       disbursedAmount,
-    } = FinanceStorageService.saveLoanContract(loan, budget, frequency, options);
+    } = FinanceStorageService.saveLoanContract(loan, latestBudget, frequency, options);
 
     setBudget(updatedBudget);
     setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
@@ -1404,8 +1415,9 @@ export default function App() {
       confirmLabel: 'Yes, Delete Loan',
       isDestructive: true,
       onConfirm: async () => {
+        const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
         const { ledger: updatedLedger, budget: updatedBudget } =
-          FinanceStorageService.deleteLoanContract(loanId, budget);
+          FinanceStorageService.deleteLoanContract(loanId, latestBudget);
         setLedger({ ...updatedLedger });
         setBudget(updatedBudget);
         setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
@@ -1426,17 +1438,19 @@ export default function App() {
       depositToAccountId?: string;
     }
   ) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const {
       ledger: updatedLedger,
       updatedActiveBudget,
       loan,
       linkedBudgetEntryId,
       resolvedPeriod,
-    } = FinanceStorageService.recordLoanPayment(loanId, paymentData, budget, frequency);
+    } = FinanceStorageService.recordLoanPayment(loanId, paymentData, latestBudget, frequency);
     if (!loan) return;
 
     if (updatedActiveBudget) {
       setBudget(updatedActiveBudget);
+      setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedActiveBudget));
     } else if (paymentData.recordInBudget) {
       setAvailableYears(FinanceStorageService.getKnownYears());
     }
@@ -1451,16 +1465,18 @@ export default function App() {
   };
 
   const handleDeleteLoanPayment = (loanId: string, paymentId: string) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const {
       ledger: updatedLedger,
       updatedActiveBudget,
       loan,
       removedPayment,
-    } = FinanceStorageService.deleteLoanPayment(loanId, paymentId, budget);
+    } = FinanceStorageService.deleteLoanPayment(loanId, paymentId, latestBudget);
     if (!loan || !removedPayment) return;
 
     if (updatedActiveBudget) {
       setBudget(updatedActiveBudget);
+      setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedActiveBudget));
     }
     setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
@@ -1468,9 +1484,10 @@ export default function App() {
   };
 
   const handleLinkLoanToTemplate = (loan: LoanRecord) => {
+    const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
     const { updatedBudget, templateId } = FinanceStorageService.syncLoanToBudgetTemplate(
       loan,
-      budget
+      latestBudget
     );
     setBudget(updatedBudget);
     setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));

@@ -347,16 +347,8 @@ export const DriveFilesManagerView: React.FC<DriveFilesManagerViewProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={onAddNewYear}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>New Budget Year</span>
-            </button>
-            {!driveStatus.isSignedIn && (
+          {!driveStatus.isSignedIn && (
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={onSignIn}
@@ -365,8 +357,8 @@ export const DriveFilesManagerView: React.FC<DriveFilesManagerViewProps> = ({
               >
                 <span>{driveStatus.isSyncing ? 'Signing In...' : 'Sign In to Cloud DB'}</span>
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Live Firestore Database Metrics Strip */}

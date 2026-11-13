@@ -4,6 +4,7 @@ import {
   EntryFrequency,
   EntryType,
   LoanRecord,
+  PaymentMethod,
   TemplateBudgetVisibility,
 } from '../types/finance';
 import {
@@ -527,4 +528,227 @@ export function buildAutoFillPeriodEntries(
 
   return { validTemplatesCount: validTemplates.length, newEntries };
 }
+
+export interface ExpenseSubtotalRowInput {
+  estimatedCost: number;
+  actualCost: number;
+  hasActualCost: boolean;
+  status?: 'Paid' | 'Pending' | 'Scheduled';
+  paymentMethod?: PaymentMethod;
+  paymentBreakdown?: BudgetEntry['paymentBreakdown'];
+}
+
+/**
+ * Returns the settled amount allocated to a specific payment channel for a row,
+ * supporting both single-channel and 6-channel split payment breakdowns.
+ */
+export function getChannelAmountForRow(
+  row: ExpenseSubtotalRowInput,
+  method: PaymentMethod
+): number {
+  if (!row.hasActualCost || row.status !== 'Paid') return 0;
+  if (row.paymentBreakdown) {
+    switch (method) {
+      case 'Cash':
+        return row.paymentBreakdown.cash || 0;
+      case 'Credit Card':
+        return row.paymentBreakdown.creditCard || 0;
+      case 'GCash Transfer':
+        return row.paymentBreakdown.gcashTransfer || 0;
+      case 'Kath Account':
+        return row.paymentBreakdown.kathAccount || 0;
+      case 'Checking Account':
+        return row.paymentBreakdown.checkAccount || 0;
+      case 'Bank Transfer':
+        return row.paymentBreakdown.bankTransfer || 0;
+      default:
+        return 0;
+    }
+  }
+  const effectiveMethod = row.paymentMethod || 'Bank Transfer';
+  return effectiveMethod === method ? row.actualCost : 0;
+}
+
+/**
+ * Computes both Paid actual totals and Projected totals (Paid actuals + Pending/Scheduled estimates)
+ * per PaymentMethod across a period's expense/saving rows.
+ */
+export function computePaymentChannelSubtotals(rows: ExpenseSubtotalRowInput[]): {
+  paidTotals: Record<PaymentMethod, number>;
+  projectedTotals: Record<PaymentMethod, number>;
+} {
+  const paidTotals: Record<PaymentMethod, number> = {
+    Cash: 0,
+    'Credit Card': 0,
+    'GCash Transfer': 0,
+    'Kath Account': 0,
+    'Checking Account': 0,
+    'Bank Transfer': 0,
+    Other: 0,
+  };
+  const projectedTotals: Record<PaymentMethod, number> = {
+    Cash: 0,
+    'Credit Card': 0,
+    'GCash Transfer': 0,
+    'Kath Account': 0,
+    'Checking Account': 0,
+    'Bank Transfer': 0,
+    Other: 0,
+  };
+
+  rows.forEach((e) => {
+    const isSettled = e.hasActualCost && e.status === 'Paid';
+    if (isSettled) {
+      if (e.paymentBreakdown) {
+        const cash = e.paymentBreakdown.cash || 0;
+        const cc = e.paymentBreakdown.creditCard || 0;
+        const gcash = e.paymentBreakdown.gcashTransfer || 0;
+        const kath = e.paymentBreakdown.kathAccount || 0;
+        const check = e.paymentBreakdown.checkAccount || 0;
+        const bank = e.paymentBreakdown.bankTransfer || 0;
+
+        paidTotals.Cash += cash;
+        paidTotals['Credit Card'] += cc;
+        paidTotals['GCash Transfer'] += gcash;
+        paidTotals['Kath Account'] += kath;
+        paidTotals['Checking Account'] += check;
+        paidTotals['Bank Transfer'] += bank;
+
+        projectedTotals.Cash += cash;
+        projectedTotals['Credit Card'] += cc;
+        projectedTotals['GCash Transfer'] += gcash;
+        projectedTotals['Kath Account'] += kath;
+        projectedTotals['Checking Account'] += check;
+        projectedTotals['Bank Transfer'] += bank;
+      } else {
+        const method: PaymentMethod = e.paymentMethod || 'Bank Transfer';
+        paidTotals[method] = (paidTotals[method] || 0) + e.actualCost;
+        projectedTotals[method] = (projectedTotals[method] || 0) + e.actualCost;
+      }
+    } else {
+      const method: PaymentMethod = e.paymentMethod || 'Bank Transfer';
+      projectedTotals[method] = (projectedTotals[method] || 0) + (e.estimatedCost || 0);
+    }
+  });
+
+  return { paidTotals, projectedTotals };
+}
+
+/**
+ * Computes Estimated, Paid (Actual), Projected (Paid + Pending Estimates), and Variance
+ * for a filtered selection of expense rows, respecting split payment channels when filtered by method.
+ */
+export function computeFilteredExpenseSubtotals(
+  filteredRows: ExpenseSubtotalRowInput[],
+  paymentMethodFilter?: PaymentMethod | null
+): {
+  estimated: number;
+  actual: number;
+  projected: number;
+  variance: number;
+  paidCount: number;
+  totalCount: number;
+} {
+  let estimated = 0;
+  let actual = 0;
+  let projected = 0;
+  let paidCount = 0;
+
+  filteredRows.forEach((r) => {
+    estimated += r.estimatedCost || 0;
+    const isSettled = r.hasActualCost && r.status === 'Paid';
+    if (isSettled) {
+      paidCount += 1;
+      const settledAmt = paymentMethodFilter
+        ? getChannelAmountForRow(r, paymentMethodFilter)
+        : r.actualCost;
+      actual += settledAmt;
+      projected += settledAmt;
+    } else {
+      projected += r.estimatedCost || 0;
+    }
+  });
+
+  return {
+    estimated,
+    actual,
+    projected,
+    variance: estimated - projected,
+    paidCount,
+    totalCount: filteredRows.length,
+  };
+}
+
+/**
+ * Resolves the effective estimated, actual, and variance amounts when saving a budget entry
+ * (handling "Sync to template" when Estimate was left blank, or Paid items when Actual was left blank).
+ */
+export function resolveSyncedEntryAndTemplateAmounts(input: {
+  rawEstimated: string;
+  rawActual: string;
+  saveToTemplate: boolean;
+  type: EntryType;
+  status: 'Paid' | 'Pending' | 'Scheduled';
+  itemName: string;
+  categoryName: string;
+}): { estNum: number; actNum: number; diff: number } {
+  let estNum = parseFloat(input.rawEstimated) || 0;
+  const trimmedActual = (input.rawActual || '').trim();
+  const hasExplicitActual = trimmedActual !== '' && !isNaN(parseFloat(trimmedActual));
+  let actNum = hasExplicitActual ? parseFloat(trimmedActual) : 0;
+
+  // If user checked "Sync to template" and only typed Actual (leaving Estimate blank/0),
+  // automatically use Actual as Estimate so neither the budget entry nor the template has a blank/0 estimate.
+  if (input.saveToTemplate && estNum === 0 && actNum !== 0) {
+    estNum = actNum;
+  }
+
+  // If user typed into Estimated while leaving Actual blank (not '0' or negative) on a Paid item (or irregular income),
+  // automatically copy Estimated to Actual so Paid entries don't accidentally save as ₱0.
+  if (
+    !hasExplicitActual &&
+    estNum !== 0 &&
+    (input.status === 'Paid' ||
+      (input.type === 'income' && !isRegularSalaryIncome(input.itemName, input.categoryName)))
+  ) {
+    actNum = estNum;
+  }
+
+  const diff = input.type === 'income' ? actNum - estNum : estNum - actNum;
+  return { estNum, actNum, diff };
+}
+
+/**
+ * Computes the settled cashflow surplus from the immediately preceding period
+ * and whether it has already been carried over into the selected period.
+ */
+export function computeCarryOverSurplus(
+  entries: BudgetEntry[],
+  periodList: string[],
+  selectedPeriod: string
+): {
+  surplus: number;
+  hasBeenCarriedOver: boolean;
+  prevPeriodName: string;
+} {
+  const currentIndex = periodList.indexOf(selectedPeriod);
+  if (currentIndex <= 0) {
+    return { surplus: 0, hasBeenCarriedOver: true, prevPeriodName: '' };
+  }
+  const prevPeriod = periodList[currentIndex - 1];
+  const prevEntries = entries.filter((e) => e.period === prevPeriod && e.status === 'Paid');
+  const incAct = prevEntries
+    .filter((e) => e.type === 'income')
+    .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+  const expAct = prevEntries
+    .filter((e) => e.type === 'expense' || e.type === 'saving')
+    .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+  const surplus = incAct - expAct;
+  const hasBeenCarriedOver = entries.some(
+    (e) => e.period === selectedPeriod && (e.description || e.item || '').includes('Carry-over')
+  );
+  return { surplus, hasBeenCarriedOver, prevPeriodName: prevPeriod };
+}
+
+
 

@@ -1122,7 +1122,7 @@ export class FinanceStorageService {
     const isPaidOrRecorded =
       !isDelete &&
       entry.type !== 'saving' &&
-      effectiveAmount > 0 &&
+      effectiveAmount !== 0 &&
       entry.status !== 'Pending';
 
     // 1. Check if any loan already has a payment linked to this budgetEntryId
@@ -1182,7 +1182,7 @@ export class FinanceStorageService {
         if (tx.source === 'withdrawal') {
           runningTotal = Math.max(0, runningTotal - tx.amount);
         } else if (tx.source !== 'transfer' && tx.source !== 'reallocation') {
-          runningTotal += tx.amount;
+          runningTotal = Math.max(0, runningTotal + tx.amount);
         }
         tx.runningTotalCapital = runningTotal;
       });
@@ -1291,7 +1291,7 @@ export class FinanceStorageService {
       (tx) => tx.budgetEntryId === entry.id
     );
 
-    if (isDelete || entry.type !== 'saving' || entry.status === 'Pending' || effectiveAmount <= 0) {
+    if (isDelete || entry.type !== 'saving' || entry.status === 'Pending' || effectiveAmount === 0) {
       if (existingIndex >= 0) {
         const removed = ledger.transactions.splice(existingIndex, 1)[0];
         // update account balance
@@ -1355,7 +1355,7 @@ export class FinanceStorageService {
         };
         ledger.transactions.push(newTx);
         if (targetAccount) {
-          targetAccount.balance += effectiveAmount;
+          targetAccount.balance = Math.max(0, targetAccount.balance + effectiveAmount);
         }
       }
     }
@@ -2052,7 +2052,7 @@ export class FinanceStorageService {
       if (
         entry.type === 'saving' &&
         entry.status !== 'Pending' &&
-        (entry.actualCost ?? entry.amount ?? 0) > 0
+        (entry.actualCost ?? entry.amount ?? 0) !== 0
       ) {
         updatedLedger = FinanceStorageService.accumulateBudgetSavingToLedger(entry, false);
       } else if (entry.type !== 'saving') {

@@ -53,7 +53,11 @@ import { CarryOverModal } from './CarryOverModal';
 import { ExcelImportModal } from './ExcelImportModal';
 import {
   buildAutoFillPeriodEntries,
+  computeCarryOverSurplus,
+  computeFilteredExpenseSubtotals,
+  computePaymentChannelSubtotals,
   isTemplateExcludedInPeriod,
+  resolveSyncedEntryAndTemplateAmounts,
   shouldTemplateDisplayInBudget,
 } from '../utils/budgetCalculations';
 
@@ -499,7 +503,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       const matchedEntry =
         matchingCandidates.find(
           (e) =>
-            (e.actualCost !== undefined ? e.actualCost : e.amount) > 0 ||
+            (e.actualCost !== undefined ? e.actualCost : e.amount) !== 0 ||
             e.status === 'Paid'
         ) || matchingCandidates[0];
 
@@ -555,7 +559,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
         if (tpl.type === 'income') {
           const isUserManualEntry = matchedEntry.reference !== 'Auto-filled from template';
-          if (shouldDisplay || act > 0 || isUserManualEntry) {
+          if (shouldDisplay || act !== 0 || isUserManualEntry) {
             incomeRows.push(row);
           }
         } else {
@@ -630,7 +634,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
         if (entry.type === 'income') {
           const isUserManualEntry = entry.reference !== 'Auto-filled from template';
-          if (isRegularSalaryIncome(row.item, row.category) || act > 0 || est > 0 || isUserManualEntry) {
+          if (isRegularSalaryIncome(row.item, row.category) || act !== 0 || est !== 0 || isUserManualEntry) {
             incomeRows.push(row);
           }
         } else {
@@ -708,23 +712,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   );
   const projectedRemainingAll = projectedIncomeTotal - projectedExpenseTotal;
 
-  const { surplus, hasBeenCarriedOver, prevPeriodName } = useMemo(() => {
-    const currentIndex = periodList.indexOf(selectedPeriod);
-    if (currentIndex <= 0) return { surplus: 0, hasBeenCarriedOver: true, prevPeriodName: '' };
-    const prevPeriod = periodList[currentIndex - 1];
-    const prevEntries = budget.entries.filter((e) => e.period === prevPeriod && e.status === 'Paid');
-    const incAct = prevEntries
-      .filter((e) => e.type === 'income')
-      .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-    const expAct = prevEntries
-      .filter((e) => e.type === 'expense' || e.type === 'saving')
-      .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
-    const surplus = incAct - expAct;
-    const hasBeenCarriedOver = budget.entries.some(
-      (e) => e.period === selectedPeriod && (e.description || e.item || '').includes('Carry-over')
-    );
-    return { surplus, hasBeenCarriedOver, prevPeriodName: prevPeriod };
-  }, [budget.entries, periodList, selectedPeriod]);
+  const { surplus, hasBeenCarriedOver, prevPeriodName } = useMemo(
+    () => computeCarryOverSurplus(budget.entries, periodList, selectedPeriod),
+    [budget.entries, periodList, selectedPeriod]
+  );
 
   // Helpers
   const formatNumber = (num: number) =>
@@ -762,8 +753,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       { label: 'Kath Acct', amount: getMethodAmount(entry, 'Kath Account') },
       { label: 'Check Acct', amount: getMethodAmount(entry, 'Checking Account') },
       { label: 'Bank Transfer', amount: getMethodAmount(entry, 'Bank Transfer') },
-    ].filter((c) => c.amount > 0);
-    if (channels.length === 0 && entry.actualCost > 0) {
+    ].filter((c) => c.amount !== 0);
+    if (channels.length === 0 && entry.actualCost !== 0) {
       return [{ label: entry.paymentMethod || 'Bank Transfer', amount: entry.actualCost }];
     }
     return channels;
@@ -787,8 +778,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         case 'estimated':
           return (a.estimatedCost - b.estimatedCost) * mult;
         case 'actual': {
-          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -1;
-          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -1;
+          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -999999999;
+          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -999999999;
           return (actA - actB) * mult;
         }
         case 'variance': {
@@ -819,7 +810,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       if (paymentMethodFilter) {
         const methodAmt = getMethodAmount(exp, paymentMethodFilter);
         const matchesPendingMethod = exp.status !== 'Paid' && exp.paymentMethod === paymentMethodFilter;
-        if (methodAmt <= 0 && !matchesPendingMethod) return false;
+        if (methodAmt === 0 && !matchesPendingMethod) return false;
       }
       if (expenseSearchQuery.trim()) {
         const q = expenseSearchQuery.toLowerCase();
@@ -851,8 +842,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           return diff !== 0 ? diff * mult : a.item.localeCompare(b.item);
         }
         case 'actual': {
-          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -1;
-          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -1;
+          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -999999999;
+          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -999999999;
           const diff = actA - actB;
           return diff !== 0 ? diff * mult : (a.estimatedCost - b.estimatedCost) * mult;
         }
@@ -886,54 +877,20 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     paymentMethodFilter !== null ||
     expenseSearchQuery.trim().length > 0;
 
-  const filteredExpenseEstimated = useMemo(
-    () => filteredExpenseRows.reduce((sum, r) => sum + r.estimatedCost, 0),
-    [filteredExpenseRows]
+  const {
+    estimated: filteredExpenseEstimated,
+    actual: filteredExpenseActual,
+    projected: filteredExpenseProjected,
+  } = useMemo(
+    () => computeFilteredExpenseSubtotals(filteredExpenseRows, paymentMethodFilter),
+    [filteredExpenseRows, paymentMethodFilter]
   );
 
-  const filteredExpenseActual = useMemo(
-    () =>
-      filteredExpenseRows.reduce(
-        (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
-        0
-      ),
-    [filteredExpenseRows]
+  // Breakdown by payment methods (Paid actuals and Projected = Paid actuals + Pending estimates)
+  const { paidTotals: paymentTotals, projectedTotals: projectedPaymentTotals } = useMemo(
+    () => computePaymentChannelSubtotals(unifiedExpenseRows),
+    [unifiedExpenseRows]
   );
-
-  // Breakdown by payment methods for rows with settled actuals recorded
-  const paymentTotals = useMemo(() => {
-    const totals: { [key in PaymentMethod]?: number } = {
-      Cash: 0,
-      'Credit Card': 0,
-      'GCash Transfer': 0,
-      'Kath Account': 0,
-      'Checking Account': 0,
-      'Bank Transfer': 0,
-      Other: 0,
-    };
-
-    unifiedExpenseRows.forEach((e) => {
-      if (e.hasActualCost && e.status === 'Paid') {
-        if (e.paymentBreakdown) {
-          totals.Cash = (totals.Cash || 0) + (e.paymentBreakdown.cash || 0);
-          totals['Credit Card'] = (totals['Credit Card'] || 0) + (e.paymentBreakdown.creditCard || 0);
-          totals['GCash Transfer'] =
-            (totals['GCash Transfer'] || 0) + (e.paymentBreakdown.gcashTransfer || 0);
-          totals['Kath Account'] =
-            (totals['Kath Account'] || 0) + (e.paymentBreakdown.kathAccount || 0);
-          totals['Checking Account'] =
-            (totals['Checking Account'] || 0) + (e.paymentBreakdown.checkAccount || 0);
-          totals['Bank Transfer'] =
-            (totals['Bank Transfer'] || 0) + (e.paymentBreakdown.bankTransfer || 0);
-        } else {
-          const method = e.paymentMethod || 'Bank Transfer';
-          totals[method] = (totals[method] || 0) + e.actualCost;
-        }
-      }
-    });
-
-    return totals;
-  }, [unifiedExpenseRows]);
 
   const getDefaultDateForPeriod = (period: string, yr: number): string => {
     const cleanMonth = period.replace(/-P[12]$/i, '');
@@ -1020,7 +977,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const handleQuickConfirmEstimate = (row: SheetRowItem) => {
     const estNum = row.estimatedCost || 0;
     if (!row.isVirtualEstimate) {
-      const settledAmount = row.actualCost > 0 ? row.actualCost : estNum;
+      const settledAmount = row.actualCost !== 0 ? row.actualCost : estNum;
       onUpdateEntry(row.id, {
         status: 'Paid',
         actualCost: settledAmount,
@@ -1098,7 +1055,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         : expenseCategories[0] || 'Food & Dining'
     );
     setFormItem(type === 'saving' ? defaultFund : '');
-    setFormEstimated('0');
+    setFormEstimated('');
     setFormActual('');
     setFormPaymentMethod('Bank Transfer');
     setFormSavingAccountId(accounts[0]?.id || '');
@@ -1180,13 +1137,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   // Submit modal entry
   const handleSubmitForm = (e: React.FormEvent) => {
     e.preventDefault();
-    const estNum = parseFloat(formEstimated) || 0;
-    // 0 is explicitly accepted as actual value!
-    let actNum =
-      formActual.trim() !== '' && !isNaN(parseFloat(formActual))
-        ? parseFloat(formActual)
-        : 0;
-
     const resolvedFundOrItem =
       modalType === 'saving'
         ? isCreatingNewSinkingFund
@@ -1194,18 +1144,15 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
         : formItem.trim() || formCategory;
 
-    // For irregular (non-salary) income items, only received income (actual > 0) is displayed.
-    // If the user selected a template and typed the amount into Estimated while leaving Actual blank/0, use Estimated as Actual.
-    if (
-      modalType === 'income' &&
-      !isRegularSalaryIncome(resolvedFundOrItem, formCategory) &&
-      actNum <= 0 &&
-      estNum > 0
-    ) {
-      actNum = estNum;
-    }
-
-    const diff = modalType === 'income' ? actNum - estNum : estNum - actNum;
+    const { estNum, actNum, diff } = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: formEstimated,
+      rawActual: formActual,
+      saveToTemplate,
+      type: modalType,
+      status: formStatus,
+      itemName: resolvedFundOrItem,
+      categoryName: formCategory,
+    });
 
     let periodIndex = 0;
     if (frequency === 'monthly') {
@@ -1234,7 +1181,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       rawSplitObj.bankTransfer;
 
     const parsedBreakdown =
-      isSplitPayment && modalType !== 'income' && rawSplitTotal > 0 ? rawSplitObj : undefined;
+      isSplitPayment && modalType !== 'income' && rawSplitTotal !== 0 ? rawSplitObj : undefined;
 
     let resolvedPaymentMethod: PaymentMethod = formPaymentMethod;
     if (parsedBreakdown) {
@@ -1246,14 +1193,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         { method: 'Checking Account', val: parsedBreakdown.checkAccount || 0 },
         { method: 'Bank Transfer', val: parsedBreakdown.bankTransfer || 0 },
       ];
-      const topPair = splitMethodPairs.reduce((best, cur) => (cur.val > best.val ? cur : best), splitMethodPairs[0]);
-      if (topPair.val > 0) {
+      const topPair = splitMethodPairs.reduce(
+        (best, cur) => (Math.abs(cur.val) > Math.abs(best.val) ? cur : best),
+        splitMethodPairs[0]
+      );
+      if (topPair.val !== 0) {
         resolvedPaymentMethod = topPair.method;
       }
     }
 
     const isCashExplicit = !parsedBreakdown && resolvedPaymentMethod === 'Cash';
-    const isCashInSplit = Boolean(parsedBreakdown && (parsedBreakdown.cash || 0) > 0);
+    const isCashInSplit = Boolean(parsedBreakdown && (parsedBreakdown.cash || 0) !== 0);
     const computedToBeWithdrawn = isCashExplicit || isCashInSplit;
 
     const editingExistingEntry = editingEntryId
@@ -1340,7 +1290,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             t.id === targetTpl.id
               ? {
                   ...t,
-                  category: formCategory,
+                  category: finalCategory,
                   item: trimmedItem,
                   defaultEstimatedCost: estNum,
                   defaultPaymentMethod: resolvedPaymentMethod,
@@ -1367,7 +1317,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         const newTpl: BudgetItemTemplate = {
           id: `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: modalType,
-          category: formCategory,
+          category: finalCategory,
           item: trimmedItem,
           defaultEstimatedCost: estNum,
           frequency: frequency === 'bi-weekly' ? 'bi-weekly' : 'monthly',
@@ -1514,35 +1464,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
           {/* Period Utility Actions (Creation buttons live contextually in each section below) */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* View Mode Switcher: Cards vs Table (Mobile Only — Desktop automatically uses full Table View) */}
-            <div className="flex md:hidden items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs mr-1">
-              <button
-                type="button"
-                onClick={() => setMobileShowFullTable(false)}
-                className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                  !mobileShowFullTable
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-semibold'
-                }`}
-                title="Switch to clean Card View"
-              >
-                <LayoutList className="w-3.5 h-3.5" />
-                <span>Cards</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMobileShowFullTable(true)}
-                className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                  mobileShowFullTable
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-semibold'
-                }`}
-                title="Switch to compact Table View"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>Table</span>
-              </button>
-            </div>
 
             <button
               onClick={handleAutoFillPeriodFromTemplates}
@@ -1588,45 +1509,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
         {/* Row 2: Dedicated Period Navigator Bar */}
         <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center gap-3 min-w-0">
-          <div className="flex items-center justify-between md:justify-start gap-2 shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold">
-                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Period:</span>
-              </div>
-
-              {/* Mode Switcher: Monthly vs Bi-Weekly */}
-              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChangeFrequency('monthly');
-                    onSelectPeriod(currentMonthName);
-                  }}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
-                    frequency === 'monthly'
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs'
-                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
-                  }`}
-                >
-                  Monthly (12)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChangeFrequency('bi-weekly');
-                    onSelectPeriod(currentBiWeeklyPeriod);
-                  }}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
-                    frequency === 'bi-weekly'
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs'
-                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
-                  }`}
-                >
-                  Bi-Weekly (24)
-                </button>
-              </div>
-            </div>
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold shrink-0">
+            <Calendar className="w-3.5 h-3.5 text-indigo-500" />
+            <span>{frequency === 'monthly' ? 'Month:' : 'Pay Period:'}</span>
           </div>
 
           {frequency === 'monthly' ? (
@@ -2386,25 +2271,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     </button>
                   )}
                 </div>
-
-                {/* Compact Live Pill Readout */}
-                <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono pl-2 border-l border-slate-200 dark:border-slate-700 shrink-0">
-                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold">
-                    In: {currencySymbol}{formatNumber(hasAnyIncomeRecorded ? totalIncomeActual : totalIncomeEstimated)}
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold">
-                    Out: {currencySymbol}{formatNumber(hasAnyExpenseRecorded ? totalExpenseActual : totalExpenseEstimated)}
-                  </span>
-                  <span
-                    className={`px-2 py-0.5 rounded font-black ${
-                      currentRemainingPaid >= 0
-                        ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
-                        : 'bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-200'
-                    }`}
-                  >
-                    Left: {currencySymbol}{formatNumber(currentRemainingPaid)}
-                  </span>
-                </div>
               </div>
 
               {/* Right: Quick Search Input + Sort Control + Cards/Table Switcher */}
@@ -2562,9 +2428,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                     Payment Channel Subtotals (Tap to filter)
                   </span>
-                  <span className="text-[10px] font-mono font-bold text-rose-600 dark:text-rose-400">
-                    Actual Outflow: {currencySymbol}{formatNumber(totalExpenseActual)}
-                  </span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 text-[11px]">
                   {(
@@ -2577,8 +2440,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       { key: 'Bank Transfer', label: 'Bank Transfer' },
                     ] as const
                   ).map((ch) => {
-                    const amt = paymentTotals[ch.key] || 0;
-                    const pct = totalExpenseActual > 0 ? Math.round((amt / totalExpenseActual) * 100) : 0;
+                    const projectedAmt = projectedPaymentTotals[ch.key] || 0;
+                    const paidAmt = paymentTotals[ch.key] || 0;
+                    const amt =
+                      mobileExpenseFilter === 'paid'
+                        ? paidAmt
+                        : mobileExpenseFilter === 'pending'
+                        ? Math.max(0, projectedAmt - paidAmt)
+                        : projectedAmt;
+                    const pct =
+                      projectedExpenseTotal > 0 ? Math.round((projectedAmt / projectedExpenseTotal) * 100) : 0;
                     const isSelected = paymentMethodFilter === ch.key;
                     return (
                       <button
@@ -2590,18 +2461,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         className={`px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-1.5 text-left transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs ring-2 ring-indigo-500/30'
-                            : amt > 0
+                            : amt !== 0
                             ? 'bg-white dark:bg-slate-900 border-indigo-200/80 dark:border-indigo-800/70 text-slate-800 dark:text-slate-100 hover:border-indigo-400 shadow-2xs'
                             : 'bg-slate-100/60 dark:bg-slate-900/40 border-slate-200/60 dark:border-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-600'
                         }`}
-                        title={`Filter by ${ch.label}${pct > 0 ? ` (${pct}% of actual outflow)` : ''}`}
+                        title={`${ch.label} — Projected: ${currencySymbol}${formatNumber(projectedAmt)} | Paid: ${currencySymbol}${formatNumber(paidAmt)}${pct > 0 ? ` (${pct}% of projected outflow)` : ''}`}
                       >
                         <span className="truncate font-medium text-[10px]">{ch.label}</span>
                         <span
                           className={`font-mono font-bold shrink-0 ${
                             isSelected
                               ? 'text-white'
-                              : amt > 0
+                              : amt !== 0
                               ? 'text-indigo-700 dark:text-indigo-300'
                               : ''
                           }`}
@@ -2839,16 +2710,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                 {/* Cards View Summary Footer (Mobile) */}
                 {isExpenseFiltered && filteredExpenseRows.length > 0 && (
-                  <div className="px-3.5 py-2 bg-indigo-50/70 dark:bg-indigo-950/30 border-t border-indigo-200/70 dark:border-indigo-900/60 flex items-center justify-between text-xs font-bold">
+                  <div className="px-3.5 py-2.5 bg-indigo-50/70 dark:bg-indigo-950/30 border-t border-indigo-200/70 dark:border-indigo-900/60 flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
                     <span className="text-indigo-900 dark:text-indigo-200">
                       Filtered Selection ({filteredExpenseRows.length} of {unifiedExpenseRows.length})
                     </span>
-                    <div className="font-mono flex items-center gap-3">
+                    <div className="font-mono flex flex-wrap items-center gap-2.5 sm:gap-3">
                       <span className="text-indigo-700/80 dark:text-indigo-300/80 font-normal text-[10px]">
                         Est {currencySymbol}{formatNumber(filteredExpenseEstimated)}
                       </span>
-                      <span className="text-indigo-700 dark:text-indigo-300 text-xs">
+                      <span className="text-indigo-700 dark:text-indigo-300 text-[11px]">
                         Paid {currencySymbol}{formatNumber(filteredExpenseActual)}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-xs font-bold">
+                        Projected {currencySymbol}{formatNumber(filteredExpenseProjected)}
                       </span>
                     </div>
                   </div>
@@ -3272,27 +3146,32 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         </div>
                       </td>
                       <td className="hidden md:table-cell py-2.5 px-3 text-center font-sans text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 border-b border-indigo-200/70 dark:border-indigo-900/60">
-                        Filtered
+                        {filteredExpenseRows.filter((r) => r.status === 'Paid').length}/{filteredExpenseRows.length} paid
                       </td>
                       <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-800 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
                         {currencySymbol}{formatNumber(filteredExpenseEstimated)}
                       </td>
                       <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-700 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
-                        {currencySymbol}{formatNumber(filteredExpenseActual)}
+                        <div>Paid {currencySymbol}{formatNumber(filteredExpenseActual)}</div>
+                        <div className="text-[10px] md:text-xs font-bold text-indigo-900 dark:text-indigo-100 mt-0.5">
+                          Proj {currencySymbol}{formatNumber(filteredExpenseProjected)}
+                        </div>
                       </td>
                       <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm border-b border-indigo-200/70 dark:border-indigo-900/60">
-                        {filteredExpenseEstimated - filteredExpenseActual >= 0 ? (
+                        {filteredExpenseEstimated - filteredExpenseProjected === 0 ? (
+                          <span className="text-indigo-400 font-normal">On Target</span>
+                        ) : filteredExpenseEstimated - filteredExpenseProjected > 0 ? (
                           <span className="text-emerald-600 dark:text-emerald-400">
-                            Saved {currencySymbol}{formatNumber(filteredExpenseEstimated - filteredExpenseActual)}
+                            Saved {currencySymbol}{formatNumber(filteredExpenseEstimated - filteredExpenseProjected)}
                           </span>
                         ) : (
                           <span className="text-rose-600 dark:text-rose-400">
-                            Over {currencySymbol}{formatNumber(Math.abs(filteredExpenseEstimated - filteredExpenseActual))}
+                            Over {currencySymbol}{formatNumber(Math.abs(filteredExpenseEstimated - filteredExpenseProjected))}
                           </span>
                         )}
                       </td>
                       <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-[11px] md:text-xs font-normal text-indigo-700/80 dark:text-indigo-300/80 border-b border-indigo-200/70 dark:border-indigo-900/60 truncate">
-                        —
+                        {paymentMethodFilter || 'All Channels'}
                       </td>
                       <td className="md:sticky md:right-0 md:z-10 bg-indigo-50 dark:bg-slate-900 border-b border-l border-indigo-200/70 dark:border-indigo-900/60"></td>
                     </tr>
@@ -3871,7 +3750,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                 </div>
 
                 {/* 3. AMOUNTS: COMPACT SIDE-BY-SIDE OR SINGLE ACTUAL */}
-                {entrySourceMode === 'unplanned' && !isRowAction ? (
+                {entrySourceMode === 'unplanned' && !isRowAction && !saveToTemplate ? (
                   <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/80">
                     <div className="flex items-center justify-between gap-2 h-4 mb-1">
                       <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
@@ -3879,7 +3758,12 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       </label>
                       <button
                         type="button"
-                        onClick={() => setEntrySourceMode('template')}
+                        onClick={() => {
+                          setEntrySourceMode('template');
+                          if ((!formEstimated || parseFloat(formEstimated) === 0) && !isNaN(parseFloat(formActual)) && parseFloat(formActual) !== 0) {
+                            setFormEstimated(formActual);
+                          }
+                        }}
                         className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
                       >
                         + Add Estimate
@@ -3888,7 +3772,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     <input
                       type="number"
                       step="0.01"
-                      min="0"
                       required
                       placeholder="0.00"
                       value={formActual}
@@ -3903,6 +3786,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 truncate">
                           Estimated ({currencySymbol})
                         </label>
+                        {!isNaN(parseFloat(formActual)) && parseFloat(formActual) !== 0 && formEstimated !== formActual && (
+                          <button
+                            type="button"
+                            onClick={() => setFormEstimated(formActual)}
+                            className="px-1.5 py-0.5 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded text-[9px] sm:text-[10px] font-semibold hover:bg-amber-100 cursor-pointer shrink-0 leading-none"
+                            title="Copy actual amount to estimated"
+                          >
+                            = Act
+                          </button>
+                        )}
                       </div>
                       <input
                         type="number"
@@ -3919,7 +3812,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         <label className="text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate">
                           Actual ({currencySymbol})
                         </label>
-                        {parseFloat(formEstimated) > 0 && formActual !== formEstimated && (
+                        {!isNaN(parseFloat(formEstimated)) && parseFloat(formEstimated) !== 0 && formActual !== formEstimated && (
                           <button
                             type="button"
                             onClick={() => setFormActual(formEstimated)}
@@ -3933,7 +3826,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <input
                         type="number"
                         step="0.01"
-                        min="0"
                         placeholder="0.00"
                         value={formActual}
                         onChange={(e) => setFormActual(e.target.value)}
@@ -3967,7 +3859,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                       (parseFloat(formPaymentBreakdown.kathAccount) || 0) +
                                       (parseFloat(formPaymentBreakdown.checkAccount) || 0) +
                                       (parseFloat(formPaymentBreakdown.bankTransfer) || 0);
-                                    if (currentSum === 0 && (parseFloat(formActual) || 0) > 0) {
+                                    if (currentSum === 0 && (parseFloat(formActual) || 0) !== 0) {
                                       const methodKeyMap: Record<PaymentMethod, keyof typeof formPaymentBreakdown> = {
                                         Cash: 'cash',
                                         'Credit Card': 'creditCard',
@@ -4084,7 +3976,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               <input
                                 type="number"
                                 step="0.01"
-                                min="0"
                                 placeholder="0"
                                 value={formPaymentBreakdown[ch.key]}
                                 onChange={(e) => {
@@ -4216,7 +4107,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     type="checkbox"
                     id="saveToTemplateSheetCheckbox"
                     checked={saveToTemplate}
-                    onChange={(e) => setSaveToTemplate(e.target.checked)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setSaveToTemplate(checked);
+                      if (checked && (!formEstimated || parseFloat(formEstimated) === 0) && !isNaN(parseFloat(formActual)) && parseFloat(formActual) !== 0) {
+                        setFormEstimated(formActual);
+                      }
+                    }}
                     className="w-3.5 h-3.5 rounded text-amber-600 accent-amber-600 cursor-pointer shrink-0"
                   />
                   <span className="truncate">

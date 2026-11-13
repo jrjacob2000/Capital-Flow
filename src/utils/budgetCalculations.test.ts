@@ -17,6 +17,11 @@ import {
   shouldTemplateDisplayInBudget,
   getPeriodItemExclusionKeys,
   isTemplateExcludedInPeriod,
+  getChannelAmountForRow,
+  computePaymentChannelSubtotals,
+  computeFilteredExpenseSubtotals,
+  resolveSyncedEntryAndTemplateAmounts,
+  computeCarryOverSurplus,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -2338,3 +2343,597 @@ describe('22. Security Sanitization, Atomic Multi-Year Backup Restore & Cloud-Sa
     );
   });
 });
+
+describe('23. Payment Channel Subtotals (Projected vs Paid) & Filtered Selection Subtotals', () => {
+  it('computes both Paid and Projected totals per payment channel including split payments and pending rows', () => {
+    const rows = [
+      // 1. Paid single-channel row (Bank Transfer: Est 3,500, Paid 3,200)
+      {
+        estimatedCost: 3500,
+        actualCost: 3200,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Bank Transfer' as const,
+      },
+      // 2. Pending row (Credit Card: Est 5,000, Paid 0)
+      {
+        estimatedCost: 5000,
+        actualCost: 0,
+        hasActualCost: false,
+        status: 'Pending' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+      // 3. Paid split-channel row (Est 4,000, Paid 4,200: 1,200 Cash + 3,000 Credit Card)
+      {
+        estimatedCost: 4000,
+        actualCost: 4200,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Credit Card' as const,
+        paymentBreakdown: {
+          cash: 1200,
+          creditCard: 3000,
+          gcashTransfer: 0,
+          kathAccount: 0,
+          checkAccount: 0,
+          bankTransfer: 0,
+        },
+      },
+    ];
+
+    const { paidTotals, projectedTotals } = computePaymentChannelSubtotals(rows);
+
+    // Paid totals only include settled amounts
+    assert.equal(paidTotals['Bank Transfer'], 3200);
+    assert.equal(paidTotals['Credit Card'], 3000);
+    assert.equal(paidTotals.Cash, 1200);
+
+    // Projected totals include settled actuals + pending estimates
+    assert.equal(projectedTotals['Bank Transfer'], 3200);
+    assert.equal(projectedTotals['Credit Card'], 8000); // 3,000 paid + 5,000 pending estimate
+    assert.equal(projectedTotals.Cash, 1200);
+  });
+
+  it('computes Estimated, Paid, Projected, and Variance for filtered expense rows and respects channel filters on split rows', () => {
+    const creditCardFilteredRows = [
+      // Pending Credit Card bill (Est 5,000)
+      {
+        estimatedCost: 5000,
+        actualCost: 0,
+        hasActualCost: false,
+        status: 'Pending' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+      // Split Paid item where 3,000 was paid via Credit Card and 1,200 via Cash (Total Est 4,000, Total Paid 4,200)
+      {
+        estimatedCost: 4000,
+        actualCost: 4200,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Credit Card' as const,
+        paymentBreakdown: {
+          cash: 1200,
+          creditCard: 3000,
+        },
+      },
+    ];
+
+    // 1. Without a specific channel filter (e.g. search or status filter): uses full row actuals
+    const generalSubtotals = computeFilteredExpenseSubtotals(creditCardFilteredRows, null);
+    assert.equal(generalSubtotals.estimated, 9000);
+    assert.equal(generalSubtotals.actual, 4200);
+    assert.equal(generalSubtotals.projected, 9200); // 4,200 paid + 5,000 pending
+    assert.equal(generalSubtotals.variance, -200); // 9,000 est - 9,200 proj = 200 over
+    assert.equal(generalSubtotals.paidCount, 1);
+    assert.equal(generalSubtotals.totalCount, 2);
+
+    // 2. With 'Credit Card' channel filter active: uses the Credit Card slice (3,000) + pending Credit Card estimate (5,000) = 8,000 projected
+    const channelSubtotals = computeFilteredExpenseSubtotals(creditCardFilteredRows, 'Credit Card');
+    assert.equal(getChannelAmountForRow(creditCardFilteredRows[1], 'Credit Card'), 3000);
+    assert.equal(channelSubtotals.actual, 3000);
+    assert.equal(channelSubtotals.projected, 8000);
+  });
+});
+
+describe('24. Sync-to-Template Amount Resolution & Sequential Category + Template + Entry Persistence', () => {
+  beforeEach(() => {
+    memoryStorage.clear();
+    FinanceStorageService.setCloudSessionActive(false);
+  });
+
+  it('auto-populates Estimate from Actual when Sync to Template is checked and Estimate was left blank', () => {
+    // 1. New unplanned item where user enters Actual = 2500, checks Sync to Template, leaves Estimated blank
+    const syncedFromActual = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '',
+      rawActual: '2500',
+      saveToTemplate: true,
+      type: 'expense',
+      status: 'Paid',
+      itemName: 'Gym Membership',
+      categoryName: 'Health & Fitness',
+    });
+    assert.equal(syncedFromActual.estNum, 2500);
+    assert.equal(syncedFromActual.actNum, 2500);
+    assert.equal(syncedFromActual.diff, 0);
+
+    // 2. User enters Estimated = 1800, leaves Actual blank on a Paid item
+    const paidFromEstimate = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '1800',
+      rawActual: '',
+      saveToTemplate: true,
+      type: 'expense',
+      status: 'Paid',
+      itemName: 'Water Bill',
+      categoryName: 'Utilities & Bills',
+    });
+    assert.equal(paidFromEstimate.estNum, 1800);
+    assert.equal(paidFromEstimate.actNum, 1800);
+    assert.equal(paidFromEstimate.diff, 0);
+
+    // 3. Explicit '0' in Actual is respected as 0 (e.g. waived bill)
+    const waivedBill = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '1500',
+      rawActual: '0',
+      saveToTemplate: false,
+      type: 'expense',
+      status: 'Paid',
+      itemName: 'Internet Bill',
+      categoryName: 'Utilities & Bills',
+    });
+    assert.equal(waivedBill.estNum, 1500);
+    assert.equal(waivedBill.actNum, 0);
+    assert.equal(waivedBill.diff, 1500);
+  });
+
+  it('preserves custom categories, newly synced templates, and budget entries when saved sequentially in the same flow', () => {
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+
+    // Step 1: Save custom category
+    const b1 = FinanceStorageService.loadLocalBudget(2026);
+    const updatedWithCat = {
+      ...b1,
+      customCategories: {
+        ...b1.customCategories!,
+        expense: [...b1.customCategories!.expense, 'Pet Care & Vet'],
+      },
+    };
+    FinanceStorageService.saveLocalBudget(updatedWithCat, { skipFirestoreWrite: true });
+
+    // Step 2: Immediately load latest budget and add synced template (simulating handleUpdateTemplates)
+    const b2 = FinanceStorageService.loadLocalBudget(2026);
+    const newTpl: BudgetItemTemplate = {
+      id: 'tpl-pet-food',
+      type: 'expense',
+      category: 'Pet Care & Vet',
+      item: 'Monthly Dog Food',
+      defaultEstimatedCost: 2200,
+      frequency: 'monthly',
+      biweeklyPeriod: 'both',
+      showInBudget: true,
+    };
+    const updatedWithTpl = {
+      ...b2,
+      itemTemplates: [...(b2.itemTemplates || []), newTpl],
+      isPersonalizedTemplate: true,
+    };
+    FinanceStorageService.saveLocalBudget(updatedWithTpl, { skipFirestoreWrite: true });
+
+    // Step 3: Immediately load latest budget and add the entry (simulating handleAddBudgetEntry)
+    const b3 = FinanceStorageService.loadLocalBudget(2026);
+    const newEntry = makeEntry({
+      id: 'entry-pet-1',
+      year: 2026,
+      period: 'Nov',
+      type: 'expense',
+      category: 'Pet Care & Vet',
+      item: 'Monthly Dog Food',
+      estimatedCost: 2200,
+      actualCost: 2200,
+      amount: 2200,
+      status: 'Paid',
+    });
+    const updatedWithEntry = {
+      ...b3,
+      entries: [newEntry, ...b3.entries],
+    };
+    FinanceStorageService.saveLocalBudget(updatedWithEntry, { skipFirestoreWrite: true });
+
+    // Verify all 3 updates (custom category, template, and entry) are intact in storage and template profile
+    const finalBudget = FinanceStorageService.loadLocalBudget(2026);
+    const finalTemplateProfile = FinanceStorageService.loadLocalTemplateData(finalBudget);
+
+    assert.equal(finalBudget.customCategories?.expense.includes('Pet Care & Vet'), true);
+    assert.equal(finalBudget.itemTemplates?.length, 1);
+    assert.equal(finalBudget.itemTemplates?.[0].item, 'Monthly Dog Food');
+    assert.equal(finalBudget.itemTemplates?.[0].defaultEstimatedCost, 2200);
+    assert.equal(finalBudget.entries.length, 1);
+    assert.equal(finalBudget.entries[0].item, 'Monthly Dog Food');
+    assert.equal(finalTemplateProfile.itemTemplates.length, 1);
+    assert.equal(finalTemplateProfile.customCategories.expense.includes('Pet Care & Vet'), true);
+  });
+});
+
+describe('25. Carry-Over Surplus Calculation & Duplicate Prevention (computeCarryOverSurplus)', () => {
+  it('computes previous period settled surplus and detects when carry-over has already been recorded', () => {
+    const periods = ['Jan', 'Feb', 'Mar'];
+    const entries: BudgetEntry[] = [
+      makeEntry({
+        id: 'jan-inc-1',
+        period: 'Jan',
+        type: 'income',
+        item: 'Salary',
+        actualCost: 50000,
+        amount: 50000,
+        status: 'Paid',
+      }),
+      makeEntry({
+        id: 'jan-exp-1',
+        period: 'Jan',
+        type: 'expense',
+        item: 'Rent',
+        actualCost: 18000,
+        amount: 18000,
+        status: 'Paid',
+      }),
+      makeEntry({
+        id: 'jan-sav-1',
+        period: 'Jan',
+        type: 'saving',
+        item: 'Emergency Fund',
+        actualCost: 10000,
+        amount: 10000,
+        status: 'Paid',
+      }),
+      // Pending items in Jan should not reduce settled surplus
+      makeEntry({
+        id: 'jan-exp-pending',
+        period: 'Jan',
+        type: 'expense',
+        item: 'Unpaid Utility',
+        estimatedCost: 4000,
+        actualCost: 0,
+        amount: 0,
+        status: 'Pending',
+      }),
+    ];
+
+    // 1. First period ('Jan') has no previous period
+    const janCheck = computeCarryOverSurplus(entries, periods, 'Jan');
+    assert.equal(janCheck.surplus, 0);
+    assert.equal(janCheck.hasBeenCarriedOver, true);
+
+    // 2. Second period ('Feb') sees 50,000 - (18,000 + 10,000) = 22,000 surplus from 'Jan'
+    const febBefore = computeCarryOverSurplus(entries, periods, 'Feb');
+    assert.equal(febBefore.surplus, 22000);
+    assert.equal(febBefore.prevPeriodName, 'Jan');
+    assert.equal(febBefore.hasBeenCarriedOver, false);
+
+    // 3. After recording Carry-over in 'Feb', hasBeenCarriedOver becomes true
+    const entriesWithCarryOver: BudgetEntry[] = [
+      ...entries,
+      makeEntry({
+        id: 'feb-carry-1',
+        period: 'Feb',
+        type: 'income',
+        category: 'Other Income',
+        item: 'Carry-over from Jan',
+        description: 'Carry-over from Jan',
+        actualCost: 22000,
+        amount: 22000,
+        status: 'Paid',
+      }),
+    ];
+    const febAfter = computeCarryOverSurplus(entriesWithCarryOver, periods, 'Feb');
+    assert.equal(febAfter.surplus, 22000);
+    assert.equal(febAfter.hasBeenCarriedOver, true);
+  });
+});
+
+describe('26. Negative Actual Values (Refunds, Cashback, Rebates & Reversals)', () => {
+  it('preserves explicit negative Actual values across expense, income, and saving entries in resolveSyncedEntryAndTemplateAmounts', () => {
+    // 1. Expense rebate / cashback with 0 estimate and -500 actual
+    const cashbackExpense = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '0',
+      rawActual: '-500',
+      saveToTemplate: false,
+      type: 'expense',
+      status: 'Paid',
+      itemName: 'Credit Card Cashback Rebate',
+      categoryName: 'Utilities & Bills',
+    });
+    assert.equal(cashbackExpense.estNum, 0);
+    assert.equal(cashbackExpense.actNum, -500);
+    // For expenses: diff = estNum - actNum = 0 - (-500) = +500 favorable variance
+    assert.equal(cashbackExpense.diff, 500);
+
+    // 2. Irregular income reversal / deduction with positive estimate (1000) and explicit negative actual (-250)
+    const incomeAdjustment = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '1000',
+      rawActual: '-250',
+      saveToTemplate: false,
+      type: 'income',
+      status: 'Paid',
+      itemName: 'Payroll Tax Adjustment',
+      categoryName: 'Other Income',
+    });
+    assert.equal(incomeAdjustment.estNum, 1000);
+    assert.equal(incomeAdjustment.actNum, -250);
+    // For income: diff = actNum - estNum = -250 - 1000 = -1250
+    assert.equal(incomeAdjustment.diff, -1250);
+
+    // 3. Sync to template with negative Actual and blank Estimate
+    const syncedNegative = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '',
+      rawActual: '-300',
+      saveToTemplate: true,
+      type: 'expense',
+      status: 'Paid',
+      itemName: 'Monthly Loyalty Rebate',
+      categoryName: 'Shopping',
+    });
+    assert.equal(syncedNegative.estNum, -300);
+    assert.equal(syncedNegative.actNum, -300);
+    assert.equal(syncedNegative.diff, 0);
+  });
+
+  it('accurately nets negative Actuals (refunds/rebates) in Payment Channel Subtotals, Filtered Selection Subtotals, and CSV Export', () => {
+    const rows = [
+      {
+        estimatedCost: 4000,
+        actualCost: 4000,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+      // Credit card cashback / refund of -650
+      {
+        estimatedCost: 0,
+        actualCost: -650,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+      // Pending Credit Card bill of 2,000
+      {
+        estimatedCost: 2000,
+        actualCost: 0,
+        hasActualCost: false,
+        status: 'Pending' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+    ];
+
+    const { paidTotals, projectedTotals } = computePaymentChannelSubtotals(rows);
+    // Paid Credit Card = 4,000 + (-650) = 3,350
+    assert.equal(paidTotals['Credit Card'], 3350);
+    // Projected Credit Card = 3,350 paid + 2,000 pending = 5,350
+    assert.equal(projectedTotals['Credit Card'], 5350);
+
+    // Filtered selection subtotals for Credit Card
+    const subtotals = computeFilteredExpenseSubtotals(rows, 'Credit Card');
+    assert.equal(subtotals.estimated, 6000);
+    assert.equal(subtotals.actual, 3350);
+    assert.equal(subtotals.projected, 5350);
+    assert.equal(subtotals.variance, 650); // 6,000 est - 5,350 proj = +650 saved
+    assert.equal(subtotals.paidCount, 2);
+    assert.equal(subtotals.totalCount, 3);
+
+    // CSV export of a settled negative actual row
+    const csvVals = computeCsvRowExportValues({
+      type: 'expense',
+      estimatedCost: 0,
+      actualCost: -650,
+      hasActualCost: true,
+      status: 'Paid',
+    });
+    assert.equal(csvVals.act, -650);
+    assert.equal(csvVals.diff, 650);
+  });
+
+  it('synchronizes negative saving adjustments and negative loan payment reversals into SavingsLedgerData and cleanly rolls them back on deletion or zeroing', () => {
+    memoryStorage.clear();
+    const { ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const accId = ledger.accounts[0].id;
+    ledger.initialCapital = 20000;
+    ledger.accounts[0].balance = 20000;
+    ledger.loans = [
+      {
+        id: 'loan-reg-1',
+        name: 'Gadget Installment',
+        direction: 'borrowed',
+        category: 'Personal Loan',
+        principalAmount: 12000,
+        totalContractAmount: 12000,
+        installmentAmount: 2000,
+        totalInstallments: 6,
+        initialPaidAmount: 10000,
+        initialInstallmentsPaid: 5,
+        frequency: 'monthly',
+        startDate: '2026-05-01',
+        status: 'active',
+        payments: [
+          {
+            id: 'lpay-1',
+            loanId: 'loan-reg-1',
+            date: '2026-10-05',
+            year: 2026,
+            period: 'Oct',
+            amount: 2000,
+            source: 'budget_sync',
+            budgetEntryId: 'entry-loan-1',
+          },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    // 1. Negative saving entry (-1,500 drawdown from Emergency Fund via Budget Sheet) reduces account balance from 20,000 to 18,500
+    const negSavingEntry = makeEntry({
+      id: 'sav-neg-1',
+      year: 2026,
+      period: 'Nov',
+      date: '2026-11-10',
+      type: 'saving',
+      category: 'Emergency & Safety Net',
+      item: 'Emergency Fund',
+      estimatedCost: 0,
+      actualCost: -1500,
+      amount: -1500,
+      status: 'Paid',
+      savingAccountId: accId,
+      savingAccountName: ledger.accounts[0].name,
+    });
+    let afterSav = FinanceStorageService.accumulateBudgetSavingToLedger(negSavingEntry, false);
+    assert.equal(afterSav.accounts[0].balance, 18500);
+    assert.equal(afterSav.transactions.length, 1);
+    assert.equal(afterSav.transactions[0].amount, -1500);
+    assert.equal(afterSav.transactions[0].runningTotalCapital, 18500);
+
+    // 2. Updating the negative saving entry to 0 removes the ledger transaction and restores balance to 20,000
+    afterSav = FinanceStorageService.accumulateBudgetSavingToLedger(
+      { ...negSavingEntry, actualCost: 0, amount: 0 },
+      false
+    );
+    assert.equal(afterSav.accounts[0].balance, 20000);
+    assert.equal(afterSav.transactions.length, 0);
+
+    // 3. Recording a negative loan adjustment (-500 reversal) updates total paid (10,000 + 2,000 - 500 = 11,500 < 12,000 -> 'active')
+    const loanReversalEntry = makeEntry({
+      id: 'entry-loan-rev',
+      year: 2026,
+      period: 'Nov',
+      date: '2026-11-12',
+      type: 'expense',
+      category: 'Loans',
+      item: 'Gadget Installment',
+      actualCost: -500,
+      amount: -500,
+      status: 'Paid',
+      loanId: 'loan-reg-1',
+    });
+    const loanSync = FinanceStorageService.syncBudgetLoanPaymentToLedger(loanReversalEntry, false);
+    assert.equal(loanSync.matchedLoan?.payments.length, 2);
+    assert.equal(loanSync.matchedLoan?.status, 'active');
+  });
+});
+
+describe('27. End-to-End Multi-Module Regression Suite (Cashflow, Rebates, Carry-Over & Template Sync)', () => {
+  it('verifies end-to-end period lifecycle with regular salary, synced templates, split payments, negative expense rebates, and carry-over surplus', () => {
+    memoryStorage.clear();
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+
+    // 1. User creates a new expense item in Jan with only Actual = 3,200 and Sync to Template checked
+    const janInternetAmounts = resolveSyncedEntryAndTemplateAmounts({
+      rawEstimated: '',
+      rawActual: '3200',
+      saveToTemplate: true,
+      type: 'expense',
+      status: 'Paid',
+      itemName: 'Fiber Internet Plan',
+      categoryName: 'Utilities & Bills',
+    });
+    assert.equal(janInternetAmounts.estNum, 3200);
+    assert.equal(janInternetAmounts.actNum, 3200);
+
+    // 2. User records Jan entries: Salary (+50,000), Fiber Internet (3,200 Credit Card), Groceries (6,000 split: 4,000 Credit Card + 2,000 Cash), and Cashback Rebate (-400 Credit Card)
+    const janEntries: BudgetEntry[] = [
+      makeEntry({
+        id: 'jan-sal',
+        period: 'Jan',
+        type: 'income',
+        category: 'Salary & Wages',
+        item: 'Monthly Salary',
+        estimatedCost: 50000,
+        actualCost: 50000,
+        amount: 50000,
+        status: 'Paid',
+      }),
+      makeEntry({
+        id: 'jan-net',
+        period: 'Jan',
+        type: 'expense',
+        category: 'Utilities & Bills',
+        item: 'Fiber Internet Plan',
+        estimatedCost: janInternetAmounts.estNum,
+        actualCost: janInternetAmounts.actNum,
+        amount: janInternetAmounts.actNum,
+        paymentMethod: 'Credit Card',
+        status: 'Paid',
+      }),
+      makeEntry({
+        id: 'jan-groc',
+        period: 'Jan',
+        type: 'expense',
+        category: 'Food & Groceries',
+        item: 'Supermarket Run',
+        estimatedCost: 6500,
+        actualCost: 6000,
+        amount: 6000,
+        paymentMethod: 'Credit Card',
+        paymentBreakdown: {
+          creditCard: 4000,
+          cash: 2000,
+        },
+        status: 'Paid',
+      }),
+      makeEntry({
+        id: 'jan-rebate',
+        period: 'Jan',
+        type: 'expense',
+        category: 'Utilities & Bills',
+        item: 'Credit Card Bill Rebate',
+        estimatedCost: 0,
+        actualCost: -400,
+        amount: -400,
+        paymentMethod: 'Credit Card',
+        status: 'Paid',
+      }),
+    ];
+
+    const batchRes = FinanceStorageService.addMultipleBudgetEntries(budget, janEntries);
+    assert.equal(batchRes.budget.entries.length, 4);
+
+    // 3. Verify Payment Channel Subtotals & Filtered Selection Subtotals for Jan expenses
+    const janExpenseRows = batchRes.budget.entries
+      .filter((e) => e.type !== 'income')
+      .map((e) => ({
+        estimatedCost: e.estimatedCost || 0,
+        actualCost: e.actualCost ?? e.amount ?? 0,
+        hasActualCost: true,
+        status: e.status || ('Paid' as const),
+        paymentMethod: e.paymentMethod,
+        paymentBreakdown: e.paymentBreakdown,
+      }));
+
+    const { paidTotals, projectedTotals } = computePaymentChannelSubtotals(janExpenseRows);
+    // Credit Card = 3,200 (Internet) + 4,000 (Groceries split) - 400 (Rebate) = 6,800
+    assert.equal(paidTotals['Credit Card'], 6800);
+    assert.equal(projectedTotals['Credit Card'], 6800);
+    // Cash = 2,000 (Groceries split)
+    assert.equal(paidTotals.Cash, 2000);
+    assert.equal(projectedTotals.Cash, 2000);
+
+    const allJanSubtotals = computeFilteredExpenseSubtotals(janExpenseRows, null);
+    // Total Est = 3,200 + 6,500 + 0 = 9,700; Total Actual/Projected = 3,200 + 6,000 - 400 = 8,800; Variance = +900 saved
+    assert.equal(allJanSubtotals.estimated, 9700);
+    assert.equal(allJanSubtotals.actual, 8800);
+    assert.equal(allJanSubtotals.projected, 8800);
+    assert.equal(allJanSubtotals.variance, 900);
+
+    // 4. Verify Carry-Over Surplus into Feb includes the +400 rebate (50,000 - 8,800 = 41,200)
+    const carryOver = computeCarryOverSurplus(
+      batchRes.budget.entries,
+      ['Jan', 'Feb', 'Mar'],
+      'Feb'
+    );
+    assert.equal(carryOver.prevPeriodName, 'Jan');
+    assert.equal(carryOver.surplus, 41200);
+    assert.equal(carryOver.hasBeenCarriedOver, false);
+  });
+});
+
+
+
+
