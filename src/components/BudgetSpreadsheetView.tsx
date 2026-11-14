@@ -57,6 +57,7 @@ import {
   computeFilteredExpenseSubtotals,
   computePaymentChannelSubtotals,
   getPendingAmountToPay,
+  getPendingChannelAmountForRow,
   isTemplateExcludedInPeriod,
   resolveSyncedEntryAndTemplateAmounts,
   shouldTemplateDisplayInBudget,
@@ -845,8 +846,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       }
       if (paymentMethodFilter) {
         const methodAmt = getMethodAmount(exp, paymentMethodFilter);
-        const matchesPendingMethod = exp.status !== 'Paid' && exp.paymentMethod === paymentMethodFilter;
-        if (methodAmt === 0 && !matchesPendingMethod) return false;
+        const pendingChannelAmt = getPendingChannelAmountForRow(exp, paymentMethodFilter);
+        if (methodAmt === 0 && pendingChannelAmt === 0) return false;
       }
       if (expenseSearchQuery.trim()) {
         const q = expenseSearchQuery.toLowerCase();
@@ -1842,52 +1843,74 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       >
                         <div
                           onClick={() => setExpandedIncomeRowId(isExpanded ? null : inc.id)}
-                          className="px-3.5 py-2.5 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                          className="px-3.5 py-2.5 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer flex items-center justify-between gap-2.5"
                         >
-                          {/* Left: Clean Item Title */}
+                          {/* Left: Readable Item Title (up to 2 lines so mobile names are never cut off) */}
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-start gap-1.5">
                               {isReceived ? (
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
                               ) : isExpanded ? (
-                                <ChevronDown className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <ChevronDown className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
                               ) : (
-                                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                               )}
-                              <span className="font-semibold text-xs text-slate-900 dark:text-white truncate">
+                              <span className="font-semibold text-xs text-slate-900 dark:text-white leading-snug line-clamp-2 break-words">
                                 {inc.item}
                               </span>
                             </div>
                           </div>
 
-                          {/* Right: Clean Amount + Single Primary Action */}
+                          {/* Right: Option 2B Ultra-Minimal Strikethrough (Single-number width) */}
                           <div className="flex items-center gap-2 shrink-0">
                             <div className="text-right font-mono leading-tight">
                               {isReceived ? (
                                 <>
-                                  <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                  <div
+                                    className={`text-xs font-bold ${
+                                      est > 0 && est !== act && diff < 0
+                                        ? 'text-rose-600 dark:text-rose-400'
+                                        : 'text-emerald-600 dark:text-emerald-400'
+                                    }`}
+                                  >
                                     {currencySymbol}{formatNumber(act)}
                                   </div>
-                                  {est > 0 && est !== act && (
-                                    <div className="text-[10px] text-slate-400">
-                                      Est {currencySymbol}{formatNumber(est)}
+                                  {est > 0 && est !== act ? (
+                                    <div className="text-[10px] line-through text-slate-400 dark:text-slate-500 mt-0.5">
+                                      {currencySymbol}{formatNumber(est)}
                                     </div>
-                                  )}
+                                  ) : est === 0 ? (
+                                    <div className="text-[10px] text-slate-400 font-sans mt-0.5">
+                                      Extra Income
+                                    </div>
+                                  ) : null}
                                 </>
                               ) : (
                                 <>
-                                  <div className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                                  <div
+                                    className={`text-xs font-bold ${
+                                      act !== 0 && est > 0 && est !== act
+                                        ? act > est
+                                          ? 'text-emerald-600 dark:text-emerald-400'
+                                          : 'text-rose-600 dark:text-rose-400'
+                                        : 'text-amber-700 dark:text-amber-300'
+                                    }`}
+                                  >
                                     {pendingIncomeAmount !== 0
                                       ? `${currencySymbol}${formatNumber(pendingIncomeAmount)}`
                                       : '—'}
                                   </div>
                                   {act !== 0 && est > 0 && est !== act ? (
-                                    <div className="text-[10px] text-slate-400">
-                                      Actual &middot; Est {currencySymbol}{formatNumber(est)}
+                                    <div className="text-[10px] line-through text-slate-400 dark:text-slate-500 mt-0.5">
+                                      {currencySymbol}{formatNumber(est)}
+                                    </div>
+                                  ) : act !== 0 ? (
+                                    <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-sans font-medium mt-0.5">
+                                      Actual to Receive
                                     </div>
                                   ) : pendingIncomeAmount !== 0 ? (
-                                    <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-sans font-medium">
-                                      Actual to Receive
+                                    <div className="text-[10px] text-slate-400 font-sans mt-0.5">
+                                      Est to Receive
                                     </div>
                                   ) : null}
                                 </>
@@ -1923,8 +1946,21 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 Category: <strong className="text-slate-700 dark:text-slate-200">{inc.category}</strong>
                               </span>
                               {(isReceived || act !== 0) && est > 0 && diff !== 0 && (
-                                <span className={`font-mono ${diff > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold'}`}>
-                                  Variance: {diff > 0 ? `+${currencySymbol}${formatNumber(diff)}` : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                <span className="font-mono text-[11px] flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                                  <span className="line-through text-slate-400 dark:text-slate-500">{currencySymbol}{formatNumber(est)}</span>
+                                  <span className="text-slate-400">→</span>
+                                  <strong className="text-slate-800 dark:text-slate-100">{currencySymbol}{formatNumber(act)}</strong>
+                                  <span
+                                    className={`font-semibold ml-0.5 ${
+                                      diff > 0
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : 'text-rose-600 dark:text-rose-400'
+                                    }`}
+                                  >
+                                    ({diff > 0
+                                      ? `+${currencySymbol}${formatNumber(diff)} extra`
+                                      : `-${currencySymbol}${formatNumber(Math.abs(diff))} short`})
+                                  </span>
                                 </span>
                               )}
                               {inc.reference && inc.reference !== 'Auto-filled from template' && (
@@ -2611,23 +2647,23 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               : 'bg-white dark:bg-slate-900'
                           }`}
                         >
-                          {/* Clean Card Row: Left (Item Title), Right (Amount + Single Action) */}
+                          {/* Clean Card Row: Left (Readable Item Title), Right (Compact Stacked Amount + Single Action) */}
                           <div
                             onClick={() => setExpandedRowId(isExpanded ? null : exp.id)}
-                            className="px-3.5 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                            className="px-3.5 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer flex items-center justify-between gap-2.5"
                           >
                             <div className="min-w-0 flex-1">
-                              {/* Line 1: Subtle Settled Icon or Chevron + Full Item Title */}
-                              <div className="flex items-center gap-1.5">
+                              {/* Line 1: Subtle Settled Icon or Chevron + Full Item Title (up to 2 lines so mobile names are never cut off) */}
+                              <div className="flex items-start gap-1.5">
                                 {isPaid ? (
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
                                 ) : isExpanded ? (
-                                  <ChevronDown className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                  <ChevronDown className="w-3.5 h-3.5 text-indigo-600 shrink-0 mt-0.5" />
                                 ) : (
-                                  <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                  <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                                 )}
                                 <span
-                                  className={`text-xs truncate ${
+                                  className={`text-xs leading-snug line-clamp-2 break-words ${
                                     isPaid
                                       ? 'font-semibold text-slate-900 dark:text-white'
                                       : 'font-bold text-slate-900 dark:text-white'
@@ -2638,40 +2674,66 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               </div>
                             </div>
 
-                            {/* Right Side: Clean Amount + Pay (if pending) + Edit */}
+                            {/* Right Side: Option 2B Ultra-Minimal Strikethrough + Pay (if pending) + Edit */}
                             <div className="flex items-center gap-2 shrink-0">
                               <div className="text-right font-mono leading-tight">
                                 {isPaid ? (
                                   <>
                                     <div
                                       className={`text-xs font-bold ${
-                                        isSaving
+                                        act < 0
+                                          ? 'text-emerald-600 dark:text-emerald-400'
+                                          : est > 0 && est !== act
+                                          ? diff > 0
+                                            ? 'text-emerald-600 dark:text-emerald-400'
+                                            : 'text-rose-600 dark:text-rose-400'
+                                          : isSaving
                                           ? 'text-indigo-600 dark:text-indigo-400'
                                           : 'text-slate-900 dark:text-white'
                                       }`}
                                     >
                                       {currencySymbol}{formatNumber(act)}
                                     </div>
-                                    {est > 0 && est !== act && (
-                                      <div className="text-[10px] text-slate-400">
-                                        Est {currencySymbol}{formatNumber(est)}
+                                    {est > 0 && est !== act ? (
+                                      <div className="text-[10px] line-through text-slate-400 dark:text-slate-500 mt-0.5">
+                                        {currencySymbol}{formatNumber(est)}
                                       </div>
-                                    )}
+                                    ) : est === 0 && act < 0 ? (
+                                      <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-sans mt-0.5">
+                                        Rebate / Refund
+                                      </div>
+                                    ) : est === 0 ? (
+                                      <div className="text-[10px] text-slate-400 font-sans mt-0.5">
+                                        Unbudgeted
+                                      </div>
+                                    ) : null}
                                   </>
                                 ) : (
                                   <>
-                                    <div className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                                    <div
+                                      className={`text-xs font-bold ${
+                                        act !== 0 && est > 0 && est !== act
+                                          ? act > est
+                                            ? 'text-rose-600 dark:text-rose-400'
+                                            : 'text-emerald-600 dark:text-emerald-400'
+                                          : 'text-amber-700 dark:text-amber-300'
+                                      }`}
+                                    >
                                       {pendingAmountToPay !== 0
                                         ? `${currencySymbol}${formatNumber(pendingAmountToPay)}`
                                         : '—'}
                                     </div>
                                     {act !== 0 && est > 0 && est !== act ? (
-                                      <div className="text-[10px] text-slate-400">
-                                        Actual &middot; Est {currencySymbol}{formatNumber(est)}
+                                      <div className="text-[10px] line-through text-slate-400 dark:text-slate-500 mt-0.5">
+                                        {currencySymbol}{formatNumber(est)}
+                                      </div>
+                                    ) : act !== 0 ? (
+                                      <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-sans font-medium mt-0.5">
+                                        Actual to Pay
                                       </div>
                                     ) : pendingAmountToPay !== 0 ? (
-                                      <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-sans font-medium">
-                                        Actual to Pay
+                                      <div className="text-[10px] text-slate-400 font-sans mt-0.5">
+                                        Est to Pay
                                       </div>
                                     ) : null}
                                   </>
@@ -2742,16 +2804,29 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   )}
 
                                   {(isPaid || act !== 0) && est > 0 && diff !== 0 && (
-                                    <span
-                                      className={`font-mono ${
-                                        diff > 0
-                                          ? 'text-emerald-600 dark:text-emerald-400 font-bold'
-                                          : 'text-rose-600 dark:text-rose-400 font-bold'
-                                      }`}
-                                    >
-                                      {diff > 0
-                                        ? `Saved ${currencySymbol}${formatNumber(diff)}`
-                                        : `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                    <span className="font-mono text-[11px] flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                                      <span className="line-through text-slate-400 dark:text-slate-500">{currencySymbol}{formatNumber(est)}</span>
+                                      <span className="text-slate-400">→</span>
+                                      <strong
+                                        className={
+                                          isSaving
+                                            ? 'text-indigo-600 dark:text-indigo-400'
+                                            : 'text-slate-800 dark:text-slate-100'
+                                        }
+                                      >
+                                        {currencySymbol}{formatNumber(act)}
+                                      </strong>
+                                      <span
+                                        className={`font-semibold ml-0.5 ${
+                                          diff > 0
+                                            ? 'text-emerald-600 dark:text-emerald-400'
+                                            : 'text-rose-600 dark:text-rose-400'
+                                        }`}
+                                      >
+                                        ({diff > 0
+                                          ? `Saved ${currencySymbol}${formatNumber(diff)}`
+                                          : `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`})
+                                      </span>
                                     </span>
                                   )}
                                 </div>
@@ -2799,16 +2874,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <span className="text-indigo-700/80 dark:text-indigo-300/80 font-normal text-[10px]">
                         Est {currencySymbol}{formatNumber(filteredExpenseEstimated)}
                       </span>
-                      <span className="text-indigo-700 dark:text-indigo-300 text-[11px]">
-                        Paid {currencySymbol}{formatNumber(filteredExpenseActual)}
-                      </span>
                       {filteredExpensePendingToPay !== 0 && (
                         <span className="text-amber-700 dark:text-amber-300 text-[11px]">
                           To Pay {currencySymbol}{formatNumber(filteredExpensePendingToPay)}
                         </span>
                       )}
-                      <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-xs font-bold">
-                        Projected {currencySymbol}{formatNumber(filteredExpenseProjected)}
+                      <span className="text-indigo-700 dark:text-indigo-300 text-xs">
+                        Paid {currencySymbol}{formatNumber(filteredExpenseActual)}
                       </span>
                     </div>
                   </div>
@@ -3272,9 +3344,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             To Pay {currencySymbol}{formatNumber(filteredExpensePendingToPay)}
                           </div>
                         )}
-                        <div className="text-[10px] md:text-xs font-bold text-indigo-900 dark:text-indigo-100 mt-0.5">
-                          Proj {currencySymbol}{formatNumber(filteredExpenseProjected)}
-                        </div>
                       </td>
                       <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm border-b border-indigo-200/70 dark:border-indigo-900/60">
                         {filteredExpenseEstimated - filteredExpenseProjected === 0 ? (

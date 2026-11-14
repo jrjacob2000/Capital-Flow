@@ -19,6 +19,7 @@ import {
   isTemplateExcludedInPeriod,
   getChannelAmountForRow,
   getPendingAmountToPay,
+  getPendingChannelAmountForRow,
   computePaymentChannelSubtotals,
   computeFilteredExpenseSubtotals,
   resolveSyncedEntryAndTemplateAmounts,
@@ -3353,7 +3354,540 @@ describe('30. Dashboard Current Period Projected Surplus Resolution (computePeri
     assert.equal(metricsP2.projectedExpense, 5000);
     assert.equal(metricsP2.projectedSurplus, 25000);
   });
+
+  it('skips unedited auto-filled placeholders when a template is hidden and accurately computes pending split-payment channel subtotals', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-salary',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: 'Monthly Salary',
+          defaultEstimatedCost: 40000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-hidden-sub',
+          type: 'expense' as const,
+          category: 'Subscriptions',
+          item: 'Optional Streaming',
+          defaultEstimatedCost: 1500,
+          frequency: 'monthly' as const,
+          showInBudget: false,
+        },
+      ],
+      entries: [
+        // Unedited auto-filled placeholder for the hidden template -> should be ignored
+        makeEntry({
+          id: 'exp-auto-hidden',
+          period: 'Nov',
+          type: 'expense',
+          category: 'Subscriptions',
+          item: 'Optional Streaming',
+          estimatedCost: 1500,
+          actualCost: 0,
+          amount: 0,
+          status: 'Pending',
+          reference: 'Auto-filled from template',
+        }),
+      ],
+    };
+
+    const metrics = computePeriodProjectedSurplus(budget, 'Nov', 'monthly');
+    assert.equal(metrics.projectedIncome, 40000);
+    assert.equal(metrics.projectedExpense, 0);
+    assert.equal(metrics.projectedSurplus, 40000);
+
+    // If the user explicitly records a bill actual on the hidden template (actualCost !== 0), it IS included
+    const budgetWithEditedHidden = {
+      ...budget,
+      entries: [
+        makeEntry({
+          id: 'exp-edited-hidden',
+          period: 'Nov',
+          type: 'expense',
+          category: 'Subscriptions',
+          item: 'Optional Streaming',
+          estimatedCost: 1500,
+          actualCost: 1200,
+          amount: 1200,
+          status: 'Pending',
+          reference: 'Auto-filled from template',
+        }),
+      ],
+    };
+    const metricsEdited = computePeriodProjectedSurplus(budgetWithEditedHidden, 'Nov', 'monthly');
+    assert.equal(metricsEdited.projectedIncome, 40000);
+    assert.equal(metricsEdited.projectedExpense, 1200);
+    assert.equal(metricsEdited.projectedSurplus, 38800);
+
+    // Verify Pending split-payment channel resolution across all 6 channels + Paid/fallback edge cases
+    const pendingSplitRow = {
+      estimatedCost: 6600,
+      actualCost: 6600,
+      hasActualCost: true,
+      status: 'Pending' as const,
+      paymentMethod: 'Cash' as const,
+      paymentBreakdown: {
+        cash: 1000,
+        creditCard: 2000,
+        gcashTransfer: 500,
+        kathAccount: 700,
+        checkAccount: 900,
+        bankTransfer: 1500,
+      },
+    };
+    assert.equal(getPendingChannelAmountForRow(pendingSplitRow, 'Cash'), 1000);
+    assert.equal(getPendingChannelAmountForRow(pendingSplitRow, 'Credit Card'), 2000);
+    assert.equal(getPendingChannelAmountForRow(pendingSplitRow, 'GCash Transfer'), 500);
+    assert.equal(getPendingChannelAmountForRow(pendingSplitRow, 'Kath Account'), 700);
+    assert.equal(getPendingChannelAmountForRow(pendingSplitRow, 'Checking Account'), 900);
+    assert.equal(getPendingChannelAmountForRow(pendingSplitRow, 'Bank Transfer'), 1500);
+
+    // Settled (Paid) row returns 0 for getPendingChannelAmountForRow
+    assert.equal(
+      getPendingChannelAmountForRow({ ...pendingSplitRow, status: 'Paid' }, 'Credit Card'),
+      0
+    );
+
+    // Single-channel pending row (empty breakdown) falls back to getPendingAmountToPay on matching channel
+    const singleChannelPending = {
+      estimatedCost: 1800,
+      actualCost: 0,
+      hasActualCost: false,
+      status: 'Pending' as const,
+      paymentMethod: 'GCash Transfer' as const,
+    };
+    assert.equal(getPendingChannelAmountForRow(singleChannelPending, 'GCash Transfer'), 1800);
+    assert.equal(getPendingChannelAmountForRow(singleChannelPending, 'Cash'), 0);
+
+    // Verify 1:1 parity between computePaymentChannelSubtotals and computeFilteredExpenseSubtotals per channel
+    const mixedRows = [
+      pendingSplitRow,
+      singleChannelPending,
+      {
+        estimatedCost: 2500,
+        actualCost: 2300,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+      {
+        estimatedCost: 0,
+        actualCost: -300,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentMethod: 'Credit Card' as const,
+      },
+    ];
+    const channelTotals = computePaymentChannelSubtotals(mixedRows);
+    const ccSubtotals = computeFilteredExpenseSubtotals(mixedRows, 'Credit Card');
+    // Credit Card Paid = 2,300 + (-300) = 2,000; Pending = 2,000; Projected = 4,000
+    assert.equal(ccSubtotals.actual, 2000);
+    assert.equal(ccSubtotals.pendingToPay, 2000);
+    assert.equal(ccSubtotals.projected, 4000);
+    assert.equal(ccSubtotals.actual, channelTotals.paidTotals['Credit Card']);
+    assert.equal(ccSubtotals.projected, channelTotals.projectedTotals['Credit Card']);
+  });
 });
 
+// ============================================================================
+// 31. Comprehensive All-Feature Health & Integration Probe Suite
+// ============================================================================
+describe('31. Comprehensive All-Feature Health & Integration Probe Suite', () => {
+  beforeEach(() => {
+    memoryStorage.clear();
+    FinanceStorageService.clearCloudSessionMemory();
+  });
 
+  it('Probe 1: Workspace Initialization, Custom Categories & Recurring Template Engine', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    assert.equal(budget.year, 2026);
+    assert.equal(budget.entries.length, 0);
+    assert.equal(budget.itemTemplates?.length, 0);
+    assert.equal(budget.isDefaultStarterData, false);
 
+    // Add custom categories across income, expense, and saving
+    const customCategories = {
+      income: [...(budget.customCategories?.income || []), 'Consulting Retainer'],
+      expense: [...(budget.customCategories?.expense || []), 'Pet Care'],
+      saving: [...(budget.customCategories?.saving || []), 'Future Home Fund'],
+    };
+
+    const templates: BudgetItemTemplate[] = [
+      {
+        id: 'probe-tpl-inc',
+        type: 'income',
+        category: 'Consulting Retainer',
+        item: 'Monthly Retainer',
+        defaultEstimatedCost: 60000,
+        frequency: 'monthly',
+        showInBudget: true,
+      },
+      {
+        id: 'probe-tpl-exp',
+        type: 'expense',
+        category: 'Pet Care',
+        item: 'Vet & Grooming',
+        defaultEstimatedCost: 3500,
+        frequency: 'monthly',
+        showInBudget: true,
+      },
+      {
+        id: 'probe-tpl-sav',
+        type: 'saving',
+        category: 'Future Home Fund',
+        item: 'Emergency Fund',
+        defaultEstimatedCost: 10000,
+        frequency: 'monthly',
+        showInBudget: true,
+      },
+    ];
+
+    const updatedBudget = {
+      ...budget,
+      customCategories,
+      itemTemplates: templates,
+      isPersonalizedTemplate: true,
+    };
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+
+    const reloaded = FinanceStorageService.loadLocalBudget(2026);
+    assert.ok(reloaded.customCategories?.income.includes('Consulting Retainer'));
+    assert.ok(reloaded.customCategories?.expense.includes('Pet Care'));
+    assert.equal(reloaded.itemTemplates?.length, 3);
+    assert.equal(computeAnnualTargetFromTemplate(10000, 'monthly'), 120000);
+  });
+
+  it('Probe 2: Budget Worksheet Period Auto-Fill, Paid vs Pending Resolution, 6-Channel Split Payments & Negative Rebates', () => {
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const templates: BudgetItemTemplate[] = [
+      {
+        id: 'tpl-sal',
+        type: 'income',
+        category: 'Salary',
+        item: 'Primary Salary',
+        defaultEstimatedCost: 50000,
+        frequency: 'monthly',
+        showInBudget: true,
+      },
+      {
+        id: 'tpl-elec',
+        type: 'expense',
+        category: 'Utilities',
+        item: 'Meralco Bill',
+        defaultEstimatedCost: 4000,
+        frequency: 'monthly',
+        showInBudget: true,
+      },
+    ];
+
+    const { newEntries } = buildAutoFillPeriodEntries(
+      templates,
+      [],
+      2026,
+      'Oct',
+      'monthly',
+      ledger.accounts,
+      isTemplateValidForPeriod
+    );
+    assert.equal(newEntries.length, 2);
+
+    const populated = FinanceStorageService.addMultipleBudgetEntries(budget, newEntries);
+    assert.equal(populated.budget.entries.length, 2);
+
+    // Record Paid split expense + Pending bill with actual + Paid negative rebate
+    const splitPaidRow = {
+      estimatedCost: 4000,
+      actualCost: 3800,
+      hasActualCost: true,
+      status: 'Paid' as const,
+      paymentMethod: 'Credit Card' as const,
+      paymentBreakdown: {
+        cash: 800,
+        creditCard: 2000,
+        gcashTransfer: 1000,
+        kathAccount: 0,
+        checkAccount: 0,
+        bankTransfer: 0,
+      },
+    };
+    const pendingSplitRow = {
+      estimatedCost: 2500,
+      actualCost: 2700,
+      hasActualCost: true,
+      status: 'Pending' as const,
+      paymentMethod: 'Bank Transfer' as const,
+      paymentBreakdown: {
+        cash: 0,
+        creditCard: 1200,
+        gcashTransfer: 0,
+        kathAccount: 0,
+        checkAccount: 0,
+        bankTransfer: 1500,
+      },
+    };
+    const rebateRow = {
+      estimatedCost: 0,
+      actualCost: -400,
+      hasActualCost: true,
+      status: 'Paid' as const,
+      paymentMethod: 'Credit Card' as const,
+    };
+
+    const { paidTotals, projectedTotals } = computePaymentChannelSubtotals([
+      splitPaidRow,
+      pendingSplitRow,
+      rebateRow,
+    ]);
+    assert.equal(paidTotals.Cash, 800);
+    assert.equal(paidTotals['Credit Card'], 1600); // 2,000 - 400 rebate
+    assert.equal(paidTotals['GCash Transfer'], 1000);
+    assert.equal(projectedTotals['Credit Card'], 2800); // 1,600 paid + 1,200 pending split
+    assert.equal(projectedTotals['Bank Transfer'], 1500);
+
+    const ccFiltered = computeFilteredExpenseSubtotals(
+      [splitPaidRow, pendingSplitRow, rebateRow],
+      'Credit Card'
+    );
+    assert.equal(ccFiltered.actual, 1600);
+    assert.equal(ccFiltered.pendingToPay, 1200);
+    assert.equal(ccFiltered.projected, 2800);
+  });
+
+  it('Probe 3: Dashboard Projected Surplus, Cashflow Aggregation, Category Distribution & Carry-Over Surplus', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-inc',
+          type: 'income' as const,
+          category: 'Salary',
+          item: 'Base Pay',
+          defaultEstimatedCost: 45000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-rent',
+          type: 'expense' as const,
+          category: 'Housing',
+          item: 'Condo Rent',
+          defaultEstimatedCost: 15000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+      ],
+      entries: [
+        makeEntry({
+          id: 'oct-inc',
+          period: 'Oct',
+          type: 'income',
+          category: 'Salary',
+          item: 'Base Pay',
+          estimatedCost: 45000,
+          actualCost: 45000,
+          amount: 45000,
+          status: 'Paid',
+        }),
+        makeEntry({
+          id: 'oct-exp',
+          period: 'Oct',
+          type: 'expense',
+          category: 'Housing',
+          item: 'Condo Rent',
+          estimatedCost: 15000,
+          actualCost: 14500,
+          amount: 14500,
+          status: 'Paid',
+        }),
+      ],
+    };
+
+    const octSurplus = computePeriodProjectedSurplus(budget, 'Oct', 'monthly');
+    assert.equal(octSurplus.projectedIncome, 45000);
+    assert.equal(octSurplus.projectedExpense, 14500);
+    assert.equal(octSurplus.projectedSurplus, 30500);
+
+    // Carry-over surplus into Nov should equal Oct settled surplus (30,500)
+    const carryOver = computeCarryOverSurplus(
+      budget.entries,
+      ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+      'Nov'
+    );
+    assert.equal(carryOver.surplus, 30500);
+    assert.equal(carryOver.hasBeenCarriedOver, false);
+    assert.equal(carryOver.prevPeriodName, 'Oct');
+
+    const cashflow = aggregateCashflowByPeriod(budget.entries, 'monthly');
+    const octBar = cashflow.find((p) => p.label === 'Oct')!;
+    assert.equal(octBar.income, 45000);
+    assert.equal(octBar.expense, 14500);
+    assert.equal(octBar.net, 30500);
+
+    const catDist = aggregateCategoryDistribution(budget.entries, 'expense');
+    assert.equal(catDist.categories.length, 1);
+    assert.equal(catDist.categories[0].category, 'Housing');
+    assert.equal(catDist.categories[0].amount, 14500);
+  });
+
+  it('Probe 4: Savings Ledger, Multi-Bank Accounts, Sinking Fund Targets & Auto-Sync Rollbacks', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const ledger = FinanceStorageService.loadLocalSavingsLedger();
+    const primaryAccId = ledger.accounts[0].id;
+
+    // Add a Paid saving entry in Budget -> automatically syncs a deposit transaction to Savings Ledger
+    const { budget: afterSaveAlloc } = FinanceStorageService.addMultipleBudgetEntries(budget, [
+      {
+        year: 2026,
+        period: 'Oct',
+        periodIndex: 9,
+        date: '2026-10-15',
+        type: 'saving',
+        category: 'Emergency Fund',
+        item: 'Emergency Fund',
+        estimatedCost: 8000,
+        actualCost: 8000,
+        amount: 8000,
+        status: 'Paid',
+        description: 'Emergency Fund',
+        savingAccountId: primaryAccId,
+      },
+    ]);
+
+    const savedMap = computeSinkingFundSavedThisYear(afterSaveAlloc.entries);
+    assert.equal(savedMap.get('emergency fund'), 8000);
+
+    // Delete the budget entry -> automatically rolls back the ledger balance
+    const createdEntry = afterSaveAlloc.entries[0];
+    FinanceStorageService.deleteBudgetPeriodItem(afterSaveAlloc, 'Oct', {
+      entryId: createdEntry.id,
+      type: 'saving',
+      item: 'Emergency Fund',
+    });
+    const rolledBackLedger = FinanceStorageService.loadLocalSavingsLedger();
+    assert.equal(
+      rolledBackLedger.transactions.filter((tx) => tx.id === `tx-${createdEntry.id}`).length,
+      0
+    );
+  });
+
+  it('Probe 5: Loans & Installment Amortization, Template Sync, Payment Recording & Metrics', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const loan: LoanRecord = {
+      id: 'probe-loan-1',
+      name: 'MacBook Pro Installment',
+      direction: 'borrowed',
+      counterparty: 'BDO Credit Card',
+      category: 'Personal Loan',
+      principalAmount: 60000,
+      totalContractAmount: 60000,
+      installmentAmount: 5000,
+      totalInstallments: 12,
+      initialPaidAmount: 0,
+      initialInstallmentsPaid: 0,
+      frequency: 'monthly',
+      startDate: '2026-01-15',
+      status: 'active',
+      payments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const { budget: budgetWithLoanTpl } = FinanceStorageService.saveLoanContract(
+      loan,
+      budget,
+      'monthly',
+      { syncToTemplate: true }
+    );
+    assert.ok(budgetWithLoanTpl.itemTemplates?.some((t) => t.loanId === 'probe-loan-1'));
+
+    // Record a 5,000 installment payment and sync to budget
+    const { ledger: updatedLedger, updatedActiveBudget } = FinanceStorageService.recordLoanPayment(
+      'probe-loan-1',
+      {
+        date: '2026-10-15',
+        amount: 5000,
+        note: 'Month 10 Installment',
+        recordInBudget: true,
+      },
+      budgetWithLoanTpl,
+      'monthly'
+    );
+
+    const updatedLoan = updatedLedger.loans!.find((l) => l.id === 'probe-loan-1')!;
+    const metrics = computeLoanMetrics(updatedLoan);
+    assert.equal(metrics.totalPaid, 5000);
+    assert.equal(metrics.remainingBalance, 55000);
+    assert.ok(
+      updatedActiveBudget?.entries.some(
+        (e) => e.loanId === 'probe-loan-1' && e.actualCost === 5000 && e.status === 'Paid'
+      )
+    );
+  });
+
+  it('Probe 6: Universal Excel/CSV Import Parser & Multi-Year Full Backup Atomic Restore', () => {
+    const sampleRows = buildSampleTemplateRows(2026, 'Oct');
+    assert.ok(sampleRows.length > 5);
+
+    const wb = buildSampleTemplateWorkbook(2026, 'Oct');
+    assert.ok(wb.SheetNames.length >= 1);
+
+    const rawRows = [
+      ['Date', 'Type', 'Category', 'Item', 'Estimated', 'Actual', 'Status', 'Payment Mode', 'Notes'],
+      ['2026-10-05', 'Expense', 'Utilities', 'Water Bill', '600', '580', 'Paid', 'GCash', 'Oct water'],
+    ];
+
+    const { mapping } = detectUniversalColumnMapping(rawRows);
+    assert.ok(mapping.itemCol >= 0);
+    assert.ok(mapping.estimatedCol >= 0);
+    assert.ok(mapping.actualCol >= 0);
+
+    const parsed = parseUniversalRowsToEntries(rawRows, mapping, 2026, 'Oct');
+    assert.equal(parsed.entries.length, 1);
+    assert.equal(parsed.entries[0].item, 'Water Bill');
+    assert.equal(parsed.entries[0].estimatedCost, 600);
+    assert.equal(parsed.entries[0].actualCost, 580);
+  });
+
+  it('Probe 7: Security, Environment Database Isolation, PII Log Redaction & Sign-Out Memory Purge', () => {
+    // 1. Environment database isolation
+    const simulatedEnv = {
+      VITE_DEV_FIREBASE_API_KEY: 'dev-key',
+      VITE_DEV_FIREBASE_PROJECT_ID: 'capitalflow-dev',
+      VITE_DEV_FIREBASE_DATABASE_ID: 'dev-db',
+      VITE_FIREBASE_API_KEY: 'prod-key',
+      VITE_FIREBASE_PROJECT_ID: 'capitalflow-prod',
+      VITE_FIREBASE_DATABASE_ID: 'prod-db',
+    };
+    assert.equal(
+      resolveFirebaseEnvironmentConfig({
+        env: simulatedEnv,
+        hostname: 'ais-dev-example.run.app',
+      }).databaseId,
+      'dev-db'
+    );
+    assert.equal(
+      resolveFirebaseEnvironmentConfig({
+        env: simulatedEnv,
+        hostname: 'capitalflow.github.io',
+      }).databaseId,
+      'prod-db'
+    );
+
+    // 2. PII & token redaction in sanitizeErrorForLog
+    const rawLeak = new Error(
+      'Failed at workspaces/uid_secret_9876543210/budgets/2026 for user alice.smith@domain.com with Bearer ya29.A0ARrdaM_secret_token_value'
+    );
+    const sanitized = sanitizeErrorForLog(rawLeak);
+    assert.ok(!sanitized.includes('uid_secret_9876543210'));
+    assert.ok(!sanitized.includes('alice.smith@domain.com'));
+    assert.ok(!sanitized.includes('ya29.A0ARrdaM_secret_token_value'));
+
+    // 3. Sign-out memory purge
+    FinanceStorageService.clearCloudSessionMemory();
+    assert.equal(FinanceStorageService.isCloudSessionActive(), false);
+  });
+});

@@ -226,7 +226,7 @@ export class FinanceStorageService {
         return normalizedProfile;
       }
     } catch (e) {
-      console.warn('Could not load user template profile:', e);
+      console.warn('Could not load user template profile:', sanitizeErrorForLog(e));
     }
     return null;
   }
@@ -652,7 +652,7 @@ export class FinanceStorageService {
         localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
       }
     } catch (e) {
-      console.warn('Auto clean check encountered an error:', e);
+      console.warn('Auto clean check encountered an error:', sanitizeErrorForLog(e));
     }
   }
 
@@ -675,7 +675,7 @@ export class FinanceStorageService {
       localStorage.removeItem(LOCAL_STORAGE_KEY_LEDGER);
       localStorage.removeItem(LOCAL_STORAGE_KEY_YEARS);
     } catch (e) {
-      console.warn('Error clearing localStorage during reset:', e);
+      console.warn('Error clearing localStorage during reset:', sanitizeErrorForLog(e));
     }
 
     FinanceStorageService.cloudMemoryBudgets.clear();
@@ -853,7 +853,7 @@ export class FinanceStorageService {
         }
         return normalized;
       } catch (e) {
-        console.error('Failed to parse cached budget for year', year, e);
+        console.error('Failed to parse cached budget for year', year, sanitizeErrorForLog(e));
       }
     }
 
@@ -963,7 +963,7 @@ export class FinanceStorageService {
           return parsed;
         }
       } catch (e) {
-        console.error('Failed to parse known years', e);
+        console.error('Failed to parse known years', sanitizeErrorForLog(e));
       }
     }
     return [...FinanceStorageService.cloudMemoryKnownYears];
@@ -1031,7 +1031,7 @@ export class FinanceStorageService {
         }
         return parsed;
       } catch (e) {
-        console.error('Failed to parse cached savings ledger', e);
+        console.error('Failed to parse cached savings ledger', sanitizeErrorForLog(e));
       }
     }
 

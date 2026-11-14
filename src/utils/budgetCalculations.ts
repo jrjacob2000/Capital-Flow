@@ -670,6 +670,46 @@ export function computePaymentChannelSubtotals(rows: ExpenseSubtotalRowInput[]):
 }
 
 /**
+ * Returns the pending/scheduled amount allocated to a specific payment channel for a row,
+ * supporting both single-channel and 6-channel split payment breakdowns.
+ */
+export function getPendingChannelAmountForRow(
+  row: ExpenseSubtotalRowInput,
+  method: PaymentMethod
+): number {
+  if (row.hasActualCost && row.status === 'Paid') return 0;
+  if (row.paymentBreakdown) {
+    const cash = row.paymentBreakdown.cash || 0;
+    const cc = row.paymentBreakdown.creditCard || 0;
+    const gcash = row.paymentBreakdown.gcashTransfer || 0;
+    const kath = row.paymentBreakdown.kathAccount || 0;
+    const check = row.paymentBreakdown.checkAccount || 0;
+    const bank = row.paymentBreakdown.bankTransfer || 0;
+    const splitSum = cash + cc + gcash + kath + check + bank;
+    if (splitSum !== 0) {
+      switch (method) {
+        case 'Cash':
+          return cash;
+        case 'Credit Card':
+          return cc;
+        case 'GCash Transfer':
+          return gcash;
+        case 'Kath Account':
+          return kath;
+        case 'Checking Account':
+          return check;
+        case 'Bank Transfer':
+          return bank;
+        default:
+          return 0;
+      }
+    }
+  }
+  const effectiveMethod = row.paymentMethod || 'Bank Transfer';
+  return effectiveMethod === method ? getPendingAmountToPay(row) : 0;
+}
+
+/**
  * Computes Estimated, Paid (Actual), Projected (Paid + Pending Actual/Estimates), and Variance
  * for a filtered selection of expense rows, respecting split payment channels when filtered by method.
  */
@@ -702,7 +742,9 @@ export function computeFilteredExpenseSubtotals(
       actual += settledAmt;
       projected += settledAmt;
     } else {
-      const pendingAmt = getPendingAmountToPay(r);
+      const pendingAmt = paymentMethodFilter
+        ? getPendingChannelAmountForRow(r, paymentMethodFilter)
+        : getPendingAmountToPay(r);
       pendingToPay += pendingAmt;
       projected += pendingAmt;
     }
@@ -864,6 +906,13 @@ export function computePeriodProjectedSurplus(
           matchedEntry.actualCost !== undefined
             ? matchedEntry.actualCost
             : (matchedEntry.amount || 0);
+        const isUneditedAutoFillPlaceholder =
+          matchedEntry.reference === 'Auto-filled from template' &&
+          matchedEntry.status === 'Pending' &&
+          act === 0;
+        if (isUneditedAutoFillPlaceholder && !shouldDisplay) {
+          return;
+        }
         const isPaid = matchedEntry.status === 'Paid';
         if (isPaid) hasPaidEntries = true;
 
