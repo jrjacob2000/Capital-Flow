@@ -17,6 +17,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { EntryFrequency, DriveSyncStatus, APP_VERSION } from '../types/finance';
+import { effectiveProjectId, isDevFirebaseEnvironment } from '../services/firebase';
 
 interface HeaderProps {
   currentYear: number;
@@ -87,9 +88,17 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className="hidden sm:inline-block text-[9px] sm:text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200/80 dark:border-slate-700/80 shrink-0">
                     v{APP_VERSION}
                   </span>
+                  {isDevFirebaseEnvironment && effectiveProjectId && (
+                    <span
+                      title={`Development Firebase Project: ${effectiveProjectId}`}
+                      className="hidden sm:inline-block text-[9px] sm:text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-700/80 shrink-0"
+                    >
+                      DEV DB
+                    </span>
+                  )}
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden xl:block whitespace-nowrap truncate">
-                  Budget, Funds, Loans &amp; Capital Ledger
+                  Budget, Goal Funds, Bank Accounts &amp; Loans
                 </p>
               </div>
             </div>
@@ -114,8 +123,7 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <span className="xl:hidden">Budget</span>
-                <span className="hidden xl:inline">Budget &amp; Entries</span>
+                <span>Budget</span>
               </button>
               <button
                 onClick={() => onSelectTab('savings')}
@@ -146,8 +154,7 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Cloud className="w-3.5 h-3.5" />
-                <span className="xl:hidden">Backup</span>
-                <span className="hidden xl:inline">Backup &amp; Restore</span>
+                <span>Backup</span>
               </button>
               <button
                 onClick={() => onSelectTab('help')}
@@ -307,6 +314,14 @@ export const Header: React.FC<HeaderProps> = ({
                             </span>
                           )}
                         </div>
+                        {effectiveProjectId && (
+                          <div
+                            className="text-[10px] font-mono text-slate-500 dark:text-slate-400 mt-0.5 truncate"
+                            title={effectiveProjectId}
+                          >
+                            {isDevFirebaseEnvironment ? 'Dev DB' : 'Prod DB'}: {effectiveProjectId}
+                          </div>
+                        )}
                         {driveStatus.lastFirebaseSyncedAt && (
                           <div className="text-[10px] text-slate-400 mt-0.5">
                             Last synced: {driveStatus.lastFirebaseSyncedAt}

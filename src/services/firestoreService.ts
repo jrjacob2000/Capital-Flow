@@ -229,6 +229,45 @@ export class FirestoreSyncService {
       ? String(payload.lastDriveBackupAt).slice(0, TIMESTAMP_STR_MAX_LENGTH)
       : undefined;
 
+    const buildCreateWorkspacePayload = () => {
+      const existingCached = workspaceMemoryCache.get(validUid)?.data;
+      const createDocPayload: Record<string, any> = {
+        ownerId: validUid,
+        activeYear: safeYear,
+        frequency: safeFreq,
+        currency: safeCurrency,
+        knownYears: safeKnownYears,
+        templateData:
+          safeTemplateData ||
+          existingCached?.templateData || {
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+            isPersonalizedTemplate: false,
+            customCategories: { expense: [], income: [], saving: [] },
+            itemTemplates: [],
+          },
+        ledgerData:
+          safeLedgerData ||
+          existingCached?.ledgerData || {
+            version: '1.0',
+            lastUpdated: new Date().toISOString(),
+            currency: safeCurrency,
+            initialCapital: 0,
+            currentTotalCapital: 0,
+            accounts: [],
+            transactions: [],
+            loans: [],
+          },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      if (safeDriveBackupAt || existingCached?.lastDriveBackupAt) {
+        createDocPayload.lastDriveBackupAt =
+          safeDriveBackupAt || existingCached?.lastDriveBackupAt;
+      }
+      return createDocPayload;
+    };
+
     notifyWriteStatus(true);
     try {
       let exists = knownExistingWorkspaces.has(validUid);
@@ -244,37 +283,9 @@ export class FirestoreSyncService {
 
       if (!exists) {
         try {
-          const createDocPayload: Record<string, any> = {
-            ownerId: validUid,
-            activeYear: safeYear,
-            frequency: safeFreq,
-            currency: safeCurrency,
-            knownYears: safeKnownYears,
-            templateData: safeTemplateData || {
-              version: '1.0.0',
-              lastUpdated: new Date().toISOString(),
-              isPersonalizedTemplate: false,
-              customCategories: { expense: [], income: [], saving: [] },
-              itemTemplates: [],
-            },
-            ledgerData: safeLedgerData || {
-              version: '1.0',
-              lastUpdated: new Date().toISOString(),
-              currency: safeCurrency,
-              initialCapital: 0,
-              currentTotalCapital: 0,
-              accounts: [],
-              transactions: [],
-              loans: [],
-            },
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          };
-          if (safeDriveBackupAt) {
-            createDocPayload.lastDriveBackupAt = safeDriveBackupAt;
-          }
-          await setDoc(docRef, createDocPayload);
+          await setDoc(docRef, buildCreateWorkspacePayload());
           knownExistingWorkspaces.add(validUid);
+          workspaceMemoryCache.delete(validUid);
         } catch (error) {
           handleFirestoreError(error, OperationType.CREATE, path);
         }
@@ -293,7 +304,19 @@ export class FirestoreSyncService {
             updateDocPayload.lastDriveBackupAt = safeDriveBackupAt;
           }
           await updateDoc(docRef, updateDocPayload);
-        } catch (error) {
+          workspaceMemoryCache.delete(validUid);
+        } catch (error: any) {
+          const errMsg = String(error?.code || error?.message || '').toLowerCase();
+          if (errMsg.includes('not-found') || errMsg.includes('no document to update')) {
+            try {
+              await setDoc(docRef, buildCreateWorkspacePayload());
+              knownExistingWorkspaces.add(validUid);
+              workspaceMemoryCache.delete(validUid);
+              return;
+            } catch (createErr) {
+              handleFirestoreError(createErr, OperationType.CREATE, path);
+            }
+          }
           handleFirestoreError(error, OperationType.UPDATE, path);
         }
       }
@@ -475,20 +498,26 @@ export class FirestoreSyncService {
         }
       }
 
+      const buildCreateBudgetPayload = () => ({
+        ownerId: validUid,
+        year: safeYear,
+        version: safeVersion,
+        lastUpdated: safeLastUpdated,
+        entryMode: safeEntryMode,
+        currency: safeCurrency,
+        budgetPayload,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
       if (!exists) {
         try {
-          await setDoc(docRef, {
-            ownerId: validUid,
-            year: safeYear,
-            version: safeVersion,
-            lastUpdated: safeLastUpdated,
-            entryMode: safeEntryMode,
-            currency: safeCurrency,
-            budgetPayload,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
+          await setDoc(docRef, buildCreateBudgetPayload());
           knownExistingBudgetDocs.add(cacheKey);
+          budgetMemoryCache.set(cacheKey, {
+            data: JSON.parse(JSON.stringify(budget)),
+            timestamp: Date.now(),
+          });
         } catch (error) {
           handleFirestoreError(error, OperationType.CREATE, path);
         }
@@ -502,7 +531,25 @@ export class FirestoreSyncService {
             budgetPayload,
             updatedAt: serverTimestamp(),
           });
-        } catch (error) {
+          budgetMemoryCache.set(cacheKey, {
+            data: JSON.parse(JSON.stringify(budget)),
+            timestamp: Date.now(),
+          });
+        } catch (error: any) {
+          const errMsg = String(error?.code || error?.message || '').toLowerCase();
+          if (errMsg.includes('not-found') || errMsg.includes('no document to update')) {
+            try {
+              await setDoc(docRef, buildCreateBudgetPayload());
+              knownExistingBudgetDocs.add(cacheKey);
+              budgetMemoryCache.set(cacheKey, {
+                data: JSON.parse(JSON.stringify(budget)),
+                timestamp: Date.now(),
+              });
+              return;
+            } catch (createErr) {
+              handleFirestoreError(createErr, OperationType.CREATE, path);
+            }
+          }
           handleFirestoreError(error, OperationType.UPDATE, path);
         }
       }
@@ -636,12 +683,14 @@ export class FirestoreSyncService {
   }
 
   /**
-   * Clears all in-memory hot caches (e.g. upon user sign-out).
+   * Clears all in-memory hot caches and existence flags (e.g. upon user sign-out or reset).
    */
   static clearMemoryCache(): void {
     workspaceMemoryCache.clear();
     budgetMemoryCache.clear();
     inFlightWorkspaceFetches.clear();
     inFlightBudgetFetches.clear();
+    knownExistingWorkspaces.clear();
+    knownExistingBudgetDocs.clear();
   }
 }

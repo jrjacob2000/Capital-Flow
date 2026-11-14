@@ -20,7 +20,10 @@ import {
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
   DEFAULT_SINKING_FUND_NAMES,
+  MONTH_NAMES,
+  BIWEEKLY_PERIODS,
 } from '../services/sampleData';
+import { computePeriodProjectedSurplus } from '../utils/budgetCalculations';
 import { CashflowChart } from './charts/CashflowChart';
 import { CapitalGrowthChart } from './charts/CapitalGrowthChart';
 import { CategoryDonutChart } from './charts/CategoryDonutChart';
@@ -70,7 +73,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     .filter((e) => e.type === 'saving' && e.status !== 'Pending')
     .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
 
-  const savingsRate = totalIncome > 0 ? (totalSavings / totalIncome) * 100 : 0;
+  // Active/current period resolution
+  const activePeriod = useMemo(() => {
+    try {
+      const saved = localStorage.getItem(`capitalflow_active_period_${budget.year}`);
+      if (saved) {
+        if (frequency === 'monthly' && MONTH_NAMES.includes(saved)) return saved;
+        if (frequency === 'bi-weekly' && BIWEEKLY_PERIODS.some((p) => p.id === saved)) return saved;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+    const currentCalendarYear = new Date().getFullYear();
+    const currentCalendarMonth = MONTH_NAMES[new Date().getMonth()] || 'Jan';
+    const currentBiWeeklyPeriod = `${currentCalendarMonth}-${new Date().getDate() <= 15 ? 'P1' : 'P2'}`;
+    if (budget.year === currentCalendarYear) {
+      return frequency === 'monthly' ? currentCalendarMonth : currentBiWeeklyPeriod;
+    }
+    if (budget.entries && budget.entries.length > 0) {
+      for (let i = MONTH_NAMES.length - 1; i >= 0; i--) {
+        const m = MONTH_NAMES[i];
+        const hasData = budget.entries.some((e) => e.period === m || e.period.startsWith(`${m}-`));
+        if (hasData) {
+          return frequency === 'monthly' ? m : `${m}-P1`;
+        }
+      }
+    }
+    return frequency === 'monthly' ? 'Jan' : 'Jan-P1';
+  }, [budget.year, budget.entries, frequency]);
+
+  // Current Period Projected Surplus (matching Budget Worksheet projected cashflow)
+  const currentPeriodProjectedMetrics = useMemo(() => {
+    return computePeriodProjectedSurplus(budget, activePeriod, frequency);
+  }, [budget, activePeriod, frequency]);
 
   // Average monthly living expense
   const activeExpenseMonths = Math.max(
@@ -447,6 +482,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const formatNumber = (num: number) =>
     new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
 
+  const handleNavigateToActivePeriodBudget = () => {
+    try {
+      localStorage.setItem(`capitalflow_active_period_${budget.year}`, activePeriod);
+    } catch {
+      // Ignore storage access errors
+    }
+    onNavigateToBudget();
+  };
+
   return (
     <div className="space-y-4 pb-6">
       {/* 1. Executive Capital & Net Worth Summary Card */}
@@ -456,7 +500,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div>
               <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium">
                 <Wallet className="w-3.5 h-3.5 shrink-0" />
-                <span>Total Savings Across {ledger.accounts.length} Accounts</span>
+                <span>Total Capital Across {ledger.accounts.length} Bank Accounts</span>
               </div>
               <div className="mt-1 flex flex-wrap items-baseline gap-2.5">
                 <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums tracking-tight">
@@ -478,12 +522,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {currencySymbol}{formatNumber(capitalGrowth)} ({capitalGrowthPct.toFixed(1)}%)
                 </span>
               </div>
-              {(loanSummary.borrowedRemaining > 0 || loanSummary.lentRemaining > 0) && (
-                <div className="mt-1 text-xs text-slate-300 font-mono tabular-nums">
-                  True Net Worth: <span className="font-semibold text-white">{currencySymbol}{formatNumber(loanSummary.trueNetWorth)}</span>
-                  <span className="text-slate-400 font-sans ml-1.5">(after loans &amp; receivables)</span>
-                </div>
-              )}
+              <div className="mt-2.5 pt-2 border-t border-indigo-900/60 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+                {(loanSummary.borrowedRemaining > 0 || loanSummary.lentRemaining > 0) && (
+                  <div className="text-slate-300 font-mono tabular-nums">
+                    True Net Worth: <span className="font-semibold text-white">{currencySymbol}{formatNumber(loanSummary.trueNetWorth)}</span>
+                    <span className="text-slate-400 font-sans ml-1">(after loans)</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleNavigateToActivePeriodBudget}
+                  title={`View ${activePeriod} Budget Sheet`}
+                  className="flex items-center gap-1.5 font-mono tabular-nums text-left hover:text-white transition-colors cursor-pointer group"
+                >
+                  <span className="text-indigo-200/80 font-sans group-hover:text-indigo-100">
+                    Current {activePeriod} Projected Surplus:
+                  </span>
+                  <span
+                    className={`font-semibold ${
+                      currentPeriodProjectedMetrics.projectedSurplus >= 0
+                        ? 'text-emerald-300'
+                        : 'text-rose-300'
+                    }`}
+                  >
+                    {currentPeriodProjectedMetrics.projectedSurplus >= 0 ? '+' : ''}
+                    {currencySymbol}{formatNumber(currentPeriodProjectedMetrics.projectedSurplus)}
+                  </span>
+                  <ChevronRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-0.5 transition-transform" />
+                </button>
+              </div>
             </div>
 
             {/* Quick Action */}
@@ -525,14 +592,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="p-3 sm:p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
           >
             <div className="flex items-center justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              <span>Unassigned Cash</span>
+              <span>General Reserves (Unassigned)</span>
               <Landmark className="w-3.5 h-3.5 text-amber-500 shrink-0" />
             </div>
             <div className="mt-1 text-sm sm:text-base font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400 truncate">
               {currencySymbol}{formatNumber(unallocatedCashReserve)}
             </div>
             <div className="text-[10px] text-slate-400 truncate">
-              Available to assign to goals
+              Available to assign to Goal Funds
             </div>
           </div>
 
@@ -597,9 +664,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-
-
-      {/* 3. At-A-Glance Priority Lists: Top Funds/Accounts & Active Loans */}
+      {/* 2. At-A-Glance Priority Lists: Top Funds/Accounts & Active Loans */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Left: Compact Funds & Accounts Switcher */}
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-4 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between h-auto">
@@ -626,7 +691,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       : 'text-slate-600 dark:text-slate-400'
                   }`}
                 >
-                  Accounts ({ledger.accounts.length})
+                  Bank Accounts ({ledger.accounts.length})
                 </button>
               </div>
 
@@ -885,6 +950,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               entries={budget.entries}
               frequency={frequency}
               currencySymbol={currencySymbol}
+              activePeriod={activePeriod}
             />
           )}
           {activeChartTab === 'breakdown' && (

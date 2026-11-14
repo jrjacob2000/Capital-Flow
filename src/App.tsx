@@ -40,6 +40,8 @@ import {
   isDriveTokenExpired,
   getBrowserEnvironmentInfo,
   isMissingInitialStateOrStorageError,
+  isDevFirebaseEnvironment,
+  sanitizeErrorForLog,
   auth,
 } from './services/firebase';
 import { FirestoreSyncService } from './services/firestoreService';
@@ -322,8 +324,13 @@ export default function App() {
           setAvailableYears(FinanceStorageService.getKnownYears());
         } else {
           // First-time Firebase Workspace setup for this user!
-          // If the user has an optional Google Drive backup and local is starter data, check Drive first so we migrate their Drive data into Firebase automatically
-          if (optionalDriveToken && (isDefaultStarterBudget(localBudgetNow) || isDefaultStarterLedger(localLedgerNow))) {
+          // In production, if the user has an optional Google Drive backup and local is starter data, check Drive first so we migrate their Drive data into Firebase automatically.
+          // In development (isDevFirebaseEnvironment), skip auto-pulling Drive backups on initial sign-in so Dev DB stays isolated from Production Drive backups.
+          if (
+            !isDevFirebaseEnvironment &&
+            optionalDriveToken &&
+            (isDefaultStarterBudget(localBudgetNow) || isDefaultStarterLedger(localLedgerNow))
+          ) {
             try {
               const { files } = await FinanceStorageService.organizeFilesIntoFolder(optionalDriveToken);
               setDriveFiles(files);
@@ -381,7 +388,7 @@ export default function App() {
                 }
               }
             } catch (driveErr) {
-              console.warn('Optional Drive migration check skipped:', driveErr);
+              console.warn('Optional Drive migration check skipped:', sanitizeErrorForLog(driveErr));
             }
           }
 
@@ -413,7 +420,7 @@ export default function App() {
           setHasUnsavedChanges(false);
         }
       } catch (err) {
-        console.warn('Firebase Cloud DB initial sync note:', err);
+        console.warn('Firebase Cloud DB initial sync note:', sanitizeErrorForLog(err));
         FinanceStorageService.setCloudSessionActive(true);
         isInitialCloudHydrationDoneRef.current = true;
         setDriveStatus((prev) => ({
@@ -480,8 +487,10 @@ export default function App() {
         }
       },
       () => {
-        FinanceStorageService.setCloudSessionActive(false);
+        FirestoreSyncService.clearMemoryCache();
+        FinanceStorageService.clearCloudSessionMemory();
         isInitialCloudHydrationDoneRef.current = false;
+        setDriveFiles([]);
         setDriveStatus((prev) => ({
           ...prev,
           isSignedIn: false,
@@ -530,6 +539,25 @@ export default function App() {
               skipFirestoreWrite: true,
             });
             setLedger(syncedLedger);
+          }
+        }
+      }
+      if (remoteWorkspace.templateData && !isDefaultStarterTemplateData(remoteWorkspace.templateData)) {
+        const localBudgetNow = FinanceStorageService.loadLocalBudget(currentYear);
+        const localTemplateNow = FinanceStorageService.loadLocalTemplateData(localBudgetNow);
+        if (remoteWorkspace.templateData.lastUpdated !== localTemplateNow.lastUpdated) {
+          const tplCmp = FinanceStorageService.compareTimestamps(
+            localTemplateNow.lastUpdated,
+            remoteWorkspace.templateData.lastUpdated || remoteWorkspace.updatedAtIso
+          );
+          if (tplCmp === 'drive_newer') {
+            const updatedBudget = FinanceStorageService.applyTemplateDataToBudget(
+              remoteWorkspace.templateData,
+              localBudgetNow,
+              { skipFirestoreWrite: true }
+            );
+            setBudget(updatedBudget);
+            setTemplateData(FinanceStorageService.loadLocalTemplateData(updatedBudget));
           }
         }
       }
@@ -622,7 +650,7 @@ export default function App() {
             folderName: folder.name,
           }));
         } catch (driveErr) {
-          console.warn('Optional Google Drive folder check skipped:', driveErr);
+          console.warn('Optional Google Drive folder check skipped:', sanitizeErrorForLog(driveErr));
         }
       }
 
@@ -637,7 +665,7 @@ export default function App() {
         setDriveStatus((prev) => ({ ...prev, isSyncing: false, syncMessage: null }));
         return;
       }
-      console.warn('Sign in note:', err);
+      console.warn('Sign in note:', sanitizeErrorForLog(err));
       setDriveStatus((prev) => ({
         ...prev,
         isSyncing: false,
@@ -739,9 +767,14 @@ export default function App() {
   const handleSignOut = async () => {
     FirestoreSyncService.clearMemoryCache();
     await logout();
-    FinanceStorageService.setCloudSessionActive(false);
+    FinanceStorageService.clearCloudSessionMemory();
     FinanceStorageService.clearDriveFolderCache();
     isInitialCloudHydrationDoneRef.current = false;
+    setDriveFiles([]);
+    const guestBudget = FinanceStorageService.loadLocalBudget(currentYear);
+    setBudget(guestBudget);
+    setLedger(FinanceStorageService.loadLocalSavingsLedger());
+    setTemplateData(FinanceStorageService.loadLocalTemplateData(guestBudget));
     setDriveStatus((prev) => ({
       ...prev,
       isSignedIn: false,
@@ -790,7 +823,7 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('Could not fetch year from Firebase Firestore:', err);
+        console.warn('Could not fetch year from Firebase Firestore:', sanitizeErrorForLog(err));
       }
     }
   };
@@ -1542,7 +1575,7 @@ export default function App() {
               ledgerData: cleanLedger,
             });
           } catch (err) {
-            console.warn('Could not sync blank reset state to Firestore:', err);
+            console.warn('Could not sync blank reset state to Firestore:', sanitizeErrorForLog(err));
           }
         }
         setConfirmationModal((m) => ({ ...m, isOpen: false }));
@@ -2254,7 +2287,7 @@ export default function App() {
 
       showToast('Data refreshed');
     } catch (err: any) {
-      console.warn('Soft refresh failed:', err);
+      console.warn('Soft refresh failed:', sanitizeErrorForLog(err));
       showToast('Refresh complete');
     }
   }, [currentYear, driveStatus.isSignedIn, hydrateOrSyncFirebaseWorkspace]);
@@ -2978,7 +3011,10 @@ export default function App() {
                   }
                   setHasUnsavedChanges(false);
                 } catch (err) {
-                  console.warn('Could not sync restored full backup to Firestore:', err);
+                  console.warn(
+                    'Could not sync restored full backup to Firestore:',
+                    sanitizeErrorForLog(err)
+                  );
                 }
               }
               showToast(`Restored full backup (${restoredYears.length} budget year${restoredYears.length > 1 ? 's' : ''}, templates & ledger)!`, 'success');

@@ -56,6 +56,7 @@ import {
   computeCarryOverSurplus,
   computeFilteredExpenseSubtotals,
   computePaymentChannelSubtotals,
+  getPendingAmountToPay,
   isTemplateExcludedInPeriod,
   resolveSyncedEntryAndTemplateAmounts,
   shouldTemplateDisplayInBudget,
@@ -536,6 +537,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           return;
         }
 
+        const matchedTargetAcc =
+          (matchedEntry.savingAccountId &&
+            accounts.find((a) => a.id === matchedEntry.savingAccountId)) ||
+          (tpl.defaultSavingAccountId &&
+            accounts.find((a) => a.id === tpl.defaultSavingAccountId)) ||
+          (matchedEntry.type === 'saving' || tpl.type === 'saving' ? accounts[0] : undefined);
+
         const row: SheetRowItem = {
           id: matchedEntry.id,
           isVirtualEstimate: false,
@@ -553,8 +561,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           reference: matchedEntry.reference,
           date: matchedEntry.date,
           toBeWithdrawn: Boolean(matchedEntry.toBeWithdrawn || tpl.toBeWithdrawn),
-          savingAccountId: matchedEntry.savingAccountId,
-          savingAccountName: matchedEntry.savingAccountName,
+          savingAccountId: matchedEntry.savingAccountId || matchedTargetAcc?.id,
+          savingAccountName: matchedEntry.savingAccountName || matchedTargetAcc?.name,
         };
 
         if (tpl.type === 'income') {
@@ -612,6 +620,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         const act = entry.actualCost ?? entry.amount ?? 0;
         const diff = entry.type === 'income' ? act - est : est - act;
 
+        const customTargetAcc =
+          (entry.savingAccountId && accounts.find((a) => a.id === entry.savingAccountId)) ||
+          (entry.type === 'saving' ? accounts[0] : undefined);
+
         const row: SheetRowItem = {
           id: entry.id,
           isVirtualEstimate: false,
@@ -628,8 +640,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           reference: entry.reference,
           date: entry.date,
           toBeWithdrawn: Boolean(entry.toBeWithdrawn),
-          savingAccountId: entry.savingAccountId,
-          savingAccountName: entry.savingAccountName,
+          savingAccountId: entry.savingAccountId || customTargetAcc?.id,
+          savingAccountName: entry.savingAccountName || customTargetAcc?.name,
         };
 
         if (entry.type === 'income') {
@@ -703,11 +715,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     : remainingExtraEstimated;
 
   const projectedIncomeTotal = unifiedIncomeRows.reduce(
-    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : r.estimatedCost),
+    (sum, r) =>
+      sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : getPendingAmountToPay(r)),
     0
   );
   const projectedExpenseTotal = unifiedExpenseRows.reduce(
-    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : r.estimatedCost),
+    (sum, r) =>
+      sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : getPendingAmountToPay(r)),
+    0
+  );
+  const totalPendingExpenseToPay = unifiedExpenseRows.reduce(
+    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? 0 : getPendingAmountToPay(r)),
     0
   );
   const projectedRemainingAll = projectedIncomeTotal - projectedExpenseTotal;
@@ -745,19 +763,25 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   };
 
   const getActivePaymentChannels = (entry: SheetRowItem): { label: string; amount: number }[] => {
-    if (!entry.hasActualCost || entry.status !== 'Paid') return [];
-    const channels: { label: string; amount: number }[] = [
-      { label: 'Cash', amount: getMethodAmount(entry, 'Cash') },
-      { label: 'Credit Card', amount: getMethodAmount(entry, 'Credit Card') },
-      { label: 'GCash', amount: getMethodAmount(entry, 'GCash Transfer') },
-      { label: 'Kath Acct', amount: getMethodAmount(entry, 'Kath Account') },
-      { label: 'Check Acct', amount: getMethodAmount(entry, 'Checking Account') },
-      { label: 'Bank Transfer', amount: getMethodAmount(entry, 'Bank Transfer') },
-    ].filter((c) => c.amount !== 0);
-    if (channels.length === 0 && entry.actualCost !== 0) {
-      return [{ label: entry.paymentMethod || 'Bank Transfer', amount: entry.actualCost }];
+    if (entry.paymentBreakdown) {
+      const channels: { label: string; amount: number }[] = [
+        { label: 'Cash', amount: entry.paymentBreakdown.cash || 0 },
+        { label: 'Credit Card', amount: entry.paymentBreakdown.creditCard || 0 },
+        { label: 'GCash', amount: entry.paymentBreakdown.gcashTransfer || 0 },
+        { label: 'Kath Acct', amount: entry.paymentBreakdown.kathAccount || 0 },
+        { label: 'Check Acct', amount: entry.paymentBreakdown.checkAccount || 0 },
+        { label: 'Bank Transfer', amount: entry.paymentBreakdown.bankTransfer || 0 },
+      ].filter((c) => c.amount !== 0);
+      if (channels.length > 0) return channels;
     }
-    return channels;
+    const effectiveAmt =
+      entry.hasActualCost && (entry.status === 'Paid' || entry.actualCost !== 0)
+        ? entry.actualCost
+        : entry.estimatedCost;
+    if (effectiveAmt !== 0) {
+      return [{ label: entry.paymentMethod || 'Bank Transfer', amount: effectiveAmt }];
+    }
+    return [];
   };
 
   const sortedIncomeRows = useMemo(() => {
@@ -778,13 +802,25 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         case 'estimated':
           return (a.estimatedCost - b.estimatedCost) * mult;
         case 'actual': {
-          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -999999999;
-          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -999999999;
+          const actA =
+            a.hasActualCost && (a.status === 'Paid' || a.actualCost !== 0)
+              ? a.actualCost
+              : getPendingAmountToPay(a);
+          const actB =
+            b.hasActualCost && (b.status === 'Paid' || b.actualCost !== 0)
+              ? b.actualCost
+              : getPendingAmountToPay(b);
           return (actA - actB) * mult;
         }
         case 'variance': {
-          const varA = a.hasActualCost && a.status === 'Paid' ? a.actualCost - a.estimatedCost : -999999999;
-          const varB = b.hasActualCost && b.status === 'Paid' ? b.actualCost - b.estimatedCost : -999999999;
+          const varA =
+            a.hasActualCost && (a.status === 'Paid' || a.actualCost !== 0)
+              ? a.actualCost - a.estimatedCost
+              : -999999999;
+          const varB =
+            b.hasActualCost && (b.status === 'Paid' || b.actualCost !== 0)
+              ? b.actualCost - b.estimatedCost
+              : -999999999;
           return (varA - varB) * mult;
         }
         case 'reference':
@@ -842,14 +878,26 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           return diff !== 0 ? diff * mult : a.item.localeCompare(b.item);
         }
         case 'actual': {
-          const actA = a.hasActualCost && a.status === 'Paid' ? a.actualCost : -999999999;
-          const actB = b.hasActualCost && b.status === 'Paid' ? b.actualCost : -999999999;
+          const actA =
+            a.hasActualCost && (a.status === 'Paid' || a.actualCost !== 0)
+              ? a.actualCost
+              : getPendingAmountToPay(a);
+          const actB =
+            b.hasActualCost && (b.status === 'Paid' || b.actualCost !== 0)
+              ? b.actualCost
+              : getPendingAmountToPay(b);
           const diff = actA - actB;
           return diff !== 0 ? diff * mult : (a.estimatedCost - b.estimatedCost) * mult;
         }
         case 'variance': {
-          const varA = a.hasActualCost && a.status === 'Paid' ? a.estimatedCost - a.actualCost : -999999999;
-          const varB = b.hasActualCost && b.status === 'Paid' ? b.estimatedCost - b.actualCost : -999999999;
+          const varA =
+            a.hasActualCost && (a.status === 'Paid' || a.actualCost !== 0)
+              ? a.estimatedCost - a.actualCost
+              : -999999999;
+          const varB =
+            b.hasActualCost && (b.status === 'Paid' || b.actualCost !== 0)
+              ? b.estimatedCost - b.actualCost
+              : -999999999;
           const diff = varA - varB;
           return diff !== 0 ? diff * mult : (b.estimatedCost - a.estimatedCost);
         }
@@ -881,12 +929,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     estimated: filteredExpenseEstimated,
     actual: filteredExpenseActual,
     projected: filteredExpenseProjected,
+    pendingToPay: filteredExpensePendingToPay,
   } = useMemo(
     () => computeFilteredExpenseSubtotals(filteredExpenseRows, paymentMethodFilter),
     [filteredExpenseRows, paymentMethodFilter]
   );
 
-  // Breakdown by payment methods (Paid actuals and Projected = Paid actuals + Pending estimates)
+  // Breakdown by payment methods (Paid actuals and Projected = Paid actuals + Pending actuals/estimates)
   const { paidTotals: paymentTotals, projectedTotals: projectedPaymentTotals } = useMemo(
     () => computePaymentChannelSubtotals(unifiedExpenseRows),
     [unifiedExpenseRows]
@@ -1642,10 +1691,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           </div>
         </div>
 
-        {/* CARD 2: TOTAL EXPENSES & SAVINGS */}
+        {/* CARD 2: TOTAL EXPENSES & GOAL FUNDS */}
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-            <span className="font-semibold uppercase tracking-wider truncate">Outflow &amp; Funds</span>
+            <span className="font-semibold uppercase tracking-wider truncate">Expenses &amp; Goal Funds</span>
             <Receipt className="w-4 h-4 text-rose-500 shrink-0" />
           </div>
           <div className="text-xl font-bold font-mono text-rose-600 dark:text-rose-400 truncate">
@@ -1660,10 +1709,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           </div>
         </div>
 
-        {/* CARD 3: REMAINING TO SALARY */}
+        {/* CARD 3: REMAINING CASH */}
         <div className="bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl p-4 text-white shadow-md">
           <div className="flex items-center justify-between text-xs text-emerald-100 mb-1">
-            <span className="font-bold uppercase tracking-wider">Remaining to Salary ({selectedPeriod})</span>
+            <span className="font-bold uppercase tracking-wider">Remaining Cash ({selectedPeriod})</span>
             <Sparkles className="w-4 h-4 text-amber-300" />
           </div>
           <div className="text-xl font-black font-mono">
@@ -1783,7 +1832,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     const act = inc.actualCost;
                     const diff = inc.hasActualCost ? act - est : 0;
                     const isReceived = inc.hasActualCost && inc.status === 'Paid';
-                    const canQuickConfirm = !isReceived && (est > 0 || act > 0);
+                    const pendingIncomeAmount = getPendingAmountToPay(inc);
+                    const canQuickConfirm = !isReceived && (est > 0 || act !== 0);
                     const isExpanded = expandedIncomeRowId === inc.id;
                     return (
                       <div
@@ -1794,7 +1844,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           onClick={() => setExpandedIncomeRowId(isExpanded ? null : inc.id)}
                           className="px-3.5 py-2.5 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-colors cursor-pointer flex items-center justify-between gap-3"
                         >
-                          {/* Left: Clean Item Title + Unboxed Subtitle */}
+                          {/* Left: Clean Item Title */}
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
                               {isReceived ? (
@@ -1807,15 +1857,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               <span className="font-semibold text-xs text-slate-900 dark:text-white truncate">
                                 {inc.item}
                               </span>
-                            </div>
-                            <div className="pl-5 mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                              <span className="truncate">{inc.category}</span>
-                              {inc.reference && (
-                                <>
-                                  <span aria-hidden="true">·</span>
-                                  <span className="truncate">{inc.reference}</span>
-                                </>
-                              )}
                             </div>
                           </div>
 
@@ -1834,9 +1875,22 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   )}
                                 </>
                               ) : (
-                                <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                                  {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
-                                </div>
+                                <>
+                                  <div className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                                    {pendingIncomeAmount !== 0
+                                      ? `${currencySymbol}${formatNumber(pendingIncomeAmount)}`
+                                      : '—'}
+                                  </div>
+                                  {act !== 0 && est > 0 && est !== act ? (
+                                    <div className="text-[10px] text-slate-400">
+                                      Actual &middot; Est {currencySymbol}{formatNumber(est)}
+                                    </div>
+                                  ) : pendingIncomeAmount !== 0 ? (
+                                    <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-sans font-medium">
+                                      Actual to Receive
+                                    </div>
+                                  ) : null}
+                                </>
                               )}
                             </div>
 
@@ -1845,7 +1899,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 <button
                                   onClick={() => handleQuickConfirmEstimate(inc)}
                                   className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                                  title={`Confirm ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Received`}
+                                  title={`Confirm ${currencySymbol}${formatNumber(pendingIncomeAmount)} as Received`}
                                 >
                                   <Check className="w-3 h-3" />
                                   <span>Receive</span>
@@ -1863,18 +1917,20 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         </div>
 
                         {isExpanded && (
-                          <div className="px-3.5 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800/80 text-[11px] flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-150">
-                            <div className="flex flex-wrap items-center gap-2 font-mono text-slate-500 dark:text-slate-400">
-                              <span>Est: <strong className="text-slate-700 dark:text-slate-200">{currencySymbol}{formatNumber(est)}</strong></span>
-                              <span aria-hidden="true">·</span>
-                              <span>Actual: <strong className="text-emerald-600 dark:text-emerald-400">{inc.hasActualCost ? `${currencySymbol}${formatNumber(act)}` : '—'}</strong></span>
-                              {inc.hasActualCost && diff !== 0 && (
-                                <>
-                                  <span aria-hidden="true">·</span>
-                                  <span className={diff > 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                    {diff > 0 ? `+${currencySymbol}${formatNumber(diff)}` : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
-                                  </span>
-                                </>
+                          <div className="px-3.5 pb-2.5 pt-2 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800/80 text-[11px] flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-150">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
+                              <span>
+                                Category: <strong className="text-slate-700 dark:text-slate-200">{inc.category}</strong>
+                              </span>
+                              {(isReceived || act !== 0) && est > 0 && diff !== 0 && (
+                                <span className={`font-mono ${diff > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold'}`}>
+                                  Variance: {diff > 0 ? `+${currencySymbol}${formatNumber(diff)}` : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                </span>
+                              )}
+                              {inc.reference && inc.reference !== 'Auto-filled from template' && (
+                                <span className="truncate max-w-[220px]">
+                                  Notes: <strong className="text-slate-700 dark:text-slate-200">{inc.reference}</strong>
+                                </span>
                               )}
                             </div>
 
@@ -2042,7 +2098,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     const act = inc.actualCost;
                     const diff = inc.hasActualCost ? act - est : 0;
                     const isReceived = inc.status === 'Paid' && inc.hasActualCost;
-                    const canQuickConfirm = !isReceived && (est > 0 || act > 0);
+                    const pendingIncomeAmount = getPendingAmountToPay(inc);
+                    const canQuickConfirm = !isReceived && (est > 0 || act !== 0);
 
                     return (
                       <tr
@@ -2110,18 +2167,38 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               )}
                             </div>
                           ) : canQuickConfirm ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleQuickConfirmEstimate(inc);
-                              }}
-                              className="inline-flex items-center gap-1 ml-auto px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans rounded-md text-[10px] md:text-xs font-semibold transition-colors cursor-pointer"
-                              title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Received`}
-                            >
-                              <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
-                              <span>Receive</span>
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              {pendingIncomeAmount !== 0 && (
+                                <div className="leading-tight text-right">
+                                  <div className="font-bold text-amber-700 dark:text-amber-300">
+                                    {currencySymbol}{formatNumber(pendingIncomeAmount)}
+                                  </div>
+                                  {act !== 0 && est > 0 && diff !== 0 && (
+                                    <div
+                                      className={`md:hidden text-[10px] ${
+                                        diff < 0 ? 'text-rose-500' : 'text-emerald-600'
+                                      }`}
+                                    >
+                                      {diff > 0
+                                        ? `+${currencySymbol}${formatNumber(diff)}`
+                                        : `-${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleQuickConfirmEstimate(inc);
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans rounded-md text-[10px] md:text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                                title={`Mark ${currencySymbol}${formatNumber(pendingIncomeAmount)} as Received`}
+                              >
+                                <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                <span>Receive</span>
+                              </button>
+                            </div>
                           ) : (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
                           )}
@@ -2129,7 +2206,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                         {/* Variance (Desktop Only) */}
                         <td className="hidden md:table-cell py-2.5 px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
-                          {!isReceived || est <= 0 ? (
+                          {(!isReceived && act === 0) || est <= 0 ? (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
                           ) : diff === 0 ? (
                             <span className="font-sans text-xs text-slate-400 dark:text-slate-500">On target</span>
@@ -2383,8 +2460,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-bold text-xs uppercase tracking-wider text-rose-700 dark:text-rose-400">
                     {frequency === 'monthly'
-                      ? `Expenses & Outflows (${selectedPeriod})`
-                      : `Bi-Weekly Outflows (${selectedPeriod})`}
+                      ? `Expenses & Goal Funds (${selectedPeriod})`
+                      : `Bi-Weekly Expenses & Goal Funds (${selectedPeriod})`}
                   </span>
                   <span className="text-[10px] text-slate-500 font-mono bg-rose-50 dark:bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-200 dark:border-rose-800">
                     {filteredExpenseRows.length} / {unifiedExpenseRows.length} lines
@@ -2414,10 +2491,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   <button
                     onClick={() => handleOpenAdd('saving')}
                     className="flex-1 sm:flex-initial justify-center px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-                    title="Add a fund or savings allocation for this period"
+                    title="Add a Goal Fund allocation for this period"
                   >
                     <PiggyBank className="w-3.5 h-3.5" />
-                    <span>Add Fund</span>
+                    <span>Add Goal Fund</span>
                   </button>
                 </div>
               </div>
@@ -2514,7 +2591,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       const diff = exp.hasActualCost ? est - act : est;
                       const isSaving = exp.type === 'saving' || exp.category === 'Savings';
                       const isPaid = exp.status === 'Paid' && exp.hasActualCost;
-                      const canQuickPay = !isPaid && (est > 0 || act > 0);
+                      const pendingAmountToPay = getPendingAmountToPay(exp);
+                      const canQuickPay = !isPaid && (est > 0 || act !== 0);
                       const isExpanded = expandedRowId === exp.id;
                       const activeChannels = getActivePaymentChannels(exp);
                       const channelLabel =
@@ -2533,7 +2611,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               : 'bg-white dark:bg-slate-900'
                           }`}
                         >
-                          {/* Clean 2-line Card Row: Left (Item / Category · Method), Right (Amount + Single Action) */}
+                          {/* Clean Card Row: Left (Item Title), Right (Amount + Single Action) */}
                           <div
                             onClick={() => setExpandedRowId(isExpanded ? null : exp.id)}
                             className="px-3.5 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer flex items-center justify-between gap-3"
@@ -2558,35 +2636,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   {exp.item}
                                 </span>
                               </div>
-
-                              {/* Line 2: Clean Unboxed Category · Channel / Fund Account */}
-                              <div className="pl-5 mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                                <span
-                                  className={`truncate ${
-                                    isSaving
-                                      ? 'font-medium text-indigo-600 dark:text-indigo-400'
-                                      : ''
-                                  }`}
-                                >
-                                  {exp.category}
-                                </span>
-                                {isPaid && channelLabel && (
-                                  <>
-                                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-600 shrink-0">·</span>
-                                    <span className="text-slate-600 dark:text-slate-300 shrink-0">
-                                      {channelLabel}
-                                    </span>
-                                  </>
-                                )}
-                                {isSaving && exp.savingAccountName && (
-                                  <>
-                                    <span aria-hidden="true" className="text-slate-300 dark:text-slate-600 shrink-0">·</span>
-                                    <span className="truncate text-indigo-600 dark:text-indigo-400">
-                                      {exp.savingAccountName}
-                                    </span>
-                                  </>
-                                )}
-                              </div>
                             </div>
 
                             {/* Right Side: Clean Amount + Pay (if pending) + Edit */}
@@ -2610,13 +2659,22 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                     )}
                                   </>
                                 ) : (
-                                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                                    {act > 0
-                                      ? `${currencySymbol}${formatNumber(act)}`
-                                      : est > 0
-                                      ? `${currencySymbol}${formatNumber(est)}`
-                                      : '—'}
-                                  </div>
+                                  <>
+                                    <div className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                                      {pendingAmountToPay !== 0
+                                        ? `${currencySymbol}${formatNumber(pendingAmountToPay)}`
+                                        : '—'}
+                                    </div>
+                                    {act !== 0 && est > 0 && est !== act ? (
+                                      <div className="text-[10px] text-slate-400">
+                                        Actual &middot; Est {currencySymbol}{formatNumber(est)}
+                                      </div>
+                                    ) : pendingAmountToPay !== 0 ? (
+                                      <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-sans font-medium">
+                                        Actual to Pay
+                                      </div>
+                                    ) : null}
+                                  </>
                                 )}
                               </div>
 
@@ -2625,7 +2683,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   <button
                                     onClick={() => handleQuickConfirmEstimate(exp)}
                                     className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                                    title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Paid`}
+                                    title={`Mark ${currencySymbol}${formatNumber(pendingAmountToPay)} as Paid`}
                                   >
                                     <Check className="w-3 h-3" />
                                     <span>Pay</span>
@@ -2642,27 +2700,59 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             </div>
                           </div>
 
-                          {/* Compact Expandable Details Bar */}
+                          {/* Expandable Details Bar: Category, Payment Mode, Bank Account, Actual (when Pending), Variance & Notes */}
                           {isExpanded && (
-                            <div className="px-3.5 pb-2.5 pt-1.5 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800 text-[11px] space-y-1.5 animate-in fade-in duration-150">
+                            <div className="px-3.5 pb-2.5 pt-2 bg-slate-50/70 dark:bg-slate-800/30 border-t border-slate-100 dark:border-slate-800 text-[11px] space-y-1.5 animate-in fade-in duration-150">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="flex flex-wrap items-center gap-2 font-mono text-slate-500 dark:text-slate-400">
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
                                   <span>
-                                    Est: <strong className="text-slate-700 dark:text-slate-200">{est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}</strong>
+                                    Category:{' '}
+                                    <strong
+                                      className={
+                                        isSaving
+                                          ? 'text-indigo-600 dark:text-indigo-400'
+                                          : 'text-slate-700 dark:text-slate-200'
+                                      }
+                                    >
+                                      {exp.category}
+                                    </strong>
                                   </span>
-                                  <span aria-hidden="true">·</span>
+
                                   <span>
-                                    Paid: <strong className="text-slate-900 dark:text-white">{isPaid ? `${currencySymbol}${formatNumber(act)}` : '—'}</strong>
+                                    Payment Mode:{' '}
+                                    <strong className="text-slate-700 dark:text-slate-200">
+                                      {activeChannels.length > 1
+                                        ? activeChannels
+                                            .map(
+                                              (c) =>
+                                                `${c.label} (${currencySymbol}${formatNumber(c.amount)})`
+                                            )
+                                            .join(' + ')
+                                        : channelLabel || exp.paymentMethod || 'Bank Transfer'}
+                                    </strong>
                                   </span>
-                                  {isPaid && est > 0 && diff !== 0 && (
-                                    <>
-                                      <span aria-hidden="true">·</span>
-                                      <span className={diff > 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                        {diff > 0
-                                          ? `Saved ${currencySymbol}${formatNumber(diff)}`
-                                          : `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`}
-                                      </span>
-                                    </>
+
+                                  {(isSaving || exp.savingAccountName) && (
+                                    <span>
+                                      Bank Account:{' '}
+                                      <strong className="text-indigo-600 dark:text-indigo-400">
+                                        {exp.savingAccountName || accounts[0]?.name || 'Primary Bank'}
+                                      </strong>
+                                    </span>
+                                  )}
+
+                                  {(isPaid || act !== 0) && est > 0 && diff !== 0 && (
+                                    <span
+                                      className={`font-mono ${
+                                        diff > 0
+                                          ? 'text-emerald-600 dark:text-emerald-400 font-bold'
+                                          : 'text-rose-600 dark:text-rose-400 font-bold'
+                                      }`}
+                                    >
+                                      {diff > 0
+                                        ? `Saved ${currencySymbol}${formatNumber(diff)}`
+                                        : `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`}
+                                    </span>
                                   )}
                                 </div>
 
@@ -2686,18 +2776,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 </div>
                               </div>
 
-                              {(activeChannels.length > 1 || exp.reference) && (
-                                <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400">
-                                  {activeChannels.length > 1 && (
-                                    <span>
-                                      Split: {activeChannels.map((c) => `${c.label} (${currencySymbol}${formatNumber(c.amount)})`).join(', ')}
-                                    </span>
-                                  )}
-                                  {exp.reference && (
-                                    <span className="truncate">
-                                      Ref: {exp.reference}
-                                    </span>
-                                  )}
+                              {exp.reference && exp.reference !== 'Auto-filled from template' && (
+                                <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                  Notes: <strong className="text-slate-700 dark:text-slate-200">{exp.reference}</strong>
                                 </div>
                               )}
                             </div>
@@ -2721,6 +2802,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <span className="text-indigo-700 dark:text-indigo-300 text-[11px]">
                         Paid {currencySymbol}{formatNumber(filteredExpenseActual)}
                       </span>
+                      {filteredExpensePendingToPay !== 0 && (
+                        <span className="text-amber-700 dark:text-amber-300 text-[11px]">
+                          To Pay {currencySymbol}{formatNumber(filteredExpensePendingToPay)}
+                        </span>
+                      )}
                       <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-xs font-bold">
                         Projected {currencySymbol}{formatNumber(filteredExpenseProjected)}
                       </span>
@@ -2736,8 +2822,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <span className="text-slate-500 font-normal text-[10px]">
                         Est {currencySymbol}{formatNumber(totalExpenseEstimated)}
                       </span>
+                      {totalPendingExpenseToPay !== 0 && (
+                        <span className="text-amber-700 dark:text-amber-300 text-[11px]">
+                          To Pay {currencySymbol}{formatNumber(totalPendingExpenseToPay)}
+                        </span>
+                      )}
                       <span className="text-rose-600 dark:text-rose-400 text-xs">
-                        {currencySymbol}{formatNumber(totalExpenseActual)}
+                        Paid {currencySymbol}{formatNumber(totalExpenseActual)}
                       </span>
                     </div>
                   </div>
@@ -2937,7 +3028,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     const diff = exp.hasActualCost ? est - act : est;
                     const isSaving = exp.type === 'saving' || exp.category === 'Savings';
                     const isPaid = exp.status === 'Paid' && exp.hasActualCost;
-                    const canQuickPay = !isPaid && (est > 0 || act > 0);
+                    const pendingAmountToPay = getPendingAmountToPay(exp);
+                    const canQuickPay = !isPaid && (est > 0 || act !== 0);
                     const activeChannels = getActivePaymentChannels(exp);
                     const categorySubtitle =
                       isSaving && exp.savingAccountName
@@ -3014,7 +3106,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           {est > 0 ? `${currencySymbol}${formatNumber(est)}` : '—'}
                         </td>
 
-                        {/* Column 4: Actual (Shows quick Pay button when pending, or Actual + mobile-only variance when paid) */}
+                        {/* Column 4: Actual (Shows Actual amount + quick Pay button when pending, or Actual + mobile-only variance when paid) */}
                         <td className="py-2 px-3 md:py-2.5 md:px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
                           {isPaid ? (
                             <div className="leading-tight">
@@ -3040,18 +3132,38 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               )}
                             </div>
                           ) : canQuickPay ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleQuickConfirmEstimate(exp);
-                              }}
-                              className="inline-flex items-center gap-1 ml-auto px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans rounded-md text-[10px] md:text-xs font-semibold transition-colors cursor-pointer"
-                              title={`Mark ${currencySymbol}${formatNumber(act > 0 ? act : est)} as Paid`}
-                            >
-                              <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
-                              <span>Pay</span>
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              {pendingAmountToPay !== 0 && (
+                                <div className="leading-tight text-right">
+                                  <div className="font-bold text-amber-700 dark:text-amber-300">
+                                    {currencySymbol}{formatNumber(pendingAmountToPay)}
+                                  </div>
+                                  {act !== 0 && est > 0 && diff !== 0 && (
+                                    <div
+                                      className={`md:hidden text-[10px] ${
+                                        diff < 0 ? 'text-rose-500' : 'text-emerald-600'
+                                      }`}
+                                    >
+                                      {diff < 0
+                                        ? `Over ${currencySymbol}${formatNumber(Math.abs(diff))}`
+                                        : `Saved ${currencySymbol}${formatNumber(diff)}`}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleQuickConfirmEstimate(exp);
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans rounded-md text-[10px] md:text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                                title={`Mark ${currencySymbol}${formatNumber(pendingAmountToPay)} as Paid`}
+                              >
+                                <Check className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                <span>Pay</span>
+                              </button>
+                            </div>
                           ) : (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
                           )}
@@ -3059,7 +3171,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                         {/* Column 5 (Desktop Only): Dedicated Variance Column */}
                         <td className="hidden md:table-cell py-2.5 px-4 text-right border-b border-slate-100 dark:border-slate-800/80">
-                          {!isPaid || est <= 0 ? (
+                          {(!isPaid && act === 0) || est <= 0 ? (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
                           ) : diff === 0 ? (
                             <span className="font-sans text-xs text-slate-400 dark:text-slate-500">On budget</span>
@@ -3080,19 +3192,21 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
                         {/* Column 6: Payment Mode */}
                         <td className="py-2 px-2.5 md:py-2.5 md:px-4 w-[90px] sm:w-[110px] max-w-[90px] sm:max-w-[110px] md:w-auto md:min-w-[150px] md:max-w-[240px] lg:max-w-[300px] font-sans text-[11px] md:text-xs text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800/80 truncate">
-                          {!isPaid || activeChannels.length === 0 ? (
+                          {activeChannels.length === 0 ? (
                             <span className="text-slate-300 dark:text-slate-600 font-mono">—</span>
                           ) : activeChannels.length === 1 ? (
                             <div
                               className="truncate"
                               title={
-                                exp.reference
+                                exp.reference && exp.reference !== 'Auto-filled from template'
                                   ? `${activeChannels[0].label} · ${exp.reference}`
                                   : activeChannels[0].label
                               }
                             >
                               {activeChannels[0].label}
-                              {exp.reference ? ` · ${exp.reference}` : ''}
+                              {exp.reference && exp.reference !== 'Auto-filled from template'
+                                ? ` · ${exp.reference}`
+                                : ''}
                             </div>
                           ) : (
                             <div
@@ -3153,6 +3267,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       </td>
                       <td className="py-2 px-3 md:py-2.5 md:px-4 text-right font-mono text-xs md:text-sm text-indigo-700 dark:text-indigo-300 border-b border-indigo-200/70 dark:border-indigo-900/60">
                         <div>Paid {currencySymbol}{formatNumber(filteredExpenseActual)}</div>
+                        {filteredExpensePendingToPay !== 0 && (
+                          <div className="text-[10px] md:text-xs font-semibold text-amber-700 dark:text-amber-300 mt-0.5">
+                            To Pay {currencySymbol}{formatNumber(filteredExpensePendingToPay)}
+                          </div>
+                        )}
                         <div className="text-[10px] md:text-xs font-bold text-indigo-900 dark:text-indigo-100 mt-0.5">
                           Proj {currencySymbol}{formatNumber(filteredExpenseProjected)}
                         </div>
@@ -3192,7 +3311,12 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       {currencySymbol}{formatNumber(totalExpenseEstimated)}
                     </td>
                     <td className="py-2 px-3 md:py-2.5 md:px-4 text-right text-rose-600 dark:text-rose-400 text-xs md:text-sm font-mono border-b border-slate-200/80 dark:border-slate-700">
-                      {currencySymbol}{formatNumber(totalExpenseActual)}
+                      <div>{currencySymbol}{formatNumber(totalExpenseActual)}</div>
+                      {totalPendingExpenseToPay !== 0 && (
+                        <div className="text-[10px] md:text-xs font-semibold text-amber-700 dark:text-amber-300 mt-0.5">
+                          To Pay {currencySymbol}{formatNumber(totalPendingExpenseToPay)}
+                        </div>
+                      )}
                     </td>
                     <td className="hidden md:table-cell py-2.5 px-4 text-right font-mono text-xs md:text-sm border-b border-slate-200/80 dark:border-slate-700">
                       {hasAnyExpenseRecorded && expenseDifference !== 0 ? (
@@ -3274,7 +3398,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         : isRowAction
                         ? 'Record Actual'
                         : modalType === 'saving'
-                        ? 'New Fund Allocation'
+                        ? 'New Goal Fund Entry'
                         : `New ${modalType.charAt(0).toUpperCase() + modalType.slice(1)}`}
                     </h3>
                     <span className="px-1.5 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-700 text-[10px] font-semibold text-slate-700 dark:text-slate-300 shrink-0">
@@ -3360,7 +3484,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                       }`}
                     >
-                      Funds
+                      Goal Fund
                     </button>
                   </div>
 
@@ -3451,7 +3575,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                   }`}
                 >
-                  Funds
+                  Goal Fund
                 </button>
               </div>
             </div>
@@ -3560,7 +3684,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   <div className="sm:col-span-7 min-w-0">
                     <div className="flex items-center justify-between gap-1 h-4 mb-1">
                       <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
-                        {modalType === 'saving' ? 'Target Fund' : 'Item / Description'}
+                        {modalType === 'saving' ? 'Goal Fund' : 'Item / Description'}
                       </label>
                       {modalType === 'saving' && isCreatingNewSinkingFund && (
                         <button
@@ -3620,7 +3744,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             </optgroup>
                           ));
                         })()}
-                        <option value="__CREATE_NEW_FUND__">+ New Sinking Fund...</option>
+                        <option value="__CREATE_NEW_FUND__">+ New Goal Fund...</option>
                       </select>
                     ) : (
                       <div className="space-y-1">
@@ -3910,8 +4034,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         <div className="min-w-0">
                           <div className="flex items-center justify-between gap-1 h-4 mb-1">
                             <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
-                              <span className="sm:hidden">Dest. Account</span>
-                              <span className="hidden sm:inline">Destination Account</span>
+                              <span className="sm:hidden">Bank Account</span>
+                              <span className="hidden sm:inline">Destination Bank Account</span>
                             </label>
                           </div>
                           <select

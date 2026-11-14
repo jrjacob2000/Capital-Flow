@@ -95,8 +95,8 @@ const HOW_TO_GUIDES: HowToItem[] = [
     summary: 'Keep separate annual budget sheets while carrying over your templates and funds ledger.',
     steps: [
       'Tap the Year selector dropdown (e.g., "2026") in the top navigation bar.',
-      'Select an existing year to switch, or tap "+ Add Year" to create the next year.',
-      'Your recurring Estimate Templates, Bank Accounts, Sinking Funds, and Loans carry over automatically.',
+      'Select an existing year to switch, or tap "Create New Year" to create the next year.',
+      'Your Recurring Templates, Bank Accounts, Goal Funds, and Loans carry over automatically.',
     ],
     actionLabel: 'Go to Dashboard',
     actionTab: 'dashboard',
@@ -111,8 +111,8 @@ const HOW_TO_GUIDES: HowToItem[] = [
     summary: 'Understand your real bank capital, earmarked goals, unassigned cash, and monthly runway.',
     steps: [
       'Open the "Dashboard" tab.',
-      'Check "Total Capital" at the top to see the combined balance across all your physical bank and e-wallet accounts.',
-      'Check "Assigned to Goal Funds" vs. "Unassigned Cash" to see how much of your bank money is reserved for specific goals versus free to spend.',
+      'Check "Total Capital Across Bank Accounts" at the top to see the combined balance across all your Bank Accounts.',
+      'Check "Assigned to Goal Funds" vs. "General Reserves (Unassigned)" to see how much of your bank money is reserved for specific Goal Funds versus free to assign.',
       'Review "Emergency Runway" to see how many months your current capital can cover your average monthly expenses.',
     ],
     tip: 'Dashboard settled totals only count budget items marked as "Paid". Pending items are excluded until settled.',
@@ -128,7 +128,7 @@ const HOW_TO_GUIDES: HowToItem[] = [
     steps: [
       'On the Dashboard, locate the "Cashflow Summary" card.',
       'Use the period selector dropdown to switch between "Full Year" or a specific month (e.g., "Nov").',
-      'Scroll down to the "Goal Funds / Accounts" and "Active Loans" cards to tap any item and jump straight to its ledger.',
+      'Scroll down to the "Goal Funds / Bank Accounts" and "Active Loans" cards to tap any item and jump straight to its ledger.',
     ],
     actionLabel: 'View Dashboard Charts',
     actionTab: 'dashboard',
@@ -139,15 +139,15 @@ const HOW_TO_GUIDES: HowToItem[] = [
     id: 'howto-add-budget-entry',
     category: 'budget',
     categoryLabel: 'Budget & Templates',
-    title: 'How to Add Income, Expenses & Savings Entries',
+    title: 'How to Add Income, Expenses & Goal Fund Entries',
     summary: 'Record planned bills or actual transactions in your selected month or cutoff.',
     steps: [
       'Open the "Budget" tab and tap your target period (e.g., "Nov" or "Nov-P1") in the period bar.',
-      'Tap "+ Add Income" (green), "+ Add Expense" (rose), or "+ Add Fund" (purple) in the section headers.',
-      'Select a Category, enter the Item name, and type your Planned Estimate and/or Actual Cost.',
-      'Choose a Payment Method (Cash, GCash, Credit Card, Bank Transfer, etc.) and tap "Save".',
+      'Tap "+ Add Income" (green) or "+ Add Expense / Goal Fund" in the section headers.',
+      'Select a Category, enter the Item / Goal Fund name, and type your Estimated and/or Actual amount.',
+      'Choose a Payment Channel (Cash, GCash Transfer, Credit Card, Bank Transfer, etc.) and tap "Save".',
     ],
-    actionLabel: 'Open Budget Sheet',
+    actionLabel: 'Open Budget',
     actionTab: 'budget',
   },
   {
@@ -157,9 +157,9 @@ const HOW_TO_GUIDES: HowToItem[] = [
     title: 'How to Mark Items as "Paid" vs. "Pending"',
     summary: 'Turn planned estimates into settled actuals that update your Dashboard, Funds, and Loans.',
     steps: [
-      'Find the item row in your Budget spreadsheet.',
-      'Tap the Status badge ("Pending" / "Paid") on the row, or tap the row to edit its Actual Cost and set Status to "Paid".',
-      'When marked "Paid", CapitalFlow locks in the Actual Cost (or uses the Estimated Cost if Actual is blank) and automatically triggers any linked Sinking Fund deposit or Loan payment.',
+      'Find the item row in your Budget.',
+      'Tap the "Pay" button on the row, or tap the row to edit its Actual amount and set Status to "Paid".',
+      'When marked "Paid", CapitalFlow locks in the Actual amount (or uses the Estimated amount if Actual is blank) and automatically triggers any linked Goal Fund deposit or Loan payment.',
     ],
     tip: 'If a bill was waived or cost ₱0 this month, type 0 in Actual Cost and mark it "Paid".',
     actionLabel: 'Go to Budget',
@@ -239,33 +239,33 @@ const HOW_TO_GUIDES: HowToItem[] = [
     actionTab: 'budget',
   },
 
-  // 4. FUNDS & ACCOUNTS
+  // 4. FUNDS & BANK ACCOUNTS
   {
     id: 'howto-add-sinking-fund',
     category: 'funds',
-    categoryLabel: 'Funds & Accounts',
-    title: 'How to Create a New Sinking Fund / Savings Goal (Mobile & Desktop)',
-    summary: 'Add a dedicated savings goal like Emergency Fund, Travel, Tuition, or Car Maintenance.',
+    categoryLabel: 'Goal Funds & Bank Accounts',
+    title: 'How to Create a New Goal Fund (Mobile & Desktop)',
+    summary: 'Add a dedicated Goal Fund like Emergency Fund, Travel, Tuition, or Car Maintenance.',
     steps: [
-      'Tap "Funds" (PiggyBank icon) on the navigation bar.',
-      'Tap "Reallocate" (to move existing cash into a new goal) or "+ Record" → "Deposit" (to add new money).',
-      'In the Goal Fund dropdown, scroll to the bottom and select "+ Create New Sinking Fund...".',
-      'Type your new goal name, enter the amount, and tap Save. Your new goal card will appear immediately.',
+      'Tap "Funds" on the navigation bar.',
+      'Tap "Reallocate" (to move existing General Reserves into a new goal) or "Deposit" (to add new money).',
+      'In the Goal Fund dropdown, scroll to the bottom and select "+ New Goal Fund...".',
+      'Type your new Goal Fund name, enter the amount, and tap Save. Your new Goal Fund card will appear immediately.',
     ],
-    tip: 'You can also create a new fund from the Budget tab by clicking "+ Add Fund" under Savings & Sinking Funds and selecting "+ New Sinking Fund...".',
-    actionLabel: 'Open Funds & Goals',
+    tip: 'You can also create a new Goal Fund from the Budget tab by opening the Add Entry modal, switching to "Goal Fund", and selecting "+ New Goal Fund...".',
+    actionLabel: 'Open Funds',
     actionTab: 'savings',
   },
   {
     id: 'howto-manage-sinking-funds',
     category: 'funds',
-    categoryLabel: 'Funds & Accounts',
-    title: 'How to Set Annual Goal Targets, Rename, or Merge Funds',
-    summary: 'Customize your Sinking Fund targets or combine duplicate fund names.',
+    categoryLabel: 'Goal Funds & Bank Accounts',
+    title: 'How to Set Annual Goal Fund Targets, Rename, or Merge Funds',
+    summary: 'Customize your Goal Fund targets or combine duplicate fund names.',
     steps: [
       'Open the "Funds" tab and make sure you are on the "Goal Funds" view.',
-      'Tap the "Manage Funds" button on the right side of the Goal Funds header.',
-      'From the modal, edit any fund’s Annual Target, rename a fund, or merge one fund into another.',
+      'Tap the "Manage Goal Funds" button on the right side of the Goal Funds header.',
+      'From the modal, edit any Goal Fund’s monthly/annual target, rename a fund, or merge one Goal Fund into another.',
     ],
     actionLabel: 'Manage Goal Funds',
     actionTab: 'savings',
@@ -273,13 +273,13 @@ const HOW_TO_GUIDES: HowToItem[] = [
   {
     id: 'howto-add-bank-account',
     category: 'funds',
-    categoryLabel: 'Funds & Accounts',
-    title: 'How to Add or Edit a Bank / E-Wallet Account (GCash, Maya, BPI)',
-    summary: 'Track where your physical money is stored and see which goals live inside each bank.',
+    categoryLabel: 'Goal Funds & Bank Accounts',
+    title: 'How to Add or Edit a Bank Account (GCash, Maya, BPI)',
+    summary: 'Track where your money is stored and see which Goal Funds live inside each Bank Account.',
     steps: [
-      'Open the "Funds" tab and switch to the "Accounts" sub-tab.',
-      'Tap "+ Add Account" (or the "+ Add Savings Account" card).',
-      'Enter the Account Name (e.g., Maya Savings, BPI, GCash), Account Type, APY interest rate, and current balance, then tap Save.',
+      'Open the "Funds" tab and switch to the "Bank Accounts" sub-tab.',
+      'Tap "+ Add Bank Account".',
+      'Enter the Account Name (e.g., Maya Savings, BPI, GCash), Category, APY interest rate, and opening balance, then tap Save.',
     ],
     actionLabel: 'Open Bank Accounts',
     actionTab: 'savings',
@@ -287,15 +287,15 @@ const HOW_TO_GUIDES: HowToItem[] = [
   {
     id: 'howto-record-ledger-transactions',
     category: 'funds',
-    categoryLabel: 'Funds & Accounts',
+    categoryLabel: 'Goal Funds & Bank Accounts',
     title: 'How to Record Deposits, Withdrawals, Interest Yields & Transfers',
-    summary: 'Log direct bank movements, high-yield interest earnings, or virtual goal reallocations.',
+    summary: 'Log direct bank movements, high-yield interest earnings, or Goal Fund reallocations.',
     steps: [
-      'In the "Funds" tab, tap "+ Record" at the top.',
-      'Choose the transaction type: "Deposit" (add cash), "Interest / Yield" (log bank interest earned), "Withdrawal" (spend from a fund), "Account Transfer" (move money between banks), or "Reallocate" (move money between goal funds without moving banks).',
-      'Select the Account and Sinking Fund Goal, enter the amount, and tap Save.',
+      'In the "Funds" tab, tap "Deposit", "Withdraw", "Transfer", or "Reallocate" at the top.',
+      'Choose the transaction mode: "Deposit" (add cash or Interest / Yield), "Withdraw" (spend from a Bank Account & Goal Fund), "Transfer" (move money between Bank Accounts), or "Reallocate" (move money between Goal Funds without moving Bank Accounts).',
+      'Select the Bank Account and Goal Fund, enter the amount, and tap Save.',
     ],
-    actionLabel: 'Open Funds Ledger',
+    actionLabel: 'Open Funds',
     actionTab: 'savings',
   },
 
@@ -322,11 +322,11 @@ const HOW_TO_GUIDES: HowToItem[] = [
     title: 'How to Link a Loan to Your Budget for Automatic Paydown',
     summary: 'Automatically deduct loan balances whenever you mark your monthly bill as "Paid".',
     steps: [
-      'When creating or editing a Loan in the "Loans" tab, enable "Sync with Recurring Budget Template" (or tap "Link to Budget" on an existing loan card).',
-      'Each period, your loan installment will appear in your Budget spreadsheet.',
+      'When creating or editing a Loan in the "Loans" tab, enable "Sync with Recurring Templates" (or tap "Link to Budget" on an existing loan card).',
+      'Each period, your loan installment will appear in your Budget.',
       'When you mark that budget row as "Paid", CapitalFlow automatically records the loan payment and reduces your remaining loan balance.',
     ],
-    tip: 'You can also record a one-off direct payment anytime by tapping "Record Payment" directly on the loan card.',
+    tip: 'You can also record a one-off payment or collection anytime by tapping "Record Payment" / "Record Collection" on the loan card—it defaults to recording in your Budget automatically.',
     actionLabel: 'Go to Loans',
     actionTab: 'loans',
   },
@@ -380,28 +380,28 @@ const QUICK_RULES = [
   {
     title: 'Pending vs. Paid',
     description:
-      'New budget items start as "Pending" (planned). Only items marked "Paid" count toward Dashboard settled totals, Sinking Fund auto-deposits, and Loan paydowns.',
+      'New budget items start as "Pending" (planned). Only items marked "Paid" count toward Dashboard settled totals, Goal Fund auto-deposits, and Loan paydowns.',
     badge: 'Rule #1',
     color: 'border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-200',
   },
   {
-    title: 'Physical Accounts vs. Goal Funds',
+    title: 'Bank Accounts vs. Goal Funds',
     description:
-      'Accounts (BPI, Maya, GCash) track WHERE your money is kept. Goal Funds (Emergency, Travel) track WHAT that money is reserved for.',
+      'Bank Accounts (BPI, Maya, GCash) track WHERE your money is stored. Goal Funds (Emergency, Travel) track WHAT that money is set aside for.',
     badge: 'Rule #2',
     color: 'border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/20 text-indigo-900 dark:text-indigo-200',
   },
   {
-    title: 'Unassigned / Free Cash',
+    title: 'General Reserves (Unassigned)',
     description:
-      'Total Bank Capital minus Assigned Goal Funds equals your Unassigned Cash—the amount you can freely allocate to new goals.',
+      'Total Capital minus Assigned Goal Funds equals your General Reserves (Unassigned)—the cash pool you can freely allocate to Goal Funds.',
     badge: 'Rule #3',
     color: 'border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200',
   },
   {
-    title: 'Remaining vs. Projected Net',
+    title: 'Remaining Cash vs. Projected Net',
     description:
-      '"Remaining to Salary" shows cash left from settled Paid items right now. "Projected Net" shows your expected end-of-period balance after all Pending bills are paid.',
+      '"Remaining Cash" shows cash left from settled Paid items right now. "Projected Net" shows your expected end-of-period balance after all Pending bills are paid.',
     badge: 'Rule #4',
     color: 'border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/20 text-purple-900 dark:text-purple-200',
   },
@@ -427,9 +427,9 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
     { id: 'setup', label: 'Getting Started', icon: <Sparkles className="w-3.5 h-3.5" /> },
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
     { id: 'budget', label: 'Budget & Templates', icon: <FileSpreadsheet className="w-3.5 h-3.5" /> },
-    { id: 'funds', label: 'Funds & Accounts', icon: <PiggyBank className="w-3.5 h-3.5" /> },
-    { id: 'loans', label: 'Loans & Debt', icon: <HandCoins className="w-3.5 h-3.5" /> },
-    { id: 'cloud', label: 'Cloud & Backups', icon: <Cloud className="w-3.5 h-3.5" /> },
+    { id: 'funds', label: 'Goal Funds & Bank Accounts', icon: <PiggyBank className="w-3.5 h-3.5" /> },
+    { id: 'loans', label: 'Loans', icon: <HandCoins className="w-3.5 h-3.5" /> },
+    { id: 'cloud', label: 'Backup & Cloud', icon: <Cloud className="w-3.5 h-3.5" /> },
   ];
 
   const filteredGuides = useMemo(() => {
@@ -471,7 +471,7 @@ export const HelpGuideView: React.FC<HelpGuideViewProps> = ({
               How to Use Every Feature in CapitalFlow
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-              Simple, step-by-step instructions for budgeting, sinking funds, bank accounts, loans, and cloud sync.
+              Simple, step-by-step instructions for your Budget, Goal Funds, Bank Accounts, Loans, and Backup.
             </p>
           </div>
         </div>

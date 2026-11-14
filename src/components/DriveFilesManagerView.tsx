@@ -39,6 +39,11 @@ import {
   CAPITALFLOW_DRIVE_FOLDER_NAME,
 } from '../services/driveService';
 import { FinanceStorageService } from '../services/storageService';
+import {
+  effectiveProjectId,
+  FIRESTORE_DATABASE_ID,
+  isDevFirebaseEnvironment,
+} from '../services/firebase';
 
 interface DriveFilesManagerViewProps {
   driveStatus: DriveSyncStatus;
@@ -325,6 +330,18 @@ export const DriveFilesManagerView: React.FC<DriveFilesManagerViewProps> = ({
                 <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-emerald-600 text-white shrink-0">
                   Primary Database
                 </span>
+                {effectiveProjectId && (
+                  <span
+                    title={`Firestore DB ID: ${FIRESTORE_DATABASE_ID}`}
+                    className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-bold shrink-0 border ${
+                      isDevFirebaseEnvironment
+                        ? 'bg-amber-50 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                        : 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                    }`}
+                  >
+                    {isDevFirebaseEnvironment ? 'DEV DB' : 'PROD DB'}: {effectiveProjectId}
+                  </span>
+                )}
                 {driveStatus.isSignedIn ? (
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
                     <CheckCircle2 className="w-3 h-3" />
@@ -341,8 +358,8 @@ export const DriveFilesManagerView: React.FC<DriveFilesManagerViewProps> = ({
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 break-words leading-relaxed">
                 {driveStatus.isSignedIn
-                  ? `Signed in as ${driveStatus.userName || driveStatus.userEmail}. All changes to your Annual Budget (${currentYear}), Estimate Templates, Sinking Funds, Bank Accounts, and Loans save directly and automatically to Firebase Firestore.`
-                  : 'Sign in with Google so every Create, Update, and Delete operation saves directly to your primary Firebase Firestore cloud database.'}
+                  ? `Signed in as ${driveStatus.userName || driveStatus.userEmail}. All changes to your Annual Budget (${currentYear}), Estimate Templates, Sinking Funds, Bank Accounts, and Loans save directly and automatically to Firebase Firestore (${effectiveProjectId || 'Cloud DB'}).`
+                  : `Sign in with Google so every Create, Update, and Delete operation saves directly to your primary Firebase Firestore cloud database (${effectiveProjectId || 'Cloud DB'}).`}
               </p>
             </div>
           </div>

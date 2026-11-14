@@ -19,13 +19,12 @@ import {
   memoryLocalCache,
 } from 'firebase/firestore';
 
-// Load local firebase-applet-config.json if present (e.g. in AI Studio),
-// without failing the build when the file is gitignored or running in Node tests.
+// Optional local firebase-applet-config.json loader (if present in local untriaged environments)
 const localConfigModules =
   typeof (import.meta as any).glob === 'function'
     ? (import.meta as any).glob('../../firebase-applet-config.json', { eager: true })
     : {};
-const localFileConfig =
+const localFileConfig: Record<string, string> =
   (localConfigModules['../../firebase-applet-config.json'] as { default?: Record<string, string> })
     ?.default ?? {};
 
@@ -41,6 +40,18 @@ const cleanEnvValue = (val: string | undefined): string => {
     return '';
   }
   return trimmed;
+};
+
+/**
+ * Redacts sensitive tokens, API keys, emails, and user workspace paths from error messages before logging.
+ */
+export const sanitizeErrorForLog = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+  return raw
+    .replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_API_KEY]')
+    .replace(/Bearer\s+[0-9A-Za-z\-._~+/]+=*/gi, 'Bearer [REDACTED_TOKEN]')
+    .replace(/workspaces\/[a-zA-Z0-9_\-]+/g, 'workspaces/[REDACTED_UID]')
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[REDACTED_EMAIL]');
 };
 
 export const resolveAuthDomain = (
@@ -65,35 +76,188 @@ export const resolveAuthDomain = (
   return fallback;
 };
 
-const viteEnv = (import.meta as any).env || {};
-const envProjectId = cleanEnvValue(viteEnv.VITE_FIREBASE_PROJECT_ID);
-const envConfig: FirebaseOptions = {
-  apiKey: cleanEnvValue(viteEnv.VITE_FIREBASE_API_KEY),
-  authDomain: resolveAuthDomain(viteEnv.VITE_FIREBASE_AUTH_DOMAIN, envProjectId),
-  projectId: envProjectId,
-  storageBucket: cleanEnvValue(viteEnv.VITE_FIREBASE_STORAGE_BUCKET),
-  messagingSenderId: cleanEnvValue(viteEnv.VITE_FIREBASE_MESSAGING_SENDER_ID),
-  appId: cleanEnvValue(viteEnv.VITE_FIREBASE_APP_ID),
+export const isDevelopmentEnvironment = (
+  currentHostname?: string,
+  viteMode?: { DEV?: boolean; PROD?: boolean; MODE?: string }
+): boolean => {
+  const host = (
+    currentHostname !== undefined
+      ? currentHostname
+      : typeof window !== 'undefined'
+        ? window.location.hostname
+        : ''
+  ).toLowerCase();
+
+  // Explicit production hostnames (e.g. GitHub Pages) always use Production DB
+  if (host.endsWith('.github.io')) {
+    return false;
+  }
+
+  // AI Studio preview URLs (*.run.app) and localhost always use Development DB
+  if (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.run.app') ||
+    host.includes('ais-dev-') ||
+    host.includes('ais-pre-')
+  ) {
+    return true;
+  }
+
+  const envObj = viteMode !== undefined ? viteMode : (import.meta as any).env || {};
+  if (typeof envObj.DEV === 'boolean') {
+    return envObj.DEV;
+  }
+  return envObj.MODE !== 'production';
 };
 
-const fileProjectId = localFileConfig.projectId || '';
-const fileConfig: FirebaseOptions = {
-  apiKey: localFileConfig.apiKey || '',
-  authDomain: resolveAuthDomain(localFileConfig.authDomain, fileProjectId),
-  projectId: fileProjectId,
-  storageBucket: localFileConfig.storageBucket || '',
-  messagingSenderId: localFileConfig.messagingSenderId || '',
-  appId: localFileConfig.appId || '',
+export interface ResolvedFirebaseEnvironmentConfig {
+  config: FirebaseOptions;
+  projectId: string;
+  databaseId: string;
+  isDevEnvironment: boolean;
+  configSource: 'dev_env' | 'applet_file' | 'prod_env' | 'unconfigured';
+}
+
+export const resolveFirebaseEnvironmentConfig = (options?: {
+  env?: Record<string, any>;
+  fileConfig?: Record<string, string>;
+  hostname?: string;
+}): ResolvedFirebaseEnvironmentConfig => {
+  const nodeEnv =
+    typeof process !== 'undefined' && process?.env ? process.env : {};
+  const rawEnv =
+    options?.env ?? {
+      ...nodeEnv,
+      ...((import.meta as any).env || {}),
+    };
+  const rawFile = options?.fileConfig ?? localFileConfig;
+  const isDev = isDevelopmentEnvironment(options?.hostname, rawEnv);
+
+  // 1. Development env vars (VITE_DEV_FIREBASE_*) — loaded from gitignored .env / .env.development
+  const devEnvProjectId = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_PROJECT_ID);
+  const devEnvApiKey = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_API_KEY);
+  const devEnvDbId = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_DATABASE_ID);
+  const devEnvAuthDomain = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_AUTH_DOMAIN);
+  const devEnvStorageBucket = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_STORAGE_BUCKET);
+  const devEnvMessagingSenderId = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_MESSAGING_SENDER_ID);
+  const devEnvAppId = cleanEnvValue(rawEnv.VITE_DEV_FIREBASE_APP_ID);
+
+  // 2. Optional local applet config file (if present)
+  const fileProjId = cleanEnvValue(rawFile.projectId);
+  const fileApiKey = cleanEnvValue(rawFile.apiKey);
+  const fileDbId = cleanEnvValue(rawFile.firestoreDatabaseId);
+
+  // 3. Production env vars (VITE_FIREBASE_*) — loaded in production builds
+  const prodEnvProjectId = cleanEnvValue(rawEnv.VITE_FIREBASE_PROJECT_ID);
+  const prodEnvApiKey = cleanEnvValue(rawEnv.VITE_FIREBASE_API_KEY);
+  const prodEnvDbId = cleanEnvValue(rawEnv.VITE_FIREBASE_DATABASE_ID);
+
+  const normalizeDbId = (dbId: string): string =>
+    dbId ? (dbId.toLowerCase() === 'default' ? '(default)' : dbId) : '(default)';
+
+  if (isDev) {
+    // In Development: use VITE_DEV_FIREBASE_* first
+    if (devEnvApiKey && devEnvProjectId) {
+      return {
+        config: {
+          apiKey: devEnvApiKey,
+          authDomain: resolveAuthDomain(devEnvAuthDomain, devEnvProjectId, options?.hostname),
+          projectId: devEnvProjectId,
+          storageBucket: devEnvStorageBucket || `${devEnvProjectId}.firebasestorage.app`,
+          messagingSenderId: devEnvMessagingSenderId,
+          appId: devEnvAppId,
+        },
+        projectId: devEnvProjectId,
+        databaseId: normalizeDbId(devEnvDbId),
+        isDevEnvironment: true,
+        configSource: 'dev_env',
+      };
+    }
+
+    if (fileApiKey && fileProjId) {
+      return {
+        config: {
+          apiKey: fileApiKey,
+          authDomain: resolveAuthDomain(rawFile.authDomain, fileProjId, options?.hostname),
+          projectId: fileProjId,
+          storageBucket:
+            cleanEnvValue(rawFile.storageBucket) || `${fileProjId}.firebasestorage.app`,
+          messagingSenderId: cleanEnvValue(rawFile.messagingSenderId),
+          appId: cleanEnvValue(rawFile.appId),
+        },
+        projectId: fileProjId,
+        databaseId: normalizeDbId(fileDbId),
+        isDevEnvironment: true,
+        configSource: 'applet_file',
+      };
+    }
+  }
+
+  // In Production (or when dev-specific config is not yet provided): use VITE_FIREBASE_* first, then fallback to fileConfig
+  if (prodEnvApiKey && prodEnvProjectId) {
+    return {
+      config: {
+        apiKey: prodEnvApiKey,
+        authDomain: resolveAuthDomain(
+          rawEnv.VITE_FIREBASE_AUTH_DOMAIN,
+          prodEnvProjectId,
+          options?.hostname
+        ),
+        projectId: prodEnvProjectId,
+        storageBucket:
+          cleanEnvValue(rawEnv.VITE_FIREBASE_STORAGE_BUCKET) ||
+          `${prodEnvProjectId}.firebasestorage.app`,
+        messagingSenderId: cleanEnvValue(rawEnv.VITE_FIREBASE_MESSAGING_SENDER_ID),
+        appId: cleanEnvValue(rawEnv.VITE_FIREBASE_APP_ID),
+      },
+      projectId: prodEnvProjectId,
+      databaseId: normalizeDbId(prodEnvDbId),
+      isDevEnvironment: isDev,
+      configSource: 'prod_env',
+    };
+  }
+
+  if (fileApiKey && fileProjId) {
+    return {
+      config: {
+        apiKey: fileApiKey,
+        authDomain: resolveAuthDomain(rawFile.authDomain, fileProjId, options?.hostname),
+        projectId: fileProjId,
+        storageBucket:
+          cleanEnvValue(rawFile.storageBucket) || `${fileProjId}.firebasestorage.app`,
+        messagingSenderId: cleanEnvValue(rawFile.messagingSenderId),
+        appId: cleanEnvValue(rawFile.appId),
+      },
+      projectId: fileProjId,
+      databaseId: normalizeDbId(fileDbId),
+      isDevEnvironment: isDev,
+      configSource: 'applet_file',
+    };
+  }
+
+  return {
+    config: {
+      apiKey: '',
+      authDomain: '',
+      projectId: '',
+      storageBucket: '',
+      messagingSenderId: '',
+      appId: '',
+    },
+    projectId: '',
+    databaseId: '(default)',
+    isDevEnvironment: isDev,
+    configSource: 'unconfigured',
+  };
 };
 
-export const effectiveProjectId = fileProjectId || envProjectId || '';
+const resolvedFirebaseEnv = resolveFirebaseEnvironmentConfig();
 
-const configuredDbId =
-  localFileConfig.firestoreDatabaseId || cleanEnvValue(viteEnv.VITE_FIREBASE_DATABASE_ID);
-
-export const FIRESTORE_DATABASE_ID = configuredDbId
-  ? (configuredDbId.toLowerCase() === 'default' ? '(default)' : configuredDbId)
-  : '(default)';
+export const effectiveProjectId = resolvedFirebaseEnv.projectId;
+export const FIRESTORE_DATABASE_ID = resolvedFirebaseEnv.databaseId;
+export const isDevFirebaseEnvironment = resolvedFirebaseEnv.isDevEnvironment;
+export const activeFirebaseConfigSource = resolvedFirebaseEnv.configSource;
 
 export enum OperationType {
   CREATE = 'create',
@@ -314,27 +478,8 @@ export const isMissingInitialStateOrStorageError = (error: any): boolean => {
   );
 };
 
-// Resilient configuration resolution: prioritizes local file config, then env vars
-const initialConfig: FirebaseOptions = {
-  apiKey: fileConfig.apiKey || envConfig.apiKey || '',
-  authDomain: resolveAuthDomain(
-    fileConfig.authDomain || envConfig.authDomain,
-    effectiveProjectId
-  ),
-  projectId: effectiveProjectId,
-  storageBucket:
-    fileConfig.storageBucket ||
-    envConfig.storageBucket ||
-    (effectiveProjectId ? `${effectiveProjectId}.firebasestorage.app` : ''),
-  messagingSenderId:
-    fileConfig.messagingSenderId ||
-    envConfig.messagingSenderId ||
-    '',
-  appId:
-    fileConfig.appId ||
-    envConfig.appId ||
-    '',
-};
+// Resilient configuration resolution: uses environment-aware resolvedFirebaseEnv
+const initialConfig: FirebaseOptions = resolvedFirebaseEnv.config;
 
 const isFirebaseConfigured = Boolean(initialConfig.apiKey && initialConfig.projectId);
 

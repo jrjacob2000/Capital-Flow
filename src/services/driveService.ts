@@ -1,12 +1,17 @@
 import { DriveFileInfo } from '../types/finance';
+import { isDevFirebaseEnvironment, sanitizeErrorForLog } from './firebase';
 
 const DRIVE_API_URL = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3';
 
-export const CAPITALFLOW_DRIVE_FOLDER_NAME = 'CapitalFlow Financial Database';
+export const CAPITALFLOW_DRIVE_FOLDER_NAME = isDevFirebaseEnvironment
+  ? 'CapitalFlow Financial Database (Dev)'
+  : 'CapitalFlow Financial Database';
 export const LEGACY_CAPITALFLOW_DRIVE_FOLDER_NAME = 'CapitalFlow';
 export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
-export const DRIVE_FOLDER_CACHE_KEY = 'capitalflow_drive_folder_id';
+export const DRIVE_FOLDER_CACHE_KEY = isDevFirebaseEnvironment
+  ? 'capitalflow_drive_folder_id_dev'
+  : 'capitalflow_drive_folder_id';
 
 export const getBudgetFileName = (year: number) => `capitalflow_budget_${year}.json`;
 export const SAVINGS_LEDGER_FILE_NAME = 'capitalflow_savings_ledger.json';
@@ -119,8 +124,11 @@ export async function getFolderById(accessToken: string, folderId: string): Prom
  * Searches for all CapitalFlow folders in Google Drive (including duplicates and legacy names)
  */
 export async function findAllCapitalFlowFolders(accessToken: string): Promise<DriveFileInfo[]> {
+  const folderCriteria = isDevFirebaseEnvironment
+    ? `name = '${CAPITALFLOW_DRIVE_FOLDER_NAME}'`
+    : `(name = '${CAPITALFLOW_DRIVE_FOLDER_NAME}' or name = '${LEGACY_CAPITALFLOW_DRIVE_FOLDER_NAME}')`;
   const query = encodeURIComponent(
-    `(name = '${CAPITALFLOW_DRIVE_FOLDER_NAME}' or name = '${LEGACY_CAPITALFLOW_DRIVE_FOLDER_NAME}') and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`
+    `${folderCriteria} and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`
   );
   const response = await fetch(
     `${DRIVE_API_URL}/files?q=${query}&fields=files(id,name,mimeType,modifiedTime,createdTime,webViewLink,parents)&orderBy=createdTime asc`,
@@ -263,7 +271,7 @@ export async function deduplicateCapitalFlowFolders(
           movedFileCount++;
         }
       } catch (err) {
-        console.warn(`Could not move file ${file.name} to primary folder:`, err);
+        console.warn(`Could not move file ${file.name} to primary folder:`, sanitizeErrorForLog(err));
       }
     }
 
@@ -274,7 +282,7 @@ export async function deduplicateCapitalFlowFolders(
         cleanedDuplicateCount++;
       }
     } catch (err) {
-      console.warn(`Could not trash duplicate folder ${dup.folder.id}:`, err);
+      console.warn('Could not trash duplicate folder:', sanitizeErrorForLog(err));
     }
   }
 

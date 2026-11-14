@@ -12,6 +12,7 @@ import {
   DEFAULT_SINKING_FUND_NAMES,
   MONTH_NAMES,
   resolveCanonicalSinkingFundName,
+  isTemplateValidForPeriod,
 } from '../services/sampleData';
 
 /**
@@ -539,6 +540,21 @@ export interface ExpenseSubtotalRowInput {
 }
 
 /**
+ * Resolves the exact amount to pay/receive for a Pending or Scheduled row:
+ * uses the explicit Actual amount when entered (actualCost !== 0), otherwise falls back to Estimated.
+ */
+export function getPendingAmountToPay(row: {
+  estimatedCost?: number;
+  actualCost?: number;
+  hasActualCost?: boolean;
+}): number {
+  if (row.hasActualCost && row.actualCost !== undefined && row.actualCost !== 0) {
+    return row.actualCost;
+  }
+  return row.estimatedCost || 0;
+}
+
+/**
  * Returns the settled amount allocated to a specific payment channel for a row,
  * supporting both single-channel and 6-channel split payment breakdowns.
  */
@@ -570,7 +586,7 @@ export function getChannelAmountForRow(
 }
 
 /**
- * Computes both Paid actual totals and Projected totals (Paid actuals + Pending/Scheduled estimates)
+ * Computes both Paid actual totals and Projected totals (Paid actuals + Pending/Scheduled actual-or-estimate)
  * per PaymentMethod across a period's expense/saving rows.
  */
 export function computePaymentChannelSubtotals(rows: ExpenseSubtotalRowInput[]): {
@@ -625,9 +641,28 @@ export function computePaymentChannelSubtotals(rows: ExpenseSubtotalRowInput[]):
         paidTotals[method] = (paidTotals[method] || 0) + e.actualCost;
         projectedTotals[method] = (projectedTotals[method] || 0) + e.actualCost;
       }
+    } else if (e.paymentBreakdown) {
+      const cash = e.paymentBreakdown.cash || 0;
+      const cc = e.paymentBreakdown.creditCard || 0;
+      const gcash = e.paymentBreakdown.gcashTransfer || 0;
+      const kath = e.paymentBreakdown.kathAccount || 0;
+      const check = e.paymentBreakdown.checkAccount || 0;
+      const bank = e.paymentBreakdown.bankTransfer || 0;
+      const splitSum = cash + cc + gcash + kath + check + bank;
+      if (splitSum !== 0) {
+        projectedTotals.Cash += cash;
+        projectedTotals['Credit Card'] += cc;
+        projectedTotals['GCash Transfer'] += gcash;
+        projectedTotals['Kath Account'] += kath;
+        projectedTotals['Checking Account'] += check;
+        projectedTotals['Bank Transfer'] += bank;
+      } else {
+        const method: PaymentMethod = e.paymentMethod || 'Bank Transfer';
+        projectedTotals[method] = (projectedTotals[method] || 0) + getPendingAmountToPay(e);
+      }
     } else {
       const method: PaymentMethod = e.paymentMethod || 'Bank Transfer';
-      projectedTotals[method] = (projectedTotals[method] || 0) + (e.estimatedCost || 0);
+      projectedTotals[method] = (projectedTotals[method] || 0) + getPendingAmountToPay(e);
     }
   });
 
@@ -635,7 +670,7 @@ export function computePaymentChannelSubtotals(rows: ExpenseSubtotalRowInput[]):
 }
 
 /**
- * Computes Estimated, Paid (Actual), Projected (Paid + Pending Estimates), and Variance
+ * Computes Estimated, Paid (Actual), Projected (Paid + Pending Actual/Estimates), and Variance
  * for a filtered selection of expense rows, respecting split payment channels when filtered by method.
  */
 export function computeFilteredExpenseSubtotals(
@@ -645,6 +680,7 @@ export function computeFilteredExpenseSubtotals(
   estimated: number;
   actual: number;
   projected: number;
+  pendingToPay: number;
   variance: number;
   paidCount: number;
   totalCount: number;
@@ -652,6 +688,7 @@ export function computeFilteredExpenseSubtotals(
   let estimated = 0;
   let actual = 0;
   let projected = 0;
+  let pendingToPay = 0;
   let paidCount = 0;
 
   filteredRows.forEach((r) => {
@@ -665,7 +702,9 @@ export function computeFilteredExpenseSubtotals(
       actual += settledAmt;
       projected += settledAmt;
     } else {
-      projected += r.estimatedCost || 0;
+      const pendingAmt = getPendingAmountToPay(r);
+      pendingToPay += pendingAmt;
+      projected += pendingAmt;
     }
   });
 
@@ -673,6 +712,7 @@ export function computeFilteredExpenseSubtotals(
     estimated,
     actual,
     projected,
+    pendingToPay,
     variance: estimated - projected,
     paidCount,
     totalCount: filteredRows.length,
@@ -748,6 +788,148 @@ export function computeCarryOverSurplus(
     (e) => e.period === selectedPeriod && (e.description || e.item || '').includes('Carry-over')
   );
   return { surplus, hasBeenCarriedOver, prevPeriodName: prevPeriod };
+}
+
+/**
+ * Computes the active period's projected surplus (Projected Income - Projected Outflows [expenses + savings]),
+ * exactly matching the calculation in the Budget Spreadsheet.
+ */
+export function computePeriodProjectedSurplus(
+  budget: {
+    entries?: BudgetEntry[];
+    itemTemplates?: BudgetItemTemplate[];
+    excludedPeriodItems?: Record<string, string[]>;
+  },
+  period: string,
+  frequency: EntryFrequency
+): {
+  projectedIncome: number;
+  projectedExpense: number;
+  projectedSurplus: number;
+  hasRecordedEntries: boolean;
+  hasPaidEntries: boolean;
+} {
+  const recordedEntries = (budget.entries || []).filter((e) => e.period === period);
+  const usedEntryIds = new Set<string>();
+  const templates = budget.itemTemplates || [];
+  const excludedItems = budget.excludedPeriodItems;
+
+  let projectedIncome = 0;
+  let projectedExpense = 0;
+  let hasPaidEntries = false;
+
+  // 1. Process templates valid for this period and not excluded
+  templates
+    .filter((tpl) => isTemplateValidForPeriod(tpl, frequency, period))
+    .forEach((tpl) => {
+      if (isTemplateExcludedInPeriod(tpl, period, excludedItems)) {
+        return;
+      }
+      const shouldDisplay = shouldTemplateDisplayInBudget(tpl, true);
+      const tplItemLower = tpl.item.toLowerCase().trim();
+      const matchingCandidates = recordedEntries.filter(
+        (e) =>
+          !usedEntryIds.has(e.id) &&
+          e.type === tpl.type &&
+          (Boolean(tpl.loanId && e.loanId === tpl.loanId) ||
+            (e.item || e.description || '').toLowerCase().trim() === tplItemLower)
+      );
+
+      const matchedEntry =
+        matchingCandidates.find(
+          (e) =>
+            (e.actualCost !== undefined ? e.actualCost : e.amount) !== 0 ||
+            e.status === 'Paid'
+        ) || matchingCandidates[0];
+
+      if (matchedEntry) {
+        usedEntryIds.add(matchedEntry.id);
+        matchingCandidates.forEach((cand) => {
+          const candAct = cand.actualCost !== undefined ? cand.actualCost : cand.amount;
+          if (
+            cand.id !== matchedEntry.id &&
+            cand.reference === 'Auto-filled from template' &&
+            cand.status === 'Pending' &&
+            candAct === 0
+          ) {
+            usedEntryIds.add(cand.id);
+          }
+        });
+
+        const est =
+          matchedEntry.estimatedCost !== undefined && matchedEntry.estimatedCost > 0
+            ? matchedEntry.estimatedCost
+            : tpl.defaultEstimatedCost || 0;
+        const act =
+          matchedEntry.actualCost !== undefined
+            ? matchedEntry.actualCost
+            : (matchedEntry.amount || 0);
+        const isPaid = matchedEntry.status === 'Paid';
+        if (isPaid) hasPaidEntries = true;
+
+        const cost = isPaid
+          ? act
+          : getPendingAmountToPay({
+              estimatedCost: est,
+              actualCost: act,
+              hasActualCost: Boolean(act !== 0),
+            });
+
+        if (tpl.type === 'income') {
+          const isUserManual = matchedEntry.reference !== 'Auto-filled from template';
+          if (shouldDisplay || act !== 0 || isUserManual) {
+            projectedIncome += cost;
+          }
+        } else {
+          projectedExpense += cost;
+        }
+      } else {
+        // Virtual estimate pre-populated from template
+        if (!shouldDisplay) return;
+        const est = tpl.defaultEstimatedCost || 0;
+        if (tpl.type === 'income') {
+          projectedIncome += est;
+        } else {
+          projectedExpense += est;
+        }
+      }
+    });
+
+  // 2. Custom recorded entries not matched with any template
+  recordedEntries.forEach((entry) => {
+    if (!usedEntryIds.has(entry.id)) {
+      const est = entry.estimatedCost ?? 0;
+      const act =
+        entry.actualCost !== undefined ? entry.actualCost : (entry.amount || 0);
+      const isPaid = entry.status === 'Paid';
+      if (isPaid) hasPaidEntries = true;
+
+      const cost = isPaid
+        ? act
+        : getPendingAmountToPay({
+            estimatedCost: est,
+            actualCost: act,
+            hasActualCost: Boolean(act !== 0),
+          });
+
+      if (entry.type === 'income') {
+        const isUserManual = entry.reference !== 'Auto-filled from template';
+        if (isRegularSalaryIncome(entry.item, entry.category) || act !== 0 || est !== 0 || isUserManual) {
+          projectedIncome += cost;
+        }
+      } else {
+        projectedExpense += cost;
+      }
+    }
+  });
+
+  return {
+    projectedIncome,
+    projectedExpense,
+    projectedSurplus: projectedIncome - projectedExpense,
+    hasRecordedEntries: recordedEntries.length > 0,
+    hasPaidEntries,
+  };
 }
 
 

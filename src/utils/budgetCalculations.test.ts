@@ -18,10 +18,12 @@ import {
   getPeriodItemExclusionKeys,
   isTemplateExcludedInPeriod,
   getChannelAmountForRow,
+  getPendingAmountToPay,
   computePaymentChannelSubtotals,
   computeFilteredExpenseSubtotals,
   resolveSyncedEntryAndTemplateAmounts,
   computeCarryOverSurplus,
+  computePeriodProjectedSurplus,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -48,6 +50,9 @@ import {
   resolveAuthDomain,
   handleFirestoreError,
   OperationType,
+  isDevelopmentEnvironment,
+  resolveFirebaseEnvironmentConfig,
+  sanitizeErrorForLog,
 } from '../services/firebase';
 import { BudgetEntry, BudgetItemTemplate, LoanRecord, SavingsLedgerData } from '../types/finance';
 
@@ -2934,6 +2939,421 @@ describe('27. End-to-End Multi-Module Regression Suite (Cashflow, Rebates, Carry
   });
 });
 
+describe('28. Environment-Aware Firebase Database Resolution, Log Sanitization & Sign-Out Memory Purge', () => {
+  it('detects development vs production hostnames accurately and isolates Dev DB from Prod DB', () => {
+    // 1. Hostname detection
+    assert.equal(isDevelopmentEnvironment('localhost'), true);
+    assert.equal(isDevelopmentEnvironment('127.0.0.1'), true);
+    assert.equal(isDevelopmentEnvironment('ais-dev-preview.us-west1.run.app'), true);
+    assert.equal(isDevelopmentEnvironment('ais-pre-preview.us-west1.run.app'), true);
+    assert.equal(isDevelopmentEnvironment('user.github.io'), false);
+
+    // 2. When running in AI Studio preview (*.run.app) with both VITE_DEV_FIREBASE_* and VITE_FIREBASE_* configured,
+    //    it strictly selects VITE_DEV_FIREBASE_* in development and VITE_FIREBASE_* on *.github.io
+    const simulatedEnv = {
+      VITE_DEV_FIREBASE_API_KEY: 'test-dev-key-001',
+      VITE_DEV_FIREBASE_PROJECT_ID: 'capitalflow-dev-project',
+      VITE_DEV_FIREBASE_DATABASE_ID: 'capitalflow-dev-db',
+      VITE_FIREBASE_API_KEY: 'test-prod-key-002',
+      VITE_FIREBASE_PROJECT_ID: 'capitalflow-prod-project',
+      VITE_FIREBASE_DATABASE_ID: '(default)',
+    };
+    const devResolved = resolveFirebaseEnvironmentConfig({
+      env: simulatedEnv,
+      hostname: 'ais-pre-preview.us-west1.run.app',
+    });
+    assert.equal(devResolved.isDevEnvironment, true);
+    assert.equal(devResolved.projectId, 'capitalflow-dev-project');
+    assert.equal(devResolved.databaseId, 'capitalflow-dev-db');
+    assert.equal(devResolved.configSource, 'dev_env');
+
+    // 3. When running on production hostname (*.github.io) with the same env,
+    //    it resolves to the production database (capitalflow-prod-project)
+    const prodResolved = resolveFirebaseEnvironmentConfig({
+      env: simulatedEnv,
+      hostname: 'myuser.github.io',
+    });
+    assert.equal(prodResolved.isDevEnvironment, false);
+    assert.equal(prodResolved.projectId, 'capitalflow-prod-project');
+    assert.equal(prodResolved.databaseId, '(default)');
+    assert.equal(prodResolved.configSource, 'prod_env');
+  });
+
+  it('redacts sensitive tokens, emails, and workspace UID paths in sanitizeErrorForLog and purges cloud memory on sign-out', () => {
+    const rawError = new Error(
+      'Failed on workspaces/uid_abc_999 for user@example.com with Bearer ya29.secret_token_123'
+    );
+    const sanitized = sanitizeErrorForLog(rawError);
+    assert.equal(sanitized.includes('uid_abc_999'), false);
+    assert.equal(sanitized.includes('user@example.com'), false);
+    assert.equal(sanitized.includes('ya29.secret_token_123'), false);
+    assert.equal(sanitized.includes('workspaces/[REDACTED_UID]'), true);
+    assert.equal(sanitized.includes('[REDACTED_EMAIL]'), true);
+    assert.equal(sanitized.includes('Bearer [REDACTED_TOKEN]'), true);
+
+    // Verify clearCloudSessionMemory purges in-memory cloud session state
+    memoryStorage.clear();
+    FinanceStorageService.setCloudSessionActive(true);
+    FinanceStorageService.saveLocalBudget(
+      {
+        year: 2026,
+        version: '1.0.0',
+        lastUpdated: new Date().toISOString(),
+        entryMode: 'monthly',
+        currency: '₱',
+        entries: [makeEntry({ id: 'secret-entry-1', item: 'Confidential Bonus', amount: 99000 })],
+        budgets: [],
+      },
+      { skipFirestoreWrite: true }
+    );
+    assert.equal(FinanceStorageService.loadLocalBudget(2026).entries.length, 1);
+
+    FinanceStorageService.clearCloudSessionMemory();
+    assert.equal(FinanceStorageService.isCloudSessionActive(), false);
+    assert.equal(
+      FinanceStorageService.loadLocalBudget(2026).entries.some((e) => e.id === 'secret-entry-1'),
+      false
+    );
+  });
+});
+
+describe('29. Pending Item Actual Amount Display & To-Pay Subtotal Resolution (getPendingAmountToPay)', () => {
+  it('resolves exact Actual amount to pay when a Pending item has a recorded actualCost and falls back to estimatedCost when actualCost is 0', () => {
+    // 1. Pending item where user already entered the exact bill amount (Est 3,000, Actual 3,450)
+    const pendingWithActual = {
+      estimatedCost: 3000,
+      actualCost: 3450,
+      hasActualCost: true,
+      status: 'Pending' as const,
+      paymentMethod: 'GCash Transfer' as const,
+    };
+    assert.equal(getPendingAmountToPay(pendingWithActual), 3450);
+
+    // 2. Pending item with no explicit actual yet (Est 1,800, Actual 0)
+    const pendingEstimateOnly = {
+      estimatedCost: 1800,
+      actualCost: 0,
+      hasActualCost: false,
+      status: 'Pending' as const,
+      paymentMethod: 'Bank Transfer' as const,
+    };
+    assert.equal(getPendingAmountToPay(pendingEstimateOnly), 1800);
+
+    // 3. Paid item (Est 2,000, Actual 2,000)
+    const paidRow = {
+      estimatedCost: 2000,
+      actualCost: 2000,
+      hasActualCost: true,
+      status: 'Paid' as const,
+      paymentMethod: 'Credit Card' as const,
+    };
+
+    const rows = [pendingWithActual, pendingEstimateOnly, paidRow];
+    const { paidTotals, projectedTotals } = computePaymentChannelSubtotals(rows);
+    assert.equal(paidTotals['Credit Card'], 2000);
+    assert.equal(paidTotals['GCash Transfer'], 0);
+    // Projected GCash Transfer uses the Pending item's explicit Actual (3,450) instead of Est (3,000)
+    assert.equal(projectedTotals['GCash Transfer'], 3450);
+    assert.equal(projectedTotals['Bank Transfer'], 1800);
+
+    const subtotals = computeFilteredExpenseSubtotals(rows, null);
+    assert.equal(subtotals.estimated, 6800); // 3000 + 1800 + 2000
+    assert.equal(subtotals.actual, 2000); // Paid so far
+    assert.equal(subtotals.pendingToPay, 5250); // 3450 + 1800 remaining to pay
+    assert.equal(subtotals.projected, 7250); // 2000 paid + 5250 to pay
+    assert.equal(subtotals.variance, -450); // 6800 - 7250 = 450 over budget
+  });
+});
+
+describe('30. Dashboard Current Period Projected Surplus Resolution (computePeriodProjectedSurplus)', () => {
+  it('correctly calculates current period projected surplus with paid actuals and pending amount fallbacks', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-salary',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: 'Salary',
+          defaultEstimatedCost: 50000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-rent',
+          type: 'expense' as const,
+          category: 'Housing & Rent',
+          item: 'Apartment Rent',
+          defaultEstimatedCost: 15000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-meralco',
+          type: 'expense' as const,
+          category: 'Utilities & Bills',
+          item: 'Electricity',
+          defaultEstimatedCost: 4000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-savings',
+          type: 'saving' as const,
+          category: 'Emergency Fund',
+          item: 'Emergency Reserve',
+          defaultEstimatedCost: 10000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+      ],
+      entries: [
+        // Income: Paid, Actual 52,000 (Est was 50,000)
+        makeEntry({
+          id: 'inc-1',
+          period: 'Nov',
+          type: 'income',
+          item: 'Salary',
+          category: 'Salary & Wages',
+          amount: 52000,
+          actualCost: 52000,
+          estimatedCost: 50000,
+          status: 'Paid',
+        }),
+        // Rent: Paid, Actual 15,000
+        makeEntry({
+          id: 'exp-1',
+          period: 'Nov',
+          type: 'expense',
+          item: 'Apartment Rent',
+          category: 'Housing & Rent',
+          amount: 15000,
+          actualCost: 15000,
+          estimatedCost: 15000,
+          status: 'Paid',
+        }),
+        // Electricity: Pending, but user entered exact bill Actual 4,350
+        makeEntry({
+          id: 'exp-2',
+          period: 'Nov',
+          type: 'expense',
+          item: 'Electricity',
+          category: 'Utilities & Bills',
+          amount: 0,
+          actualCost: 4350,
+          estimatedCost: 4000,
+          status: 'Pending',
+        }),
+        // Savings: Pending, not yet transferred (Est 10,000)
+        makeEntry({
+          id: 'save-1',
+          period: 'Nov',
+          type: 'saving',
+          item: 'Emergency Reserve',
+          category: 'Emergency Fund',
+          amount: 0,
+          actualCost: 0,
+          estimatedCost: 10000,
+          status: 'Pending',
+        }),
+      ],
+    };
+
+    const metrics = computePeriodProjectedSurplus(budget, 'Nov', 'monthly');
+    // Projected Income: 52,000
+    assert.equal(metrics.projectedIncome, 52000);
+    // Projected Outflow: Rent 15,000 (Paid) + Electricity 4,350 (Pending with explicit Actual) + Savings 10,000 (Pending Est) = 29,350
+    assert.equal(metrics.projectedExpense, 29350);
+    // Projected Surplus: 52,000 - 29,350 = 22,650
+    assert.equal(metrics.projectedSurplus, 22650);
+    assert.equal(metrics.hasRecordedEntries, true);
+    assert.equal(metrics.hasPaidEntries, true);
+  });
+
+  it('projects surplus purely from recurring templates before any entries are recorded in a new period', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-salary',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: 'Salary',
+          defaultEstimatedCost: 60000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-food',
+          type: 'expense' as const,
+          category: 'Food & Groceries',
+          item: 'Groceries',
+          defaultEstimatedCost: 20000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-save',
+          type: 'saving' as const,
+          category: 'Investments',
+          item: 'Index Fund',
+          defaultEstimatedCost: 15000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+      ],
+      entries: [],
+    };
+
+    const metrics = computePeriodProjectedSurplus(budget, 'Dec', 'monthly');
+    assert.equal(metrics.projectedIncome, 60000);
+    assert.equal(metrics.projectedExpense, 35000); // 20k + 15k
+    assert.equal(metrics.projectedSurplus, 25000);
+    assert.equal(metrics.hasRecordedEntries, false);
+    assert.equal(metrics.hasPaidEntries, false);
+  });
+
+  it('respects excludedPeriodItems when projecting surplus for a period', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-salary',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: 'Salary',
+          defaultEstimatedCost: 50000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-gym',
+          type: 'expense' as const,
+          category: 'Health & Fitness',
+          item: 'Gym Membership',
+          defaultEstimatedCost: 2500,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+      ],
+      // User soft-deleted gym membership specifically in Nov
+      excludedPeriodItems: {
+        Nov: ['tpl-gym'],
+      },
+      entries: [],
+    };
+
+    const metricsNov = computePeriodProjectedSurplus(budget, 'Nov', 'monthly');
+    // Gym is excluded in Nov, so expense is 0
+    assert.equal(metricsNov.projectedIncome, 50000);
+    assert.equal(metricsNov.projectedExpense, 0);
+    assert.equal(metricsNov.projectedSurplus, 50000);
+
+    // In Oct, Gym is NOT excluded, so expense is 2500
+    const metricsOct = computePeriodProjectedSurplus(budget, 'Oct', 'monthly');
+    assert.equal(metricsOct.projectedIncome, 50000);
+    assert.equal(metricsOct.projectedExpense, 2500);
+    assert.equal(metricsOct.projectedSurplus, 47500);
+  });
+
+  it('correctly resolves bi-weekly cutoff-specific templates (P1 vs P2) and negative rebates/cashback in projected surplus', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-salary-p1',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: '1st Cutoff Paycheck',
+          defaultEstimatedCost: 30000,
+          frequency: 'bi-weekly' as const,
+          biweeklyPeriod: 'P1' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-salary-p2',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: '2nd Cutoff Paycheck',
+          defaultEstimatedCost: 30000,
+          frequency: 'bi-weekly' as const,
+          biweeklyPeriod: 'P2' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-rent-p1',
+          type: 'expense' as const,
+          category: 'Housing & Rent',
+          item: 'Apartment Rent',
+          defaultEstimatedCost: 15000,
+          frequency: 'bi-weekly' as const,
+          biweeklyPeriod: 'P1' as const,
+          showInBudget: true,
+        },
+        {
+          id: 'tpl-bills-p2',
+          type: 'expense' as const,
+          category: 'Utilities & Bills',
+          item: 'Internet & Water',
+          defaultEstimatedCost: 5000,
+          frequency: 'bi-weekly' as const,
+          biweeklyPeriod: 'P2' as const,
+          showInBudget: true,
+        },
+      ],
+      entries: [
+        // P1 entries: Salary received (30k)
+        makeEntry({
+          id: 'inc-p1',
+          period: 'Nov-P1',
+          type: 'income',
+          item: '1st Cutoff Paycheck',
+          amount: 30000,
+          actualCost: 30000,
+          status: 'Paid',
+        }),
+        // Rent paid: 15k
+        makeEntry({
+          id: 'exp-rent-p1',
+          period: 'Nov-P1',
+          type: 'expense',
+          item: 'Apartment Rent',
+          amount: 15000,
+          actualCost: 15000,
+          status: 'Paid',
+        }),
+        // Rebate / Refund on credit card in P1: -2,000
+        makeEntry({
+          id: 'exp-rebate-p1',
+          period: 'Nov-P1',
+          type: 'expense',
+          item: 'Card Cashback Rebate',
+          amount: -2000,
+          actualCost: -2000,
+          status: 'Paid',
+        }),
+      ],
+    };
+
+    // Nov-P1:
+    // Income = 30,000
+    // Expenses = 15,000 + (-2,000 rebate) = 13,000
+    // Projected Surplus = 30,000 - 13,000 = 17,000
+    const metricsP1 = computePeriodProjectedSurplus(budget, 'Nov-P1', 'bi-weekly');
+    assert.equal(metricsP1.projectedIncome, 30000);
+    assert.equal(metricsP1.projectedExpense, 13000);
+    assert.equal(metricsP1.projectedSurplus, 17000);
+
+    // Nov-P2 (virtual templates only):
+    // Income = 30,000 (2nd Cutoff Paycheck)
+    // Expense = 5,000 (Internet & Water)
+    // Projected Surplus = 25,000
+    const metricsP2 = computePeriodProjectedSurplus(budget, 'Nov-P2', 'bi-weekly');
+    assert.equal(metricsP2.projectedIncome, 30000);
+    assert.equal(metricsP2.projectedExpense, 5000);
+    assert.equal(metricsP2.projectedSurplus, 25000);
+  });
+});
 
 
 

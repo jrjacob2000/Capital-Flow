@@ -1185,7 +1185,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-medium">
                 <PiggyBank className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>Total Bank &amp; Wallet Savings</span>
+                <span>Total Capital Across Bank Accounts</span>
               </div>
 
               {/* Compact Secondary Tools: History & Growth Projector */}
@@ -1315,7 +1315,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               className="h-8 px-3 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl border border-slate-200 dark:border-slate-800 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 shadow-2xs"
             >
               <Sliders className="w-3.5 h-3.5 shrink-0" />
-              <span>Manage Funds</span>
+              <span>Manage Goal Funds</span>
             </button>
           </div>
 
@@ -1423,7 +1423,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     {/* Stored In Accounts (Flat Hairline List — Zero Nested Boxes) */}
                     <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
                       <div className="flex items-center justify-between text-[11px] text-slate-400">
-                        <span>Stored in accounts</span>
+                        <span>Stored in Bank Accounts</span>
                         <span className="font-mono tabular-nums">
                           {fund.transactionCount} {fund.transactionCount === 1 ? 'entry' : 'entries'}
                         </span>
@@ -1556,11 +1556,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           <div className="flex items-center justify-between gap-2 px-1">
             <div className="text-xs text-slate-600 dark:text-slate-300 truncate">
               <span className="font-bold text-slate-900 dark:text-white">
-                Bank &amp; Wallet Accounts ({ledger.accounts.length})
+                Bank Accounts ({ledger.accounts.length})
               </span>
               <span className="hidden sm:inline text-slate-400">
                 {' '}
-                &middot; High-yield banks, e-wallets, MP2, and investment buckets
+                &middot; High-yield banks, e-wallets, MP2, and investment accounts
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -1578,7 +1578,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1 cursor-pointer shadow-xs transition-colors whitespace-nowrap"
               >
                 <Plus className="w-3.5 h-3.5 shrink-0" />
-                <span>Add Account</span>
+                <span>Add Bank Account</span>
               </button>
             </div>
           </div>
@@ -1752,7 +1752,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
                 <Plus className="w-4 h-4" />
               </div>
-              <span className="text-xs font-semibold">Add Savings Account</span>
+              <span className="text-xs font-semibold">Add Bank Account</span>
               <span className="text-[11px] text-slate-400">Digital Bank, MP2, E-Wallet, Brokerage</span>
             </button>
           </div>
@@ -1810,7 +1810,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 onChange={(e) => setSelectedAccountFilter(e.target.value)}
                 className="min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
               >
-                <option value="all">All Accounts</option>
+                <option value="all">All Bank Accounts</option>
                 {ledger.accounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>
                     {acc.name}
@@ -1824,7 +1824,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   onChange={(e) => setSelectedFundFilter(e.target.value)}
                   className="flex-1 min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
                 >
-                  <option value="all">All Sinking Funds</option>
+                  <option value="all">All Goal Funds</option>
                   {categoryFunds.map((f) => (
                     <option key={f.id} value={f.name}>
                       {f.name}
@@ -1981,8 +1981,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     <tr>
                       <th className="py-3 px-4">Date</th>
                       <th className="py-3 px-4">Type</th>
-                      <th className="py-3 px-4">Account / Envelope</th>
-                      <th className="py-3 px-4">Note &amp; Fund</th>
+                      <th className="py-3 px-4">Bank Account / Goal Fund</th>
+                      <th className="py-3 px-4">Note &amp; Goal Fund</th>
                       <th className="py-3 px-4 text-right">Amount</th>
                       <th className="py-3 px-4 text-right">Running Capital</th>
                       <th className="py-3 px-4 text-center">Action</th>
@@ -2212,13 +2212,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <div className="min-w-0">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
                   {transactionMode === 'deposit' && 'Record Deposit or Yield'}
-                  {transactionMode === 'withdraw' && 'Withdraw from Savings'}
-                  {transactionMode === 'transfer' && 'Transfer Between Accounts'}
+                  {transactionMode === 'withdraw' && 'Withdraw from Funds'}
+                  {transactionMode === 'transfer' && 'Transfer Between Bank Accounts'}
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                  {transactionMode === 'deposit' && 'Add funds or interest yield to an account & fund'}
-                  {transactionMode === 'withdraw' && 'Record an outflow from your savings reserves'}
-                  {transactionMode === 'transfer' && 'Move balance between physical bank accounts'}
+                  {transactionMode === 'deposit' && 'Add funds or interest yield to a Bank Account & Goal Fund'}
+                  {transactionMode === 'withdraw' && 'Record an outflow from your Bank Account & Goal Fund'}
+                  {transactionMode === 'transfer' && 'Move balance between Bank Accounts'}
                 </p>
               </div>
               <button
@@ -2308,8 +2308,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                        <span className="sm:hidden">Account</span>
-                        <span className="hidden sm:inline">Destination Account</span>
+                        <span className="sm:hidden">Bank Account</span>
+                        <span className="hidden sm:inline">Destination Bank Account</span>
                       </label>
                     </div>
                     <select
@@ -2345,7 +2345,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 <div className="min-w-0">
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                      Target Sinking Fund / Envelope
+                      Goal Fund
                     </label>
                   </div>
                   <select
@@ -2377,7 +2377,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         </option>
                       );
                     })}
-                    <option value="__custom__">+ Create New Sinking Fund...</option>
+                    <option value="__custom__">+ New Goal Fund...</option>
                   </select>
                   {depositCategory === '__custom__' && (
                     <input
@@ -2446,7 +2446,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
-                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Account</label>
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Bank Account</label>
                     </div>
                     <select
                       value={withdrawAccountId}
@@ -2513,7 +2513,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center justify-between gap-1 h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                        Deduct From Fund (Earmark)
+                        Deduct From Goal Fund
                       </label>
                       {(() => {
                         const isGeneral =
@@ -2745,7 +2745,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
-                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Account</label>
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Bank Account</label>
                     </div>
                     <select
                       value={transferFromAccountId}
@@ -2769,7 +2769,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
 
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
-                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">To Account</label>
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">To Bank Account</label>
                     </div>
                     <select
                       value={transferToAccountId}
@@ -2875,10 +2875,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
               <div className="min-w-0">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                  Manage Savings Accounts
+                  Manage Bank Accounts
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                  Rename, configure APY, or remove accounts
+                  Rename, configure APY, or remove Bank Accounts
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
@@ -2980,7 +2980,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
               <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                Add Savings Account
+                Add Bank Account
               </h3>
               <button
                 type="button"
@@ -3124,7 +3124,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl p-3.5 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
               <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                Edit Account
+                Edit Bank Account
               </h3>
               <button
                 type="button"
@@ -3286,7 +3286,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-sm sm:text-base">
                 <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-                <h3>Delete Savings Account</h3>
+                <h3>Delete Bank Account</h3>
               </div>
               <button
                 type="button"
@@ -3356,10 +3356,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
               <div className="min-w-0">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                  Reallocate Category Funds
+                  Reallocate Goal Funds
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                  Move virtual fund envelopes without changing bank balances
+                  Move balances between Goal Funds without changing Bank Account totals
                 </p>
               </div>
               <button
@@ -3377,7 +3377,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                        From Fund (Source)
+                        From Goal Fund (Source)
                       </label>
                     </div>
                     <select
@@ -3446,7 +3446,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                        To Fund (Target)
+                        To Goal Fund (Target)
                       </label>
                     </div>
                     <select
@@ -3484,7 +3484,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             {cat} ({currencySymbol}0)
                           </option>
                         ))}
-                      <option value="__custom__">+ New Fund...</option>
+                      <option value="__custom__">+ New Goal Fund...</option>
                     </select>
                   </div>
                 </div>
@@ -3504,7 +3504,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               <div>
                 <div className="flex items-center justify-between h-4 mb-1">
                   <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                    Physical Account Holding This Fund
+                    Bank Account Holding This Fund
                   </label>
                 </div>
                 <select
@@ -3708,51 +3708,51 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </button>
             </div>
             <form onSubmit={handleSaveEditTx} className="mt-3 space-y-2.5 sm:space-y-3">
-              <div>
-                <div className="flex items-center justify-between h-4 mb-1">
-                  <label className="text-slate-600 dark:text-slate-300 font-semibold">
-                    Account
-                  </label>
-                </div>
-                <select
-                  value={editTxAccountId}
-                  onChange={(e) => setEditTxAccountId(e.target.value)}
-                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                >
-                  {ledger.accounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
                 <div>
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-slate-600 dark:text-slate-300 font-semibold">
-                      Sinking Fund / Envelope
+                      Bank Account
                     </label>
                   </div>
                   <select
-                    value={editTxCategory}
-                    onChange={(e) => setEditTxCategory(e.target.value)}
+                    value={editTxAccountId}
+                    onChange={(e) => setEditTxAccountId(e.target.value)}
                     className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   >
-                    <option value="">General Reserves / Starting Capital (Unallocated)</option>
-                    {Array.from(
-                      new Set([
-                        ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
-                        ...DEFAULT_SINKING_FUND_NAMES,
-                        ...(budget?.customCategories?.saving || []),
-                        ...(editingTx.category ? [editingTx.category] : []),
-                      ])
-                    ).map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
+                    {ledger.accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
                       </option>
                     ))}
-                    <option value="__custom__">+ Create New Sinking Fund...</option>
                   </select>
+                </div>
+                {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
+                  <div>
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold">
+                        Goal Fund
+                      </label>
+                    </div>
+                    <select
+                      value={editTxCategory}
+                      onChange={(e) => setEditTxCategory(e.target.value)}
+                      className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    >
+                      <option value="">General Reserves / Starting Capital (Unallocated)</option>
+                      {Array.from(
+                        new Set([
+                          ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
+                          ...DEFAULT_SINKING_FUND_NAMES,
+                          ...(budget?.customCategories?.saving || []),
+                          ...(editingTx.category ? [editingTx.category] : []),
+                        ])
+                      ).map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                      <option value="__custom__">+ New Goal Fund...</option>
+                    </select>
                   {editTxCategory === '__custom__' && (
                     <input
                       type="text"
@@ -3839,10 +3839,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
               <div className="min-w-0">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                  Manage Sinking Funds
+                  Manage Goal Funds
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                  Rename, merge redundant funds, or adjust monthly targets
+                  Rename, merge redundant Goal Funds, or adjust monthly targets
                 </p>
               </div>
               <button
@@ -3857,7 +3857,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex-1 overflow-y-auto my-2.5 divide-y divide-slate-100 dark:divide-slate-800">
               {categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').length === 0 ? (
                 <div className="p-6 text-center text-slate-400">
-                  No named sinking funds yet. Allocate or deposit into a fund to create one.
+                  No named Goal Funds yet. Allocate or deposit into a Goal Fund to create one.
                 </div>
               ) : (
                 categoryFunds
@@ -3944,7 +3944,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800 gap-2">
               <div className="min-w-0">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                  Edit or Merge Fund
+                  Edit or Merge Goal Fund
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                   Configure &quot;{editingFund.name}&quot;
@@ -4106,7 +4106,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-sm sm:text-base">
                 <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-                <h3>Remove Sinking Fund</h3>
+                <h3>Remove Goal Fund</h3>
               </div>
               <button
                 type="button"

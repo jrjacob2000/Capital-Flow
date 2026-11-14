@@ -49,7 +49,7 @@ import {
   isDefaultStarterLedger,
 } from './sampleData';
 import { getPeriodItemExclusionKeys, shouldTemplateDisplayInBudget } from '../utils/budgetCalculations';
-import { auth } from './firebase';
+import { auth, sanitizeErrorForLog } from './firebase';
 import { FirestoreSyncService } from './firestoreService';
 
 const LOCAL_STORAGE_KEY_PREFIX = 'capitalflow_local_budget_';
@@ -92,6 +92,14 @@ export class FinanceStorageService {
     }
   }
 
+  static clearCloudSessionMemory(): void {
+    FinanceStorageService.cloudMemoryActive = false;
+    FinanceStorageService.cloudMemoryBudgets.clear();
+    FinanceStorageService.cloudMemoryLedger = null;
+    FinanceStorageService.cloudMemoryTemplateProfile = null;
+    FinanceStorageService.cloudMemoryKnownYears = [2026];
+  }
+
   static isCloudSessionActive(): boolean {
     return FinanceStorageService.cloudMemoryActive;
   }
@@ -119,7 +127,7 @@ export class FinanceStorageService {
       }
       keysToRemove.forEach((key) => localStorage.removeItem(key));
     } catch (e) {
-      console.warn('Could not clear redundant localStorage cache:', e);
+      console.warn('Could not clear redundant localStorage cache:', sanitizeErrorForLog(e));
     }
   }
 
@@ -295,7 +303,7 @@ export class FinanceStorageService {
       try {
         localStorage.setItem(LOCAL_STORAGE_KEY_USER_TEMPLATE, JSON.stringify(fullData));
       } catch (e) {
-        console.warn('Could not save user template profile:', e);
+        console.warn('Could not save user template profile:', sanitizeErrorForLog(e));
       }
     }
 
@@ -303,7 +311,9 @@ export class FinanceStorageService {
       const uid = auth.currentUser.uid;
       void FirestoreSyncService.saveWorkspace(uid, {
         templateData: fullData,
-      }).catch((err) => console.warn('Direct Firestore template CRUD write note:', err));
+      }).catch((err) =>
+        console.warn('Direct Firestore template CRUD write note:', sanitizeErrorForLog(err))
+      );
     }
 
     return fullData;
@@ -916,7 +926,9 @@ export class FinanceStorageService {
         templateData: latestTemplate,
       })
         .then(() => FirestoreSyncService.saveAnnualBudget(uid, budget))
-        .catch((err) => console.warn('Direct Firestore budget CRUD write note:', err));
+        .catch((err) =>
+          console.warn('Direct Firestore budget CRUD write note:', sanitizeErrorForLog(err))
+        );
     }
   }
 
@@ -932,7 +944,7 @@ export class FinanceStorageService {
       if (auth?.currentUser && !options?.skipFirestoreWrite) {
         const uid = auth.currentUser.uid;
         void FirestoreSyncService.saveWorkspace(uid, { knownYears: years }).catch((err) =>
-          console.warn('Direct Firestore knownYears CRUD write note:', err)
+          console.warn('Direct Firestore knownYears CRUD write note:', sanitizeErrorForLog(err))
         );
       }
     }
@@ -1100,7 +1112,9 @@ export class FinanceStorageService {
       const uid = auth.currentUser.uid;
       void FirestoreSyncService.saveWorkspace(uid, {
         ledgerData: ledger,
-      }).catch((err) => console.warn('Direct Firestore ledger CRUD write note:', err));
+      }).catch((err) =>
+        console.warn('Direct Firestore ledger CRUD write note:', sanitizeErrorForLog(err))
+      );
     }
   }
 

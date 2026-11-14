@@ -407,7 +407,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
         ? `Installment payment — ${loan.name}`
         : `Repayment received — ${loan.name}`
     );
-    setPayRecordInBudget(loan.direction === 'borrowed');
+    setPayRecordInBudget(true);
     setPayDepositAccountId('');
   };
 
@@ -1288,7 +1288,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
                 />
               </div>
 
-              {/* Auto-Sync to Budget Template Checkbox */}
+              {/* Auto-Sync to Recurring Templates Checkbox */}
               <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1298,34 +1298,34 @@ export const LoansView: React.FC<LoansViewProps> = ({
                 />
                 <div className="text-[11px]">
                   <span className="font-semibold text-slate-900 dark:text-slate-100 block">
-                    Sync with Estimate Budget Template ({formDirection === 'borrowed' ? 'Expense → Loans' : 'Income → Other Income'})
+                    Sync with Recurring Templates ({formDirection === 'borrowed' ? 'Expense → Loans' : 'Income → Other Income'})
                   </span>
                   <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
-                    Pre-populates this installment in your Budget Sheet and updates loan balance when marked Paid.
+                    Pre-populates this installment in your Budget and updates loan balance when marked Paid.
                   </span>
                 </div>
               </label>
 
-              {/* Optional Account Deduction for Lent Loans */}
+              {/* Optional Bank Account Deduction for Lent Loans */}
               {formDirection === 'lent' && !editingLoan && ledger.accounts.length > 0 && (
                 <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200/80 dark:border-emerald-800/50 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] sm:text-xs font-bold text-slate-900 dark:text-white">
-                      Disburse / Deduct Principal from Funds Account (Optional)
+                      Disburse Principal from Bank Account (Optional)
                     </span>
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold px-1.5 py-0.5 rounded bg-emerald-100/70 dark:bg-emerald-900/50">
-                      Funds Ledger
+                      Bank Accounts
                     </span>
                   </div>
                   <p className="text-[10px] sm:text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
-                    Which account did this lent money come from? Select an account below to deduct the principal ({currencySymbol}{formatNumber(parseFloat(formPrincipal) || parseFloat(formTotalContract) || 0)}) from its balance now, or leave unselected to track the receivable agreement without moving account funds.
+                    Which Bank Account did this lent money come from? Select a Bank Account below to deduct the principal ({currencySymbol}{formatNumber(parseFloat(formPrincipal) || parseFloat(formTotalContract) || 0)}) from its balance now, or leave unselected to track the receivable agreement without moving Bank Account funds.
                   </p>
                   <select
                     value={formDisburseAccountId}
                     onChange={(e) => setFormDisburseAccountId(e.target.value)}
                     className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                   >
-                    <option value="">Do not deduct from an account (track agreement only)</option>
+                    <option value="">Do not deduct from a Bank Account (track agreement only)</option>
                     {ledger.accounts.map((acc) => (
                       <option key={acc.id} value={acc.id}>
                         {acc.name} — Current Balance: {currencySymbol}{formatNumber(acc.balance)}
@@ -1430,7 +1430,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
                 />
               </div>
 
-              {/* Optional Sync to Current Budget Sheet */}
+              {/* Optional Sync to Current Budget */}
               <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1440,20 +1440,24 @@ export const LoansView: React.FC<LoansViewProps> = ({
                 />
                 <div className="text-[11px]">
                   <span className="font-semibold text-slate-800 dark:text-slate-200 block">
-                    Also record in {budget.year} Budget Sheet
+                    {paymentModalLoan.direction === 'borrowed'
+                      ? `Record in ${budget.year} Budget (Expense)`
+                      : `Record in ${budget.year} Budget (Income)`}
                   </span>
                   <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
-                    Logs a Paid {paymentModalLoan.direction === 'borrowed' ? 'Expense (Loans)' : 'Income'} entry so your cashflow sheet stays accurate.
+                    {paymentModalLoan.direction === 'borrowed'
+                      ? 'Logs a Paid Expense (Loans) entry in your Budget for this period.'
+                      : 'Logs a Paid Income entry in your Budget for this period (same cashflow pool as your salary).'}
                   </span>
                 </div>
               </label>
 
-              {/* Optional Deposit to Funds Account for Lent Receivables */}
+              {/* Optional Deposit to Bank Account for Lent Receivables */}
               {paymentModalLoan.direction === 'lent' && ledger.accounts.length > 0 && (
                 <div>
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
-                      Deposit Collected Cash to Funds Account (Optional)
+                      Deposit to Bank Account — General Reserves (Optional)
                     </label>
                   </div>
                   <select
@@ -1461,10 +1465,10 @@ export const LoansView: React.FC<LoansViewProps> = ({
                     onChange={(e) => setPayDepositAccountId(e.target.value)}
                     className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="">Do not add to Funds Ledger</option>
+                    <option value="">Do not deposit to a Bank Account (Budget only)</option>
                     {ledger.accounts.map((acc) => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
+                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)}) → General Reserves
                       </option>
                     ))}
                   </select>
