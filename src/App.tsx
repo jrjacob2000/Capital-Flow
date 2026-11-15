@@ -118,6 +118,7 @@ export default function App() {
   });
   const [driveFiles, setDriveFiles] = useState<DriveFileInfo[]>([]);
   const isInitialCloudHydrationDoneRef = useRef<boolean>(false);
+  const isHydratingRef = useRef<boolean>(false);
 
   // Conflict / Overwrite Prevention Modal State
   const [conflictModalState, setConflictModalState] = useState<{
@@ -217,6 +218,10 @@ export default function App() {
   // Hydrate or initialize the user's primary Firebase Firestore cloud database
   const hydrateOrSyncFirebaseWorkspace = useCallback(
     async (user: { uid: string; email?: string | null; displayName?: string | null }, optionalDriveToken?: string | null) => {
+      if (isHydratingRef.current) {
+        return;
+      }
+      isHydratingRef.current = true;
       try {
         setDriveStatus((prev) => ({
           ...prev,
@@ -428,6 +433,8 @@ export default function App() {
           isFirebaseSyncing: false,
           syncMessage: null,
         }));
+      } finally {
+        isHydratingRef.current = false;
       }
     },
     [currentYear, frequency]
@@ -490,6 +497,7 @@ export default function App() {
         FirestoreSyncService.clearMemoryCache();
         FinanceStorageService.clearCloudSessionMemory();
         isInitialCloudHydrationDoneRef.current = false;
+        isHydratingRef.current = false;
         setDriveFiles([]);
         setDriveStatus((prev) => ({
           ...prev,
@@ -770,6 +778,7 @@ export default function App() {
     FinanceStorageService.clearCloudSessionMemory();
     FinanceStorageService.clearDriveFolderCache();
     isInitialCloudHydrationDoneRef.current = false;
+    isHydratingRef.current = false;
     setDriveFiles([]);
     const guestBudget = FinanceStorageService.loadLocalBudget(currentYear);
     setBudget(guestBudget);
@@ -2660,6 +2669,7 @@ export default function App() {
         {activeTab === 'budget' && (
           <BudgetEntryView
             budget={budget}
+            ledger={ledger}
             accounts={ledger.accounts}
             frequency={frequency}
             onChangeFrequency={(nextFreq) => {

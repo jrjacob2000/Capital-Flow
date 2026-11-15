@@ -349,8 +349,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
+            .replace(/^Direct Deposit:\s*/i, '')
             .trim();
-          fundName = resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
+          const rawCatTrim = (tx.category || '').trim();
+          if (rawCatTrim.toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
+          fundName =
+            tx.source === 'manual_deposit' && rawCatTrim
+              ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, knownCanonicalPool)
+              : resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
+          if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
         }
       }
 

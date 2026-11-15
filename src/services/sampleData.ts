@@ -1518,6 +1518,13 @@ export function resolveCanonicalSinkingFundName(
     .trim();
   const catClean = (rawCategory || '').trim();
 
+  if (
+    itemClean.toLowerCase() === 'general reserves / starting capital' ||
+    (!itemClean && catClean.toLowerCase() === 'general reserves / starting capital')
+  ) {
+    return 'General Reserves / Starting Capital';
+  }
+
   const pool = Array.from(
     new Set([
       ...DEFAULT_SINKING_FUND_NAMES,
@@ -1530,11 +1537,11 @@ export function resolveCanonicalSinkingFundName(
     ])
   );
 
-  // If itemClean is empty, a generic alias ("Saving"/"Savings"), or accidentally set to a broad category name
+  // If itemClean is empty, a generic alias ("Saving"/"Savings"/"General Savings"), or set to a broad category group name
   if (
     !itemClean ||
     GENERIC_SAVING_ALIASES.has(itemClean.toLowerCase()) ||
-    itemClean.toLowerCase() === 'short-term & general savings'
+    SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === itemClean.toLowerCase())
   ) {
     if (
       catClean &&
@@ -1544,11 +1551,10 @@ export function resolveCanonicalSinkingFundName(
     ) {
       return findClosestSinkingFundMatch(catClean, pool) || catClean;
     }
+    if (itemClean.toLowerCase() === 'emergency & safety net') {
+      return 'Emergency Fund';
+    }
     return 'General Savings';
-  }
-
-  if (itemClean.toLowerCase() === 'emergency & safety net') {
-    return 'Emergency Fund';
   }
 
   // Check if itemClean matches or is a slight typo of an existing known fund

@@ -5,6 +5,7 @@ import {
   EntryFrequency,
   EntryType,
   SavingsAccount,
+  SavingsLedgerData,
   BudgetItemTemplate,
 } from '../types/finance';
 import {
@@ -15,6 +16,7 @@ import { BudgetSpreadsheetView } from './BudgetSpreadsheetView';
 
 interface BudgetEntryViewProps {
   budget: YearBudgetData;
+  ledger?: SavingsLedgerData;
   accounts: SavingsAccount[];
   frequency: EntryFrequency;
   onChangeFrequency: (freq: EntryFrequency) => void;
@@ -55,6 +57,7 @@ interface BudgetEntryViewProps {
 
 export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
   budget,
+  ledger,
   accounts,
   frequency,
   onChangeFrequency,
@@ -167,6 +170,7 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
     <div key="spreadsheet-layout-root" className="space-y-4">
       <BudgetSpreadsheetView
         budget={budget}
+        ledger={ledger}
         accounts={accounts}
         selectedPeriod={selectedPeriodFilter}
         onSelectPeriod={handleSelectPeriodFilter}

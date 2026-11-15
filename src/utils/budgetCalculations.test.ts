@@ -3891,3 +3891,224 @@ describe('31. Comprehensive All-Feature Health & Integration Probe Suite', () =>
     assert.equal(FinanceStorageService.isCloudSessionActive(), false);
   });
 });
+
+describe('32. Goal Fund Deletion, Synced Entry Deletion & Canonical Fund Resolution', () => {
+  beforeEach(() => {
+    memoryStorage.clear();
+    FinanceStorageService.setCloudSessionActive(false);
+  });
+
+  it('correctly resolves General Reserves / Starting Capital, General Savings, and custom funds like Vios Maintenance Fund', () => {
+    assert.equal(
+      resolveCanonicalSinkingFundName(
+        'General Reserves / Starting Capital',
+        'Emergency & Safety Net'
+      ),
+      'General Reserves / Starting Capital'
+    );
+    assert.equal(
+      resolveCanonicalSinkingFundName('General Savings', 'Short-Term & General Savings'),
+      'General Savings'
+    );
+    assert.equal(
+      resolveCanonicalSinkingFundName('General Saving', 'Short-Term & General Savings'),
+      'General Savings'
+    );
+    assert.equal(
+      resolveCanonicalSinkingFundName('General Savings', 'Vios Maintenance Fund'),
+      'Vios Maintenance Fund'
+    );
+    assert.equal(
+      resolveCanonicalSinkingFundName(
+        'Vehicle & Maintenance Sinking Funds',
+        'Vios Maintenance Fund'
+      ),
+      'Vios Maintenance Fund'
+    );
+  });
+
+  it('completely deletes a Goal Fund (including generic-aliased templates, yield funds, and reassigned entries)', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const seededTemplates = [
+      {
+        id: 'tpl-ef-generic',
+        type: 'saving' as const,
+        category: 'Emergency Fund',
+        item: 'Saving',
+        defaultEstimatedCost: 5000,
+        frequency: 'monthly' as const,
+      },
+      {
+        id: 'tpl-gen-sav',
+        type: 'saving' as const,
+        category: 'Short-Term & General Savings',
+        item: 'General Savings',
+        defaultEstimatedCost: 3000,
+        frequency: 'monthly' as const,
+      },
+    ];
+    let currentBudget: typeof budget = {
+      ...budget,
+      isPersonalizedTemplate: true,
+      itemTemplates: seededTemplates,
+    };
+    FinanceStorageService.saveLocalBudget(currentBudget);
+
+    // Record a paid saving entry for Emergency Fund and an uncategorized interest_yield transaction
+    const addRes = FinanceStorageService.addMultipleBudgetEntries(currentBudget, [
+      {
+        year: 2026,
+        period: 'Jan',
+        periodIndex: 0,
+        date: '2026-01-15',
+        type: 'saving',
+        category: 'Emergency & Safety Net',
+        item: 'Emergency Fund',
+        description: 'Emergency Fund',
+        estimatedCost: 5000,
+        actualCost: 5000,
+        amount: 5000,
+        difference: 0,
+        paymentMethod: 'Bank Transfer',
+        status: 'Paid',
+      },
+    ]);
+    currentBudget = addRes.budget;
+
+    FinanceStorageService.addLedgerTransaction({
+      date: '2026-01-20',
+      year: 2026,
+      period: 'Jan',
+      amount: 450,
+      accountId: addRes.ledger.accounts[0].id,
+      accountName: addRes.ledger.accounts[0].name,
+      source: 'interest_yield',
+      note: 'Monthly Interest',
+    });
+
+    // 1. Delete Emergency Fund -> removes generic-aliased template 'Saving' (category 'Emergency Fund') and reassigns entry & tx to General Reserves
+    const delEf = FinanceStorageService.deleteSinkingFund(
+      currentBudget,
+      'Emergency Fund',
+      'General Reserves / Starting Capital'
+    );
+    currentBudget = delEf.budget;
+    assert.equal(
+      currentBudget.itemTemplates?.some(
+        (t) => resolveCanonicalSinkingFundName(t.item, t.category) === 'Emergency Fund'
+      ),
+      false
+    );
+    assert.equal(
+      currentBudget.entries.every(
+        (e) =>
+          resolveCanonicalSinkingFundName(e.item || e.description, e.category) !== 'Emergency Fund'
+      ),
+      true
+    );
+    assert.equal(
+      delEf.ledger.transactions.every((tx) => tx.category !== 'Emergency Fund'),
+      true
+    );
+
+    // 2. Delete General Savings -> removes General Savings template
+    const delGen = FinanceStorageService.deleteSinkingFund(
+      currentBudget,
+      'General Savings',
+      'General Reserves / Starting Capital'
+    );
+    currentBudget = delGen.budget;
+    assert.equal(currentBudget.itemTemplates?.length, 0);
+
+    // 3. Delete Compounding Yields & Dividend -> reassigns uncategorized interest_yield transaction
+    const delYield = FinanceStorageService.deleteSinkingFund(
+      currentBudget,
+      'Compounding Yields & Dividend',
+      'General Reserves / Starting Capital'
+    );
+    const yieldTx = delYield.ledger.transactions.find((t) => t.source === 'interest_yield');
+    assert.equal(yieldTx?.category, 'General Reserves / Starting Capital');
+  });
+
+  it('deletes a budget_sync ledger transaction and excludes its template in that period so it does not reappear', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const tpl = {
+      id: 'tpl-travel-1',
+      type: 'saving' as const,
+      category: 'Lifestyle & Planned Goals',
+      item: 'Travel / Vacation Fund',
+      defaultEstimatedCost: 4000,
+      frequency: 'monthly' as const,
+    };
+    const currentBudget: typeof budget = {
+      ...budget,
+      isPersonalizedTemplate: true,
+      itemTemplates: [tpl],
+    };
+    FinanceStorageService.saveLocalBudget(currentBudget);
+
+    const added = FinanceStorageService.addMultipleBudgetEntries(currentBudget, [
+      {
+        year: 2026,
+        period: 'Feb',
+        periodIndex: 1,
+        date: '2026-02-10',
+        type: 'saving',
+        category: 'Lifestyle & Planned Goals',
+        item: 'Travel / Vacation Fund',
+        description: 'Travel / Vacation Fund',
+        estimatedCost: 4000,
+        actualCost: 4000,
+        amount: 4000,
+        difference: 0,
+        paymentMethod: 'Bank Transfer',
+        status: 'Paid',
+      },
+    ]);
+
+    const syncedTx = added.ledger.transactions.find(
+      (tx) => tx.budgetEntryId === added.newEntries[0].id
+    );
+    assert.ok(syncedTx);
+
+    const delTxRes = FinanceStorageService.deleteLedgerTransaction(syncedTx!.id, 2026);
+    assert.equal(delTxRes.ledger.transactions.length, 0);
+    assert.ok(delTxRes.updatedBudget);
+    assert.equal(delTxRes.updatedBudget!.entries.length, 0);
+    assert.equal(
+      isTemplateExcludedInPeriod(tpl, 'Feb', delTxRes.updatedBudget!.excludedPeriodItems),
+      true
+    );
+  });
+
+  it('normalizes goal funds into correct category groups and accurately suppresses deleted loan payments via loanId', () => {
+    // 1. normalizeSavingCategoryGroup handles vehicle, investment, emergency, and custom funds
+    assert.equal(
+      normalizeSavingCategoryGroup('Vios Maintenance Fund', 'General Savings'),
+      'Vehicle & Maintenance Sinking Funds'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Emergency Fund', 'General Savings'),
+      'Emergency & Safety Net'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Wedding Fund', 'General Savings'),
+      'Short-Term & General Savings'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Wedding Fund', 'Family, Travel & Education Funds'),
+      'Family, Travel & Education Funds'
+    );
+
+    // 2. Loan payment exclusion keys generated using loanId
+    const loanExclusionKeys = getPeriodItemExclusionKeys({
+      type: 'expense',
+      item: 'Auto Loan Payment',
+      loanId: 'loan-vios-2026',
+    });
+    assert.ok(loanExclusionKeys.includes('loan:loan-vios-2026'));
+    assert.ok(loanExclusionKeys.includes('expense:auto loan payment'));
+  });
+});
+
+

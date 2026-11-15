@@ -32,6 +32,7 @@ import {
   EntryType,
   PaymentMethod,
   SavingsAccount,
+  SavingsLedgerData,
   BudgetItemTemplate,
 } from '../types/finance';
 import {
@@ -58,6 +59,7 @@ import {
   computePaymentChannelSubtotals,
   getPendingAmountToPay,
   getPendingChannelAmountForRow,
+  getPeriodItemExclusionKeys,
   isTemplateExcludedInPeriod,
   resolveSyncedEntryAndTemplateAmounts,
   shouldTemplateDisplayInBudget,
@@ -83,10 +85,12 @@ export interface SheetRowItem {
   isOptional?: boolean;
   savingAccountId?: string;
   savingAccountName?: string;
+  loanId?: string;
 }
 
 interface BudgetSpreadsheetViewProps {
   budget: YearBudgetData;
+  ledger?: SavingsLedgerData;
   accounts: SavingsAccount[];
   selectedPeriod: string;
   onSelectPeriod: (period: string) => void;
@@ -129,6 +133,7 @@ interface BudgetSpreadsheetViewProps {
 
 export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   budget,
+  ledger,
   accounts,
   selectedPeriod,
   onSelectPeriod,
@@ -170,6 +175,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         actualCost: row.actualCost,
         hasActualCost: row.hasActualCost,
         status: row.status,
+        loanId: row.loanId,
       });
     } else if (!row.isVirtualEstimate) {
       onDeleteEntry(row.id);
@@ -222,10 +228,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   }, [budget.isPersonalizedTemplate, budget.itemTemplates]);
 
   const expenseCategories = useMemo(() => {
+    const baseExpense =
+      budget.customCategories?.expense && budget.customCategories.expense.length > 0
+        ? budget.customCategories.expense
+        : EXPENSE_CATEGORIES;
     return Array.from(
       new Set([
-        ...(budget.customCategories?.expense || []),
-        ...EXPENSE_CATEGORIES,
+        ...baseExpense,
         ...itemTemplates.filter((t) => t.type === 'expense').map((t) => t.category),
         ...budget.entries.filter((e) => e.type === 'expense').map((e) => e.category),
       ])
@@ -233,10 +242,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   }, [budget.customCategories?.expense, itemTemplates, budget.entries]);
 
   const incomeCategories = useMemo(() => {
+    const baseIncome =
+      budget.customCategories?.income && budget.customCategories.income.length > 0
+        ? budget.customCategories.income
+        : INCOME_CATEGORIES;
     return Array.from(
       new Set([
-        ...(budget.customCategories?.income || []),
-        ...INCOME_CATEGORIES,
+        ...baseIncome,
         ...itemTemplates.filter((t) => t.type === 'income').map((t) => t.category),
         ...budget.entries.filter((e) => e.type === 'income').map((e) => e.category),
       ])
@@ -244,10 +256,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   }, [budget.customCategories?.income, itemTemplates, budget.entries]);
 
   const savingCategories = useMemo(() => {
+    const baseSaving =
+      budget.customCategories?.saving && budget.customCategories.saving.length > 0
+        ? budget.customCategories.saving
+        : SAVING_CATEGORIES;
     return Array.from(
       new Set([
-        ...(budget.customCategories?.saving || []),
-        ...SAVING_CATEGORIES,
+        ...baseSaving,
         ...itemTemplates.filter((t) => t.type === 'saving').map((t) => t.category),
         ...budget.entries.filter((e) => e.type === 'saving').map((e) => e.category),
       ])
@@ -315,16 +330,75 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [isCreatingCustomCategory, setIsCreatingCustomCategory] = useState<boolean>(false);
 
   const existingSinkingFunds = useMemo(() => {
+    const names = new Map<string, string>();
     const basePool = [...DEFAULT_SINKING_FUND_NAMES];
-    const fromTemplates = itemTemplates
-      .filter((t) => t.type === 'saving')
-      .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, basePool));
-    const combinedPool = Array.from(new Set([...fromTemplates, ...basePool]));
-    const fromEntries = budget.entries
+    const addFundName = (raw?: string) => {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return;
+      const lower = trimmed.toLowerCase();
+      if (
+        lower === 'general reserves / starting capital' ||
+        lower === 'unallocated cash pool' ||
+        SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === lower)
+      ) {
+        return;
+      }
+      if (!names.has(lower)) {
+        names.set(lower, trimmed);
+      }
+    };
+
+    const allSavingTemplates = [
+      ...itemTemplates.filter((t) => t.type === 'saving'),
+      ...(budget.itemTemplates || []).filter((t) => t.type === 'saving'),
+    ];
+    allSavingTemplates.forEach((t) => {
+      const resolved = resolveCanonicalSinkingFundName(t.item, t.category, basePool);
+      addFundName(resolved);
+    });
+
+    const combinedPool = Array.from(new Set([...Array.from(names.values()), ...basePool]));
+    (budget.entries || [])
       .filter((e) => e.type === 'saving')
-      .map((e) => resolveCanonicalSinkingFundName(e.item || e.description, e.category, combinedPool));
-    return Array.from(new Set([...fromTemplates, ...basePool, ...fromEntries])).filter(Boolean);
-  }, [itemTemplates, budget.entries]);
+      .forEach((e) => {
+        const resolved = resolveCanonicalSinkingFundName(
+          e.item || e.description,
+          e.category,
+          combinedPool
+        );
+        addFundName(resolved);
+      });
+
+    (ledger?.transactions || []).forEach((tx) => {
+      if (tx.source === 'withdrawal' || tx.source === 'transfer') return;
+      const cleanNote = (tx.note || '')
+        .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+        .trim();
+      const rawCatTrim = (tx.category || '').trim();
+      if (rawCatTrim && rawCatTrim.toLowerCase() !== 'general reserves / starting capital') {
+        const resolvedCat =
+          tx.source === 'manual_deposit'
+            ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, combinedPool)
+            : resolveCanonicalSinkingFundName(cleanNote || rawCatTrim, rawCatTrim, combinedPool);
+        addFundName(resolvedCat);
+      } else if (cleanNote && tx.source === 'budget_sync') {
+        addFundName(resolveCanonicalSinkingFundName(cleanNote, tx.category, combinedPool));
+      }
+      if (tx.toCategory) {
+        const resolved = resolveCanonicalSinkingFundName(
+          tx.toCategory,
+          tx.toCategory,
+          combinedPool
+        );
+        addFundName(resolved);
+      }
+    });
+
+    (budget.customCategories?.saving || []).forEach((c) => addFundName(c));
+    basePool.forEach((d) => addFundName(d));
+
+    return Array.from(names.values());
+  }, [itemTemplates, budget.itemTemplates, budget.entries, budget.customCategories?.saving, ledger?.transactions]);
 
 
 
@@ -490,18 +564,30 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     itemTemplates
       .filter((tpl) => isTemplateValidForPeriod(tpl, frequency, selectedPeriod))
       .forEach((tpl) => {
-      if (isTemplateExcludedInPeriod(tpl, selectedPeriod, budget.excludedPeriodItems)) {
-        return;
-      }
-      const shouldDisplay = shouldTemplateDisplayInBudget(tpl, true);
       const tplItemLower = tpl.item.toLowerCase().trim();
+      const tplCanonicalFundLower =
+        tpl.type === 'saving'
+          ? resolveCanonicalSinkingFundName(tpl.item, tpl.category).toLowerCase()
+          : '';
       const matchingCandidates = recordedEntries.filter(
         (e) =>
           !usedEntryIds.has(e.id) &&
           e.type === tpl.type &&
           (Boolean(tpl.loanId && e.loanId === tpl.loanId) ||
-            (e.item || e.description || '').toLowerCase().trim() === tplItemLower)
+            (e.item || e.description || '').toLowerCase().trim() === tplItemLower ||
+            (tpl.type === 'saving' &&
+              tplCanonicalFundLower.length > 0 &&
+              resolveCanonicalSinkingFundName(
+                e.item || e.description,
+                e.category
+              ).toLowerCase() === tplCanonicalFundLower))
       );
+
+      if (isTemplateExcludedInPeriod(tpl, selectedPeriod, budget.excludedPeriodItems)) {
+        matchingCandidates.forEach((cand) => usedEntryIds.add(cand.id));
+        return;
+      }
+      const shouldDisplay = shouldTemplateDisplayInBudget(tpl, true);
       const matchedEntry =
         matchingCandidates.find(
           (e) =>
@@ -564,6 +650,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           toBeWithdrawn: Boolean(matchedEntry.toBeWithdrawn || tpl.toBeWithdrawn),
           savingAccountId: matchedEntry.savingAccountId || matchedTargetAcc?.id,
           savingAccountName: matchedEntry.savingAccountName || matchedTargetAcc?.name,
+          loanId: matchedEntry.loanId || tpl.loanId,
         };
 
         if (tpl.type === 'income') {
@@ -604,6 +691,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           toBeWithdrawn: Boolean(tpl.toBeWithdrawn),
           savingAccountId: tpl.type === 'saving' ? tplTargetAcc?.id : undefined,
           savingAccountName: tpl.type === 'saving' ? tplTargetAcc?.name : undefined,
+          loanId: tpl.loanId,
         };
 
         if (tpl.type === 'income') {
@@ -615,8 +703,19 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     });
 
     // 2. Add any custom recorded entries that are not in the template list
+    const periodExclusions = budget.excludedPeriodItems?.[selectedPeriod] || [];
     recordedEntries.forEach((entry) => {
       if (!usedEntryIds.has(entry.id)) {
+        if (periodExclusions.length > 0) {
+          const entryExclusionKeys = getPeriodItemExclusionKeys({
+            type: entry.type,
+            item: entry.item || entry.description,
+            loanId: entry.loanId,
+          });
+          if (entryExclusionKeys.some((k) => periodExclusions.includes(k))) {
+            return;
+          }
+        }
         const est = entry.estimatedCost ?? 0;
         const act = entry.actualCost ?? entry.amount ?? 0;
         const diff = entry.type === 'income' ? act - est : est - act;
@@ -643,6 +742,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           toBeWithdrawn: Boolean(entry.toBeWithdrawn),
           savingAccountId: entry.savingAccountId || customTargetAcc?.id,
           savingAccountName: entry.savingAccountName || customTargetAcc?.name,
+          loanId: entry.loanId,
         };
 
         if (entry.type === 'income') {
@@ -4343,6 +4443,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         isOpen={isManagerModalOpen}
         onClose={() => setIsManagerModalOpen(false)}
         budget={budget}
+        ledger={ledger}
         accounts={accounts}
         onUpdateCategories={onUpdateCategories}
         onUpdateTemplates={onUpdateTemplates}

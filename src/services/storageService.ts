@@ -571,9 +571,9 @@ export class FinanceStorageService {
     if (budget.customCategories) {
       if (Array.isArray(budget.customCategories.expense)) {
         const rawExp =
-          budget.customCategories.expense.length > 1
+          budget.customCategories.expense.length > 0
             ? budget.customCategories.expense
-            : Array.from(new Set([...budget.customCategories.expense, ...EXPENSE_CATEGORIES]));
+            : [...EXPENSE_CATEGORIES];
         const normalizedExpense: string[] = [];
         rawExp.forEach((c) => {
           const norm = normalizeCategoryWording(c);
@@ -590,9 +590,9 @@ export class FinanceStorageService {
 
       if (Array.isArray(budget.customCategories.income)) {
         const rawInc =
-          budget.customCategories.income.length > 1
+          budget.customCategories.income.length > 0
             ? budget.customCategories.income
-            : Array.from(new Set([...budget.customCategories.income, ...INCOME_CATEGORIES]));
+            : [...INCOME_CATEGORIES];
         const normalizedIncome = Array.from(new Set(rawInc.filter(Boolean)));
         if (normalizedIncome.length !== budget.customCategories.income.length) {
           didMigrate = true;
@@ -601,11 +601,24 @@ export class FinanceStorageService {
       }
 
       if (Array.isArray(budget.customCategories.saving)) {
-        const normalizedSaving: string[] = [...SAVING_CATEGORIES];
-        budget.customCategories.saving.forEach((c) => {
-          const norm = normalizeSavingCategoryGroup(c, c);
+        const rawSav =
+          budget.customCategories.saving.length > 0
+            ? budget.customCategories.saving
+            : [...SAVING_CATEGORIES];
+        const normalizedSaving: string[] = [];
+        rawSav.forEach((c) => {
+          const trimmed = (c || '').trim();
+          if (!trimmed || trimmed === 'Unallocated Cash Pool') {
+            didMigrate = true;
+            return;
+          }
+          const lower = trimmed.toLowerCase();
+          const norm =
+            lower === 'savings' || lower === 'savings / envelope'
+              ? 'Short-Term & General Savings'
+              : trimmed;
           if (norm !== c) didMigrate = true;
-          if (norm && norm !== 'Unallocated Cash Pool' && !normalizedSaving.includes(norm)) {
+          if (norm && !normalizedSaving.includes(norm)) {
             normalizedSaving.push(norm);
           }
         });
@@ -1301,18 +1314,25 @@ export class FinanceStorageService {
     const ledger = FinanceStorageService.loadLocalSavingsLedger();
     const effectiveAmount = entry.actualCost ?? entry.amount ?? 0;
 
-    const existingIndex = ledger.transactions.findIndex(
-      (tx) => tx.budgetEntryId === entry.id
-    );
+    const isMatchingEntryTx = (tx: SavingsTransaction) =>
+      tx.budgetEntryId === entry.id || tx.id === `tx-${entry.id}`;
+
+    const existingIndex = ledger.transactions.findIndex(isMatchingEntryTx);
 
     if (isDelete || entry.type !== 'saving' || entry.status === 'Pending' || effectiveAmount === 0) {
       if (existingIndex >= 0) {
-        const removed = ledger.transactions.splice(existingIndex, 1)[0];
-        // update account balance
-        const acc = ledger.accounts.find((a) => a.id === removed.accountId);
-        if (acc) {
-          acc.balance = Math.max(0, acc.balance - removed.amount);
-        }
+        const remaining: SavingsTransaction[] = [];
+        ledger.transactions.forEach((tx) => {
+          if (isMatchingEntryTx(tx)) {
+            const acc = ledger.accounts.find((a) => a.id === tx.accountId);
+            if (acc) {
+              acc.balance = Math.max(0, acc.balance - tx.amount);
+            }
+          } else {
+            remaining.push(tx);
+          }
+        });
+        ledger.transactions = remaining;
       }
     } else {
       const accountId = entry.savingAccountId || ledger.accounts[0]?.id || 'acc-hysa';
@@ -1472,12 +1492,14 @@ export class FinanceStorageService {
     }
 
     let updatedBudget: YearBudgetData | undefined;
-    if (newTx.budgetEntryId) {
+    const linkedEntryId =
+      newTx.budgetEntryId || (newTx.id.startsWith('tx-') ? newTx.id.slice(3) : undefined);
+    if (linkedEntryId) {
       const targetYear = newTx.year || activeYear;
       const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
       let budgetChanged = false;
       targetBudget.entries = targetBudget.entries.map((e) => {
-        if (e.id === newTx.budgetEntryId) {
+        if (e.id === linkedEntryId) {
           budgetChanged = true;
           const est = e.estimatedCost || 0;
           const updatedFundItem =
@@ -1540,14 +1562,64 @@ export class FinanceStorageService {
     }
 
     let updatedBudget: YearBudgetData | undefined;
-    if (targetTx.budgetEntryId) {
+    const linkedEntryId =
+      targetTx.budgetEntryId || (targetTx.id.startsWith('tx-') ? targetTx.id.slice(3) : undefined);
+    if (linkedEntryId) {
       const targetYear = targetTx.year || activeYear;
       const targetBudget = FinanceStorageService.loadLocalBudget(targetYear);
-      const filteredEntries = targetBudget.entries.filter((e) => e.id !== targetTx.budgetEntryId);
-      if (filteredEntries.length !== targetBudget.entries.length) {
+      const removedEntries: BudgetEntry[] = [];
+      const filteredEntries: BudgetEntry[] = [];
+      targetBudget.entries.forEach((e) => {
+        if (e.id === linkedEntryId || `tx-${e.id}` === targetTx.id) {
+          removedEntries.push(e);
+        } else {
+          filteredEntries.push(e);
+        }
+      });
+      if (removedEntries.length > 0) {
+        const updatedExcluded: Record<string, string[]> = {
+          ...(targetBudget.excludedPeriodItems || {}),
+        };
+        removedEntries.forEach((removed) => {
+          const p = removed.period;
+          if (!p) return;
+          const cleanItemLower = (removed.item || removed.description || '').trim().toLowerCase();
+          const matchedTpl = (targetBudget.itemTemplates || []).find(
+            (t) =>
+              t.type === removed.type &&
+              ((removed.loanId && t.loanId === removed.loanId) ||
+                t.item.trim().toLowerCase() === cleanItemLower ||
+                (t.type === 'saving' &&
+                  resolveCanonicalSinkingFundName(t.item, t.category).toLowerCase() ===
+                    resolveCanonicalSinkingFundName(
+                      removed.item || removed.description,
+                      removed.category
+                    ).toLowerCase()))
+          );
+          const keysToExclude = [
+            ...getPeriodItemExclusionKeys({
+              templateId: matchedTpl?.id,
+              type: removed.type,
+              item: removed.item || removed.description,
+              loanId: removed.loanId || matchedTpl?.loanId,
+            }),
+            ...(matchedTpl
+              ? getPeriodItemExclusionKeys({
+                  templateId: matchedTpl.id,
+                  type: matchedTpl.type,
+                  item: matchedTpl.item,
+                  loanId: matchedTpl.loanId,
+                })
+              : []),
+          ];
+          const existingList = updatedExcluded[p] || [];
+          updatedExcluded[p] = Array.from(new Set([...existingList, ...keysToExclude]));
+        });
+
         updatedBudget = {
           ...targetBudget,
           entries: filteredEntries,
+          excludedPeriodItems: updatedExcluded,
         };
         FinanceStorageService.saveLocalBudget(updatedBudget, {
           skipTemplateProfileUpdate: targetYear !== activeYear,
@@ -1752,28 +1824,55 @@ export class FinanceStorageService {
     }
     const oldLower = oldClean.toLowerCase();
     const newLower = newClean.toLowerCase();
+    const oldCanonicalLower = resolveCanonicalSinkingFundName(oldClean, oldClean).toLowerCase();
     const resolvedCategory = normalizeSavingCategoryGroup(newClean, newSavingCategory);
+
+    const matchesOldFund = (rawPrimary?: string, rawSecondary?: string): boolean => {
+      const p = (rawPrimary || '').trim();
+      const s = (rawSecondary || '').trim();
+      if (!p && !s) return false;
+      if (p.toLowerCase() === oldLower || s.toLowerCase() === oldLower) return true;
+      const resolved = resolveCanonicalSinkingFundName(p || s, s || p).toLowerCase();
+      return resolved === oldLower || resolved === oldCanonicalLower;
+    };
 
     let ledgerChanged = false;
     currentLedger.transactions = currentLedger.transactions
       .map((tx) => {
         const updated = { ...tx };
-        if ((tx.category || '').trim().toLowerCase() === oldLower) {
-          updated.category = newClean;
-          ledgerChanged = true;
-        }
-        if ((tx.toCategory || '').trim().toLowerCase() === oldLower) {
-          updated.toCategory = newClean;
-          ledgerChanged = true;
-        }
         const cleanNote = (tx.note || '')
           .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
           .trim();
-        if (cleanNote.toLowerCase() === oldLower) {
-          updated.note = tx.note.replace(
-            new RegExp(oldClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
-            newClean
-          );
+        const catTrim = (tx.category || '').trim();
+        const toCatTrim = (tx.toCategory || '').trim();
+        const isUncategorizedYieldTarget =
+          tx.source === 'interest_yield' &&
+          !catTrim &&
+          oldLower === 'compounding yields & dividend';
+
+        if (
+          isUncategorizedYieldTarget ||
+          catTrim.toLowerCase() === oldLower ||
+          (catTrim && matchesOldFund(catTrim, cleanNote)) ||
+          (!catTrim && cleanNote && matchesOldFund(cleanNote, tx.category))
+        ) {
+          updated.category = newClean;
+          ledgerChanged = true;
+        }
+        if (toCatTrim.toLowerCase() === oldLower || (toCatTrim && matchesOldFund(toCatTrim))) {
+          updated.toCategory = newClean;
+          ledgerChanged = true;
+        }
+        if (cleanNote.toLowerCase() === oldLower || matchesOldFund(cleanNote)) {
+          updated.note = tx.note
+            ? tx.note.replace(
+                new RegExp(oldClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+                newClean
+              )
+            : newClean;
+          if (updated.note === tx.note && cleanNote.toLowerCase() !== newLower) {
+            updated.note = newClean;
+          }
           ledgerChanged = true;
         }
         return updated;
@@ -1798,10 +1897,13 @@ export class FinanceStorageService {
     const deduplicatedTemplates: BudgetItemTemplate[] = [];
 
     currentTemplates.forEach((tpl) => {
-      if (
+      const tplItemLower = tpl.item.trim().toLowerCase();
+      const tplMatchesOld =
         tpl.type === 'saving' &&
-        (tpl.item.trim().toLowerCase() === oldLower || tpl.item.trim().toLowerCase() === newLower)
-      ) {
+        (tplItemLower === oldLower || matchesOldFund(tpl.item, tpl.category));
+      const tplMatchesNew = tpl.type === 'saving' && tplItemLower === newLower;
+
+      if (tplMatchesOld || tplMatchesNew) {
         if (!matchedSavingTemplate) {
           matchedSavingTemplate = true;
           const isBiweeklyBoth =
@@ -1852,13 +1954,16 @@ export class FinanceStorageService {
       if (
         e.type === 'saving' &&
         ((e.item || '').trim().toLowerCase() === oldLower ||
-          (e.description || '').trim().toLowerCase() === oldLower)
+          (e.description || '').trim().toLowerCase() === oldLower ||
+          matchesOldFund(e.item || e.description, e.category))
       ) {
         return {
           ...e,
           item: newClean,
           description: newClean,
-          category: newSavingCategory ? resolvedCategory : e.category,
+          category: newSavingCategory
+            ? resolvedCategory
+            : normalizeSavingCategoryGroup(newClean, e.category),
         };
       }
       return e;
@@ -1884,26 +1989,61 @@ export class FinanceStorageService {
     fundName: string,
     reassignToFund?: string
   ): { budget: YearBudgetData; ledger: SavingsLedgerData; destination: string } {
-    const targetLower = fundName.trim().toLowerCase();
+    const targetClean = fundName.trim();
+    const targetLower = targetClean.toLowerCase();
+    const targetCanonicalLower = resolveCanonicalSinkingFundName(
+      targetClean,
+      targetClean
+    ).toLowerCase();
     const destination = (reassignToFund || 'General Reserves / Starting Capital').trim();
     const currentLedger = FinanceStorageService.loadLocalSavingsLedger();
     if (!targetLower) {
       return { budget, ledger: currentLedger, destination };
     }
 
+    const matchesTargetFund = (rawPrimary?: string, rawSecondary?: string): boolean => {
+      const p = (rawPrimary || '').trim();
+      const s = (rawSecondary || '').trim();
+      if (!p && !s) return false;
+      if (p.toLowerCase() === targetLower || s.toLowerCase() === targetLower) return true;
+      const resolved = resolveCanonicalSinkingFundName(p || s, s || p).toLowerCase();
+      return resolved === targetLower || resolved === targetCanonicalLower;
+    };
+
     let ledgerChanged = false;
     currentLedger.transactions = currentLedger.transactions
       .map((tx) => {
-        const catLower = (tx.category || '').trim().toLowerCase();
-        const toCatLower = (tx.toCategory || '').trim().toLowerCase();
-        if (catLower === targetLower || toCatLower === targetLower) {
+        const catTrim = (tx.category || '').trim();
+        const toCatTrim = (tx.toCategory || '').trim();
+        const cleanNote = (tx.note || '')
+          .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+          .trim();
+        const isUncategorizedYieldTarget =
+          tx.source === 'interest_yield' &&
+          !catTrim &&
+          targetLower === 'compounding yields & dividend';
+
+        const catMatches =
+          isUncategorizedYieldTarget ||
+          catTrim.toLowerCase() === targetLower ||
+          (catTrim && matchesTargetFund(catTrim, cleanNote)) ||
+          (!catTrim && cleanNote && matchesTargetFund(cleanNote, tx.category));
+        const toCatMatches =
+          toCatTrim.toLowerCase() === targetLower || (toCatTrim && matchesTargetFund(toCatTrim));
+        const noteMatches =
+          cleanNote.toLowerCase() === targetLower || (cleanNote && matchesTargetFund(cleanNote));
+
+        if (catMatches || toCatMatches || noteMatches) {
           ledgerChanged = true;
           const updated = { ...tx };
-          if (catLower === targetLower) {
+          if (catMatches) {
             updated.category = destination;
           }
-          if (toCatLower === targetLower) {
+          if (toCatMatches) {
             updated.toCategory = destination;
+          }
+          if (noteMatches) {
+            updated.note = destination;
           }
           return updated;
         }
@@ -1925,22 +2065,44 @@ export class FinanceStorageService {
     }
 
     const filteredTemplates = (budget.itemTemplates || []).filter(
-      (tpl) => !(tpl.type === 'saving' && tpl.item.trim().toLowerCase() === targetLower)
+      (tpl) =>
+        !(
+          tpl.type === 'saving' &&
+          (tpl.item.trim().toLowerCase() === targetLower ||
+            matchesTargetFund(tpl.item, tpl.category))
+        )
     );
 
-    const updatedEntries = budget.entries.map((e) => {
+    const isDeletingToGeneralReserves =
+      destination.toLowerCase() === 'general reserves / starting capital';
+
+    const updatedEntries: BudgetEntry[] = [];
+    budget.entries.forEach((e) => {
       if (
         e.type === 'saving' &&
         ((e.item || '').trim().toLowerCase() === targetLower ||
-          (e.description || '').trim().toLowerCase() === targetLower)
+          (e.description || '').trim().toLowerCase() === targetLower ||
+          matchesTargetFund(e.item || e.description, e.category))
       ) {
-        return { ...e, item: destination, description: destination };
+        const isUnrecordedPendingPlaceholder =
+          e.status === 'Pending' && (e.actualCost ?? e.amount ?? 0) === 0;
+        if (isDeletingToGeneralReserves && isUnrecordedPendingPlaceholder) {
+          // Drop unrecorded pending placeholder rows for deleted funds
+          return;
+        }
+        updatedEntries.push({
+          ...e,
+          item: destination,
+          description: destination,
+          category: normalizeSavingCategoryGroup(destination, e.category),
+        });
+      } else {
+        updatedEntries.push(e);
       }
-      return e;
     });
 
     const updatedSavingCats = (budget.customCategories?.saving || []).filter(
-      (c) => c.trim().toLowerCase() !== targetLower
+      (c) => c.trim().toLowerCase() !== targetLower && !matchesTargetFund(c)
     );
 
     const updatedBudget: YearBudgetData = {
@@ -2099,29 +2261,61 @@ export class FinanceStorageService {
     removedEntries: BudgetEntry[];
     excludedTemplate: boolean;
   } {
-    const cleanItemLower = (target.item || '').trim().toLowerCase();
+    const entryById = target.entryId
+      ? (budget.entries || []).find((e) => e.id === target.entryId)
+      : undefined;
+    const cleanItemLower = (target.item || entryById?.item || entryById?.description || '')
+      .trim()
+      .toLowerCase();
+    const entryByIdItemLower = (entryById?.item || entryById?.description || '')
+      .trim()
+      .toLowerCase();
+    const targetCanonicalFundLower =
+      target.type === 'saving'
+        ? resolveCanonicalSinkingFundName(
+            target.item || entryById?.item || entryById?.description || '',
+            entryById?.category
+          ).toLowerCase()
+        : '';
+
     const matchedTemplate = (budget.itemTemplates || []).find(
       (t) =>
         (target.templateId && t.id === target.templateId) ||
         (t.type === target.type &&
           ((target.loanId && t.loanId === target.loanId) ||
-            t.item.trim().toLowerCase() === cleanItemLower))
+            (entryById?.loanId && t.loanId === entryById.loanId) ||
+            (cleanItemLower.length > 0 && t.item.trim().toLowerCase() === cleanItemLower) ||
+            (entryByIdItemLower.length > 0 && t.item.trim().toLowerCase() === entryByIdItemLower) ||
+            (target.type === 'saving' &&
+              targetCanonicalFundLower.length > 0 &&
+              resolveCanonicalSinkingFundName(t.item, t.category).toLowerCase() ===
+                targetCanonicalFundLower)))
     );
 
     const effectiveTemplateId = target.templateId || matchedTemplate?.id;
-    const effectiveLoanId = target.loanId || matchedTemplate?.loanId;
+    const effectiveLoanId = target.loanId || entryById?.loanId || matchedTemplate?.loanId;
+    const matchedTemplateItemLower = (matchedTemplate?.item || '').trim().toLowerCase();
 
     const removedEntries: BudgetEntry[] = [];
     const remainingEntries: BudgetEntry[] = [];
 
     (budget.entries || []).forEach((e) => {
       const isDirectIdMatch = Boolean(target.entryId && e.id === target.entryId);
+      const entryItemLower = (e.item || e.description || '').trim().toLowerCase();
+      const entryCanonicalFundLower =
+        e.type === 'saving'
+          ? resolveCanonicalSinkingFundName(e.item || e.description, e.category).toLowerCase()
+          : '';
       const isSamePeriodAndItemMatch =
         e.period === period &&
         e.type === target.type &&
         (Boolean(effectiveLoanId && e.loanId === effectiveLoanId) ||
-          (cleanItemLower.length > 0 &&
-            (e.item || e.description || '').trim().toLowerCase() === cleanItemLower));
+          (cleanItemLower.length > 0 && entryItemLower === cleanItemLower) ||
+          (entryByIdItemLower.length > 0 && entryItemLower === entryByIdItemLower) ||
+          (matchedTemplateItemLower.length > 0 && entryItemLower === matchedTemplateItemLower) ||
+          (target.type === 'saving' &&
+            targetCanonicalFundLower.length > 0 &&
+            entryCanonicalFundLower === targetCanonicalFundLower));
 
       if (isDirectIdMatch || isSamePeriodAndItemMatch) {
         removedEntries.push(e);
@@ -2137,14 +2331,43 @@ export class FinanceStorageService {
       : Boolean(effectiveTemplateId);
     if ((effectiveTemplateId || matchedTemplate) && isDisplayedTemplate) {
       excludedTemplate = true;
-      const keysToExclude = getPeriodItemExclusionKeys({
-        templateId: effectiveTemplateId,
-        type: target.type,
-        item: matchedTemplate?.item || target.item,
-        loanId: effectiveLoanId,
-      });
+      const candidateItems = Array.from(
+        new Set(
+          [
+            target.item,
+            entryById?.item,
+            entryById?.description,
+            matchedTemplate?.item,
+            ...removedEntries.map((r) => r.item || r.description),
+          ]
+            .map((s) => (s || '').trim())
+            .filter(Boolean)
+        )
+      );
+      const allKeysToExclude: string[] = [];
+      if (candidateItems.length > 0) {
+        candidateItems.forEach((itemName) => {
+          allKeysToExclude.push(
+            ...getPeriodItemExclusionKeys({
+              templateId: effectiveTemplateId,
+              type: target.type,
+              item: itemName,
+              loanId: effectiveLoanId,
+            })
+          );
+        });
+      } else {
+        allKeysToExclude.push(
+          ...getPeriodItemExclusionKeys({
+            templateId: effectiveTemplateId,
+            type: target.type,
+            item: '',
+            loanId: effectiveLoanId,
+          })
+        );
+      }
       const existingList = updatedExcluded[period] || [];
-      updatedExcluded[period] = Array.from(new Set([...existingList, ...keysToExclude]));
+      updatedExcluded[period] = Array.from(new Set([...existingList, ...allKeysToExclude]));
     }
 
     const updatedBudget: YearBudgetData = {

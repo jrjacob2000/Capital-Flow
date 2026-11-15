@@ -28,6 +28,7 @@ import {
   EntryType,
   PaymentMethod,
   SavingsAccount,
+  SavingsLedgerData,
   TemplateBudgetVisibility,
   YearBudgetData,
 } from '../types/finance';
@@ -37,6 +38,9 @@ import {
   SAVING_CATEGORIES,
   PAYMENT_METHODS,
   DEFAULT_ITEM_TEMPLATES,
+  DEFAULT_SINKING_FUND_NAMES,
+  resolveCanonicalSinkingFundName,
+  normalizeSavingCategoryGroup,
   stripDefaultStarterTemplates,
 } from '../services/sampleData';
 import {
@@ -49,6 +53,7 @@ interface CategoryAndTemplateManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
   budget: YearBudgetData;
+  ledger?: SavingsLedgerData;
   accounts?: SavingsAccount[];
   onUpdateCategories: (
     customCats: {
@@ -66,6 +71,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
   isOpen,
   onClose,
   budget,
+  ledger,
   accounts = [],
   onUpdateCategories,
   onUpdateTemplates,
@@ -73,32 +79,97 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
 }) => {
   const [activeTab, setActiveTab] = useState<'estimates' | 'expense_cats' | 'income_cats' | 'saving_cats'>('estimates');
 
-  // Categories state (merged with default categories so dropdowns never show only 1 option)
+  // Categories state (uses customCategories when present so deleted default categories do not reappear)
   const templates: BudgetItemTemplate[] = budget?.isPersonalizedTemplate
     ? stripDefaultStarterTemplates(budget.itemTemplates)
     : [];
 
   const expenseCats = Array.from(
     new Set([
-      ...(budget?.customCategories?.expense || []),
-      ...EXPENSE_CATEGORIES,
+      ...(budget?.customCategories?.expense && budget.customCategories.expense.length > 0
+        ? budget.customCategories.expense
+        : EXPENSE_CATEGORIES),
       ...templates.filter((t) => t.type === 'expense').map((t) => t.category),
     ])
   ).filter(Boolean);
   const incomeCats = Array.from(
     new Set([
-      ...(budget?.customCategories?.income || []),
-      ...INCOME_CATEGORIES,
+      ...(budget?.customCategories?.income && budget.customCategories.income.length > 0
+        ? budget.customCategories.income
+        : INCOME_CATEGORIES),
       ...templates.filter((t) => t.type === 'income').map((t) => t.category),
     ])
   ).filter(Boolean);
   const savingCats = Array.from(
     new Set([
-      ...(budget?.customCategories?.saving || []),
-      ...SAVING_CATEGORIES,
+      ...(budget?.customCategories?.saving && budget.customCategories.saving.length > 0
+        ? budget.customCategories.saving
+        : SAVING_CATEGORIES),
       ...templates.filter((t) => t.type === 'saving').map((t) => t.category),
     ])
   ).filter(Boolean);
+
+  const existingSinkingFunds = useMemo(() => {
+    const names = new Map<string, string>();
+    const basePool = [...DEFAULT_SINKING_FUND_NAMES];
+    const addFundName = (raw?: string) => {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return;
+      const lower = trimmed.toLowerCase();
+      if (
+        lower === 'general reserves / starting capital' ||
+        lower === 'unallocated cash pool' ||
+        SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === lower)
+      ) {
+        return;
+      }
+      if (!names.has(lower)) {
+        names.set(lower, trimmed);
+      }
+    };
+
+    const allSavingTemplates = [
+      ...templates.filter((t) => t.type === 'saving'),
+      ...(budget?.itemTemplates || []).filter((t) => t.type === 'saving'),
+    ];
+    allSavingTemplates.forEach((t) => {
+      addFundName(resolveCanonicalSinkingFundName(t.item, t.category, basePool));
+    });
+
+    const combinedPool = Array.from(new Set([...Array.from(names.values()), ...basePool]));
+    (budget?.entries || [])
+      .filter((e) => e.type === 'saving')
+      .forEach((e) => {
+        addFundName(
+          resolveCanonicalSinkingFundName(e.item || e.description, e.category, combinedPool)
+        );
+      });
+
+    (ledger?.transactions || []).forEach((tx) => {
+      if (tx.source === 'withdrawal' || tx.source === 'transfer') return;
+      const cleanNote = (tx.note || '')
+        .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+        .trim();
+      const rawCatTrim = (tx.category || '').trim();
+      if (rawCatTrim && rawCatTrim.toLowerCase() !== 'general reserves / starting capital') {
+        const resolvedCat =
+          tx.source === 'manual_deposit'
+            ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, combinedPool)
+            : resolveCanonicalSinkingFundName(cleanNote || rawCatTrim, rawCatTrim, combinedPool);
+        addFundName(resolvedCat);
+      } else if (cleanNote && tx.source === 'budget_sync') {
+        addFundName(resolveCanonicalSinkingFundName(cleanNote, tx.category, combinedPool));
+      }
+      if (tx.toCategory) {
+        addFundName(resolveCanonicalSinkingFundName(tx.toCategory, tx.toCategory, combinedPool));
+      }
+    });
+
+    (budget?.customCategories?.saving || []).forEach((c) => addFundName(c));
+    basePool.forEach((d) => addFundName(d));
+
+    return Array.from(names.values());
+  }, [templates, budget?.itemTemplates, budget?.entries, budget?.customCategories?.saving, ledger?.transactions]);
 
   // Category editing state
   const [newCatName, setNewCatName] = useState('');
@@ -110,6 +181,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
   const [tplType, setTplType] = useState<EntryType>('expense');
   const [tplCategory, setTplCategory] = useState<string>(expenseCats[0] || 'Budget');
   const [isCreatingCustomTplCat, setIsCreatingCustomTplCat] = useState<boolean>(false);
+  const [isCreatingCustomTplFund, setIsCreatingCustomTplFund] = useState<boolean>(false);
   const [tplItem, setTplItem] = useState<string>('');
   const [tplEstimated, setTplEstimated] = useState<string>('');
   const [tplFrequency, setTplFrequency] = useState<'monthly' | 'bi-weekly' | 'both'>('monthly');
@@ -313,6 +385,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     setTplType('expense');
     setTplCategory(expenseCats[0] || 'Budget');
     setIsCreatingCustomTplCat(false);
+    setIsCreatingCustomTplFund(false);
     setTplItem('');
     setTplEstimated('');
     setTplFrequency('monthly');
@@ -328,6 +401,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     setTplType(tpl.type);
     setTplCategory(tpl.category);
     setIsCreatingCustomTplCat(false);
+    setIsCreatingCustomTplFund(false);
     setTplItem(tpl.item);
     setTplEstimated(String(tpl.defaultEstimatedCost || ''));
     setTplFrequency(tpl.frequency || 'monthly');
@@ -1526,17 +1600,67 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                 <div className="sm:col-span-7 min-w-0">
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
-                      Line Item Name
+                      {tplType === 'saving' ? 'Goal Fund Name' : 'Line Item Name'}
                     </label>
+                    {tplType === 'saving' && isCreatingCustomTplFund && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCreatingCustomTplFund(false);
+                          if (!tplItem.trim()) {
+                            setTplItem(existingSinkingFunds[0] || 'Emergency Fund');
+                          }
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                      >
+                        List
+                      </button>
+                    )}
                   </div>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Electricity, Rent"
-                    value={tplItem}
-                    onChange={(e) => setTplItem(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
+                  {tplType === 'saving' && !isCreatingCustomTplFund ? (
+                    <select
+                      value={tplItem}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '__CREATE_NEW_TPL_FUND__') {
+                          setIsCreatingCustomTplFund(true);
+                          setTplItem('');
+                        } else {
+                          setTplItem(val);
+                          if (val) {
+                            setTplCategory(normalizeSavingCategoryGroup(val, tplCategory));
+                          }
+                        }
+                      }}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="">Select Goal Fund...</option>
+                      {Array.from(
+                        new Set([
+                          ...existingSinkingFunds,
+                          ...(tplItem.trim() ? [tplItem.trim()] : []),
+                        ])
+                      ).map((fund) => (
+                        <option key={fund} value={fund}>
+                          {fund}
+                        </option>
+                      ))}
+                      <option value="__CREATE_NEW_TPL_FUND__">+ Custom Goal Fund...</option>
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      required
+                      placeholder={
+                        tplType === 'saving'
+                          ? 'e.g. Emergency Fund, MP2, Travel Fund'
+                          : 'e.g. Electricity, Rent'
+                      }
+                      value={tplItem}
+                      onChange={(e) => setTplItem(e.target.value)}
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  )}
                 </div>
                 <div className="sm:col-span-5 min-w-0">
                   <div className="flex items-center justify-between h-4 mb-1">

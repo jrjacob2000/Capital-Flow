@@ -576,8 +576,19 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
+            .replace(/^Direct Deposit:\s*/i, '')
             .trim();
-          fundName = resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
+          const rawCatTrim = (tx.category || '').trim();
+          if (rawCatTrim.toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
+          fundName =
+            tx.source === 'manual_deposit' && rawCatTrim
+              ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, knownCanonicalPool)
+              : resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
+          if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+            return;
+          }
         }
       }
 
@@ -693,6 +704,45 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     [categoryFunds]
   );
   const earmarkedTotal = Math.max(0, totalCapital - (unallocatedFund?.currentBalance || 0));
+
+  const allKnownGoalFundNames = useMemo(() => {
+    const names = new Map<string, string>();
+    const addFundName = (raw?: string) => {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return;
+      const lower = trimmed.toLowerCase();
+      if (
+        lower === 'general reserves / starting capital' ||
+        lower === 'unallocated cash pool' ||
+        SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === lower)
+      ) {
+        return;
+      }
+      if (!names.has(lower)) {
+        names.set(lower, trimmed);
+      }
+    };
+
+    categoryFunds
+      .filter((f) => f.id !== 'fund-general-unallocated')
+      .forEach((f) => addFundName(f.name));
+    (budget?.itemTemplates || [])
+      .filter((t) => t.type === 'saving')
+      .forEach((t) => addFundName(resolveCanonicalSinkingFundName(t.item, t.category)));
+    (budget?.entries || [])
+      .filter((e) => e.type === 'saving')
+      .forEach((e) =>
+        addFundName(resolveCanonicalSinkingFundName(e.item || e.description, e.category))
+      );
+    (ledger.transactions || []).forEach((tx) => {
+      if (tx.category) addFundName(tx.category);
+      if (tx.toCategory) addFundName(tx.toCategory);
+    });
+    (budget?.customCategories?.saving || []).forEach((c) => addFundName(c));
+    DEFAULT_SINKING_FUND_NAMES.forEach((d) => addFundName(d));
+
+    return Array.from(names.values());
+  }, [categoryFunds, budget, ledger.transactions]);
 
   // Filtered transactions for Ledger History tab
   const filteredTransactions = useMemo(() => {
@@ -1376,12 +1426,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             type="button"
                             onClick={() => {
                               setDeletingFund(fund);
-                              const otherNamed = categoryFunds.find(
-                                (f) => f.id !== 'fund-general-unallocated' && f.id !== fund.id
-                              );
-                              setDeleteFundReassignTo(
-                                otherNamed ? otherNamed.name : 'General Reserves / Starting Capital'
-                              );
+                              setDeleteFundReassignTo('General Reserves / Starting Capital');
                             }}
                             className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
                             title="Remove fund"
@@ -1944,7 +1989,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         <div className="text-[10px] font-mono tabular-nums text-slate-400">
                           Bal: {currencySymbol}{formatNumber(tx.runningTotalCapital || 0)}
                         </div>
-                        {tx.source !== 'budget_sync' && (
+                        {(onUpdateTransaction || onDeleteTransaction) && (
                           <div className="flex items-center gap-1 mt-0.5 -mr-1">
                             {onUpdateTransaction && (
                               <button
@@ -2069,34 +2114,28 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             {currencySymbol}{formatNumber(tx.runningTotalCapital || 0)}
                           </td>
                           <td className="py-3 px-4 text-center whitespace-nowrap">
-                            {tx.source !== 'budget_sync' ? (
-                              <div className="flex items-center justify-center gap-1">
-                                {onUpdateTransaction && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenEditTx(tx)}
-                                    className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition-colors cursor-pointer"
-                                    title="Edit transaction"
-                                  >
-                                    <Edit2 className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                                {onDeleteTransaction && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onDeleteTransaction(tx.id)}
-                                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                                    title="Delete transaction"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-slate-400" title="Managed via Budget Sheet">
-                                Synced
-                              </span>
-                            )}
+                            <div className="flex items-center justify-center gap-1">
+                              {onUpdateTransaction && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditTx(tx)}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition-colors cursor-pointer"
+                                  title="Edit transaction"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {onDeleteTransaction && (
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteTransaction(tx.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                                  title="Delete transaction"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2358,13 +2397,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     ) : (
                       <option value="">General Reserves / Starting Capital (Unallocated)</option>
                     )}
-                    {Array.from(
-                      new Set([
-                        ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
-                        ...DEFAULT_SINKING_FUND_NAMES,
-                        ...(budget?.customCategories?.saving || []),
-                      ])
-                    ).map((cat) => {
+                    {allKnownGoalFundNames.map((cat) => {
                       const matchingFund = categoryFunds.find(
                         (f) => f.name.toLowerCase() === cat.toLowerCase()
                       );
@@ -2555,12 +2588,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         (f) => !fundsInSelectedBank.some((inBank) => inBank.fund.id === f.id)
                       );
 
-                      const extraTemplateNames = Array.from(
-                        new Set([
-                          ...DEFAULT_SINKING_FUND_NAMES,
-                          ...(budget?.customCategories?.saving || []),
-                        ])
-                      ).filter(
+                      const extraTemplateNames = allKnownGoalFundNames.filter(
                         (name) =>
                           name.trim().toLowerCase() !== 'general reserves / starting capital' &&
                           !namedFunds.some((nf) => nf.name.toLowerCase() === name.trim().toLowerCase())
@@ -3420,9 +3448,22 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                         </option>
                       ))}
+                      {allKnownGoalFundNames
+                        .filter(
+                          (cat) =>
+                            !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
+                        )
+                        .map((cat) => (
+                          <option key={`from-extra-${cat}`} value={cat}>
+                            {cat} ({currencySymbol}0)
+                          </option>
+                        ))}
                       {reallocateFromCategory &&
                         reallocateFromCategory !== 'General Reserves / Starting Capital' &&
-                        !categoryFunds.some((f) => f.name === reallocateFromCategory) && (
+                        !categoryFunds.some((f) => f.name === reallocateFromCategory) &&
+                        !allKnownGoalFundNames.some(
+                          (cat) => cat.toLowerCase() === reallocateFromCategory.toLowerCase()
+                        ) && (
                           <option value={reallocateFromCategory}>
                             {reallocateFromCategory} ({currencySymbol}0)
                           </option>
@@ -3468,12 +3509,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                           </option>
                         ))}
-                      {Array.from(
-                        new Set([
-                          ...DEFAULT_SINKING_FUND_NAMES,
-                          ...(budget?.customCategories?.saving || []),
-                        ])
-                      )
+                      {allKnownGoalFundNames
                         .filter(
                           (cat) =>
                             cat !== reallocateFromCategory &&
@@ -3741,9 +3777,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       <option value="">General Reserves / Starting Capital (Unallocated)</option>
                       {Array.from(
                         new Set([
-                          ...categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').map((f) => f.name),
-                          ...DEFAULT_SINKING_FUND_NAMES,
-                          ...(budget?.customCategories?.saving || []),
+                          ...allKnownGoalFundNames,
                           ...(editingTx.category ? [editingTx.category] : []),
                         ])
                       ).map((cat) => (
@@ -3906,12 +3940,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           type="button"
                           onClick={() => {
                             setDeletingFund(fund);
-                            const otherNamed = categoryFunds.find(
-                              (f) => f.id !== 'fund-general-unallocated' && f.id !== fund.id
-                            );
-                            setDeleteFundReassignTo(
-                              otherNamed ? otherNamed.name : 'General Reserves / Starting Capital'
-                            );
+                            setDeleteFundReassignTo('General Reserves / Starting Capital');
                           }}
                           className="p-1.5 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg cursor-pointer transition-colors"
                           title="Delete"
@@ -4008,6 +4037,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     .map((f) => (
                       <option key={f.id} value={f.name}>
                         Merge into &quot;{f.name}&quot; ({currencySymbol}{formatNumber(f.currentBalance)})
+                      </option>
+                    ))}
+                  {allKnownGoalFundNames
+                    .filter(
+                      (cat) =>
+                        cat.toLowerCase() !== editingFund.name.toLowerCase() &&
+                        !categoryFunds.some((f) => f.name.toLowerCase() === cat.toLowerCase())
+                    )
+                    .map((cat) => (
+                      <option key={`merge-extra-${cat}`} value={cat}>
+                        Merge into &quot;{cat}&quot; ({currencySymbol}0)
                       </option>
                     ))}
                 </select>
