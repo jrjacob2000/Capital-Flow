@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Plus,
   Trash2,
@@ -53,10 +53,11 @@ import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerMod
 import { CarryOverModal } from './CarryOverModal';
 import { ExcelImportModal } from './ExcelImportModal';
 import {
-  buildAutoFillPeriodEntries,
   computeCarryOverSurplus,
+  computeCurrentRemainingPaid,
   computeFilteredExpenseSubtotals,
   computePaymentChannelSubtotals,
+  formatCurrency,
   getPendingAmountToPay,
   getPendingChannelAmountForRow,
   getPeriodItemExclusionKeys,
@@ -467,7 +468,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     };
   }, [selectedPeriod, frequency]);
 
-  const [autoFillMessage, setAutoFillMessage] = useState<string | null>(null);
 
   // Helper: Only regular Salary should be pre-displayed on the Income Sources grid by default.
   // Irregular income sources (Extra Income, Apartment Rent, Car Rental, 13th Month, Bonuses, etc.)
@@ -496,48 +496,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     );
   };
 
-  const handleAutoFillPeriodFromTemplates = () => {
-    const { validTemplatesCount, newEntries } = buildAutoFillPeriodEntries(
-      itemTemplates,
-      budget.entries,
-      budget.year,
-      selectedPeriod,
-      frequency,
-      accounts,
-      isTemplateValidForPeriod,
-      {
-        includeOptional: true,
-        excludedPeriodItems: budget.excludedPeriodItems,
-      }
-    );
-
-    if (validTemplatesCount === 0) {
-      setAutoFillMessage(
-        `No displayed estimate templates found for ${selectedPeriod}. Click "Templates" to create or enable your templates first.`
-      );
-      setTimeout(() => setAutoFillMessage(null), 4000);
-      return;
-    }
-
-    if (newEntries.length === 0) {
-      setAutoFillMessage(
-        `All ${validTemplatesCount} planned items from your template are already recorded in ${selectedPeriod}!`
-      );
-      setTimeout(() => setAutoFillMessage(null), 4000);
-      return;
-    }
-
-    if (onAddMultipleEntries) {
-      onAddMultipleEntries(newEntries);
-    } else {
-      newEntries.forEach((e) => onAddEntry(e));
-    }
-
-    setAutoFillMessage(
-      `Populated ${newEntries.length} planned items into ${selectedPeriod} from your Estimate Template!`
-    );
-    setTimeout(() => setAutoFillMessage(null), 4000);
-  };
 
   // Period lists
   const periodList =
@@ -610,10 +568,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         });
         const est =
           matchedEntry.estimatedCost !== undefined && matchedEntry.estimatedCost > 0
-            ? matchedEntry.estimatedCost
-            : tpl.defaultEstimatedCost;
-        const act = matchedEntry.actualCost !== undefined ? matchedEntry.actualCost : matchedEntry.amount;
-        const diff = tpl.type === 'income' ? act - est : est - act;
+            ? Math.round(matchedEntry.estimatedCost * 100) / 100
+            : Math.round((tpl.defaultEstimatedCost || 0) * 100) / 100;
+        const act =
+          matchedEntry.actualCost !== undefined
+            ? Math.round(matchedEntry.actualCost * 100) / 100
+            : Math.round((matchedEntry.amount || 0) * 100) / 100;
+        const diff =
+          Math.round((tpl.type === 'income' ? act - est : est - act) * 100) / 100;
         const isUneditedAutoFillPlaceholder =
           matchedEntry.reference === 'Auto-filled from template' &&
           matchedEntry.status === 'Pending' &&
@@ -716,9 +678,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             return;
           }
         }
-        const est = entry.estimatedCost ?? 0;
-        const act = entry.actualCost ?? entry.amount ?? 0;
-        const diff = entry.type === 'income' ? act - est : est - act;
+        const est = Math.round((entry.estimatedCost ?? 0) * 100) / 100;
+        const act =
+          Math.round((entry.actualCost !== undefined ? entry.actualCost : entry.amount ?? 0) * 100) / 100;
+        const diff =
+          Math.round((entry.type === 'income' ? act - est : est - act) * 100) / 100;
 
         const customTargetAcc =
           (entry.savingAccountId && accounts.find((a) => a.id === entry.savingAccountId)) ||
@@ -760,29 +724,32 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   }, [budget.entries, budget.excludedPeriodItems, itemTemplates, selectedPeriod, budget.year, frequency, accounts]);
 
   // Totals calculations across the pre-populated sheet (counting settled/Paid actuals)
-  const totalIncomeEstimated = unifiedIncomeRows.reduce(
-    (sum, r) => sum + r.estimatedCost,
-    0
-  );
-  const totalIncomeActual = unifiedIncomeRows.reduce(
-    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
-    0
-  );
-  const incomeDifference = totalIncomeActual - totalIncomeEstimated;
+  const totalIncomeEstimated =
+    Math.round(unifiedIncomeRows.reduce((sum, r) => sum + r.estimatedCost, 0) * 100) / 100;
+  const totalIncomeActual =
+    Math.round(
+      unifiedIncomeRows.reduce(
+        (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
+        0
+      ) * 100
+    ) / 100;
+  const incomeDifference = Math.round((totalIncomeActual - totalIncomeEstimated) * 100) / 100;
 
-  const totalExpenseEstimated = unifiedExpenseRows.reduce(
-    (sum, r) => sum + r.estimatedCost,
-    0
-  );
-  const totalExpenseActual = unifiedExpenseRows.reduce(
-    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
-    0
-  );
-  const expenseDifference = totalExpenseEstimated - totalExpenseActual;
+  const totalExpenseEstimated =
+    Math.round(unifiedExpenseRows.reduce((sum, r) => sum + r.estimatedCost, 0) * 100) / 100;
+  const totalExpenseActual =
+    Math.round(
+      unifiedExpenseRows.reduce(
+        (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : 0),
+        0
+      ) * 100
+    ) / 100;
+  const expenseDifference = Math.round((totalExpenseEstimated - totalExpenseActual) * 100) / 100;
 
   // Extra / Remaining Salary
-  const remainingExtra = totalIncomeActual - totalExpenseActual;
-  const remainingExtraEstimated = totalIncomeEstimated - totalExpenseEstimated;
+  const remainingExtra = Math.round((totalIncomeActual - totalExpenseActual) * 100) / 100;
+  const remainingExtraEstimated =
+    Math.round((totalIncomeEstimated - totalExpenseEstimated) * 100) / 100;
 
   const hasAnyIncomeRecorded = useMemo(
     () => unifiedIncomeRows.some((r) => r.hasActualCost && r.status === 'Paid'),
@@ -809,36 +776,58 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
   const totalExpensePaid = totalExpenseActual;
 
-  const currentRemainingPaid = hasAnyIncomeRecorded
-    ? totalIncomeActual - totalExpensePaid
-    : hasAnyExpenseRecorded
-    ? totalIncomeEstimated - totalExpensePaid
-    : remainingExtraEstimated;
+  const currentRemainingPaid = computeCurrentRemainingPaid({
+    hasAnyIncomeRecorded,
+    totalIncomeActual,
+    totalIncomeEstimated,
+    totalExpensePaid,
+  });
 
-  const projectedIncomeTotal = unifiedIncomeRows.reduce(
-    (sum, r) =>
-      sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : getPendingAmountToPay(r)),
-    0
-  );
-  const projectedExpenseTotal = unifiedExpenseRows.reduce(
-    (sum, r) =>
-      sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : getPendingAmountToPay(r)),
-    0
-  );
-  const totalPendingExpenseToPay = unifiedExpenseRows.reduce(
-    (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? 0 : getPendingAmountToPay(r)),
-    0
-  );
-  const projectedRemainingAll = projectedIncomeTotal - projectedExpenseTotal;
+  const projectedIncomeTotal =
+    Math.round(
+      unifiedIncomeRows.reduce(
+        (sum, r) =>
+          sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : getPendingAmountToPay(r)),
+        0
+      ) * 100
+    ) / 100;
+  const projectedExpenseTotal =
+    Math.round(
+      unifiedExpenseRows.reduce(
+        (sum, r) =>
+          sum + (r.hasActualCost && r.status === 'Paid' ? r.actualCost : getPendingAmountToPay(r)),
+        0
+      ) * 100
+    ) / 100;
+  const totalPendingExpenseToPay =
+    Math.round(
+      unifiedExpenseRows.reduce(
+        (sum, r) => sum + (r.hasActualCost && r.status === 'Paid' ? 0 : getPendingAmountToPay(r)),
+        0
+      ) * 100
+    ) / 100;
+  const projectedRemainingAll =
+    Math.round((projectedIncomeTotal - projectedExpenseTotal) * 100) / 100;
 
   const { surplus, hasBeenCarriedOver, prevPeriodName } = useMemo(
     () => computeCarryOverSurplus(budget.entries, periodList, selectedPeriod),
     [budget.entries, periodList, selectedPeriod]
   );
 
+  // Check if any row in the current period has centavos / decimals
+  const periodHasDecimals = useMemo(() => {
+    const hasRowDecimals = (r: SheetRowItem) =>
+      Math.abs(r.estimatedCost - Math.round(r.estimatedCost)) > 0.0001 ||
+      (r.hasActualCost && Math.abs(r.actualCost - Math.round(r.actualCost)) > 0.0001);
+    return unifiedIncomeRows.some(hasRowDecimals) || unifiedExpenseRows.some(hasRowDecimals);
+  }, [unifiedIncomeRows, unifiedExpenseRows]);
+
   // Helpers
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-PH', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = useCallback(
+    (num: number | undefined | null) =>
+      formatCurrency(num, { forceDecimals: periodHasDecimals }),
+    [periodHasDecimals]
+  );
 
   const getMethodAmount = (entry: SheetRowItem, method: PaymentMethod): number => {
     if (!entry.hasActualCost || entry.status !== 'Paid') return 0;
@@ -1315,23 +1304,27 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     const selectedAcc = accounts.find((a) => a.id === formSavingAccountId);
 
     const rawSplitObj = {
-      cash: parseFloat(formPaymentBreakdown.cash) || 0,
-      creditCard: parseFloat(formPaymentBreakdown.creditCard) || 0,
-      gcashTransfer: parseFloat(formPaymentBreakdown.gcashTransfer) || 0,
-      kathAccount: parseFloat(formPaymentBreakdown.kathAccount) || 0,
-      checkAccount: parseFloat(formPaymentBreakdown.checkAccount) || 0,
-      bankTransfer: parseFloat(formPaymentBreakdown.bankTransfer) || 0,
+      cash: Math.round((parseFloat(formPaymentBreakdown.cash) || 0) * 100) / 100,
+      creditCard: Math.round((parseFloat(formPaymentBreakdown.creditCard) || 0) * 100) / 100,
+      gcashTransfer: Math.round((parseFloat(formPaymentBreakdown.gcashTransfer) || 0) * 100) / 100,
+      kathAccount: Math.round((parseFloat(formPaymentBreakdown.kathAccount) || 0) * 100) / 100,
+      checkAccount: Math.round((parseFloat(formPaymentBreakdown.checkAccount) || 0) * 100) / 100,
+      bankTransfer: Math.round((parseFloat(formPaymentBreakdown.bankTransfer) || 0) * 100) / 100,
     };
-    const rawSplitTotal =
+    const rawSplitTotal = Math.round((
       rawSplitObj.cash +
       rawSplitObj.creditCard +
       rawSplitObj.gcashTransfer +
       rawSplitObj.kathAccount +
       rawSplitObj.checkAccount +
-      rawSplitObj.bankTransfer;
+      rawSplitObj.bankTransfer
+    ) * 100) / 100;
 
     const parsedBreakdown =
       isSplitPayment && modalType !== 'income' && rawSplitTotal !== 0 ? rawSplitObj : undefined;
+
+    const effectiveActual = parsedBreakdown ? rawSplitTotal : actNum;
+    const effectiveDiff = Math.round((estNum - effectiveActual) * 100) / 100;
 
     let resolvedPaymentMethod: PaymentMethod = formPaymentMethod;
     if (parsedBreakdown) {
@@ -1408,11 +1401,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       category: finalCategory,
       item: resolvedFundOrItem,
       estimatedCost: estNum,
-      actualCost: actNum,
-      amount: actNum,
+      actualCost: effectiveActual,
+      amount: effectiveActual,
       paymentMethod: resolvedPaymentMethod,
       paymentBreakdown: parsedBreakdown,
-      difference: diff,
+      difference: effectiveDiff,
       status: formStatus,
       reference: formReference.trim(),
       toBeWithdrawn: computedToBeWithdrawn,
@@ -1615,14 +1608,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           {/* Period Utility Actions (Creation buttons live contextually in each section below) */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
 
-            <button
-              onClick={handleAutoFillPeriodFromTemplates}
-              className="px-3 py-2 sm:py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-              title={`Populate ${selectedPeriod} with all planned items from your Estimate Budget Template`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-200 shrink-0" />
-              <span>Auto-Fill {selectedPeriod}</span>
-            </button>
 
             <button
               onClick={() => setIsManagerModalOpen(true)}
@@ -1701,21 +1686,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
           )}
         </div>
 
-        {/* Auto-Fill Feedback Notification Banner */}
-        {autoFillMessage && (
-          <div className="mt-3 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>{autoFillMessage}</span>
-            </div>
-            <button
-              onClick={() => setAutoFillMessage(null)}
-              className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900/60 rounded text-amber-700 dark:text-amber-300 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
       </div>
 
       {/* MOBILE UNIFIED HERO STRIP (Single high-clarity card on mobile, removes redundant In/Out cards) */}
@@ -4277,13 +4247,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                     [ch.key]: e.target.value,
                                   };
                                   setFormPaymentBreakdown(next);
-                                  const totalSplit =
+                                  const totalSplit = Math.round((
                                     (parseFloat(next.cash) || 0) +
                                     (parseFloat(next.creditCard) || 0) +
                                     (parseFloat(next.gcashTransfer) || 0) +
                                     (parseFloat(next.kathAccount) || 0) +
                                     (parseFloat(next.checkAccount) || 0) +
-                                    (parseFloat(next.bankTransfer) || 0);
+                                    (parseFloat(next.bankTransfer) || 0)
+                                  ) * 100) / 100;
                                   setFormActual(String(totalSplit));
                                 }}
                                 className="w-full min-w-0 h-7 sm:h-8 px-1.5 sm:px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-mono text-[11px] sm:text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"

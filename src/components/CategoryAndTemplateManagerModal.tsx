@@ -46,6 +46,7 @@ import {
 import {
   resolveTemplateBudgetVisibility,
   applyTemplateBudgetVisibility,
+  formatCurrency,
 } from '../utils/budgetCalculations';
 import { ConfirmationModal } from './ConfirmationModal';
 
@@ -481,8 +482,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     setIsTemplateFormOpen(false);
   };
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-PH', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   const handleDeleteTemplate = (id: string) => {
     const tpl = templates.find((t) => t.id === id);

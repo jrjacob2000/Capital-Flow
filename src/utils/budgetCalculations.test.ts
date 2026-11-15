@@ -24,7 +24,9 @@ import {
   computeFilteredExpenseSubtotals,
   resolveSyncedEntryAndTemplateAmounts,
   computeCarryOverSurplus,
+  computeCurrentRemainingPaid,
   computePeriodProjectedSurplus,
+  formatCurrency,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -3169,6 +3171,11 @@ describe('30. Dashboard Current Period Projected Surplus Resolution (computePeri
     assert.equal(metrics.projectedSurplus, 22650);
     assert.equal(metrics.hasRecordedEntries, true);
     assert.equal(metrics.hasPaidEntries, true);
+    // Current Period Remaining Cash / Balance: 52,000 received income - 15,000 rent paid = 37,000
+    assert.equal(metrics.currentRemainingPaid, 37000);
+    assert.equal(metrics.totalIncomeActual, 52000);
+    assert.equal(metrics.totalExpensePaid, 15000);
+    assert.equal(metrics.hasAnyIncomeRecorded, true);
   });
 
   it('projects surplus purely from recurring templates before any entries are recorded in a new period', () => {
@@ -3212,6 +3219,30 @@ describe('30. Dashboard Current Period Projected Surplus Resolution (computePeri
     assert.equal(metrics.projectedSurplus, 25000);
     assert.equal(metrics.hasRecordedEntries, false);
     assert.equal(metrics.hasPaidEntries, false);
+  });
+
+  it('falls back to estimated income for current remaining balance when no income has been recorded as paid yet', () => {
+    const budget = {
+      year: 2026,
+      itemTemplates: [
+        {
+          id: 'tpl-salary',
+          type: 'income' as const,
+          category: 'Salary & Wages',
+          item: 'Salary',
+          defaultEstimatedCost: 50000,
+          frequency: 'monthly' as const,
+          showInBudget: true,
+        },
+      ],
+      entries: [],
+    };
+
+    const metrics = computePeriodProjectedSurplus(budget, 'Jan', 'monthly');
+    assert.equal(metrics.hasAnyIncomeRecorded, false);
+    assert.equal(metrics.totalIncomeEstimated, 50000);
+    assert.equal(metrics.totalIncomeActual, 0);
+    assert.equal(metrics.currentRemainingPaid, 50000);
   });
 
   it('respects excludedPeriodItems when projecting surplus for a period', () => {
@@ -4110,5 +4141,208 @@ describe('32. Goal Fund Deletion, Synced Entry Deletion & Canonical Fund Resolut
     assert.ok(loanExclusionKeys.includes('expense:auto loan payment'));
   });
 });
+
+describe('33. Current Period Remaining Cash Resolution & Paid-to-Pending Reversal Lifecycle', () => {
+  it('reverts Remaining Cash back to the starting amount (total income) when all items are reverted from Paid to Pending', () => {
+    // 1. Initial period state: Salary estimate = 50,000, Expense estimates = 30,000. All items are Pending.
+    const initialPendingCash = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: false,
+      totalIncomeActual: 0,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: 0,
+    });
+    // Starting amount of cash available for the period is 50,000 (not collapsed to net 20,000)
+    assert.equal(initialPendingCash, 50000);
+
+    // 2. User marks an expense item (e.g. 8,000) as Paid while income is still pending:
+    const afterOneExpensePaid = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: false,
+      totalIncomeActual: 0,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: 8000,
+    });
+    assert.equal(afterOneExpensePaid, 42000);
+
+    // 3. User reverts that expense item back from Paid to Pending (so all items are now Pending again):
+    const revertedExpensePending = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: false,
+      totalIncomeActual: 0,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: 0,
+    });
+    // Accurately reverts back to starting amount (50,000), rather than dropping to 20,000!
+    assert.equal(revertedExpensePending, 50000);
+
+    // 4. User marks Salary as Paid (50,000) and marks 15,000 in expenses as Paid:
+    const settledMidPeriod = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: true,
+      totalIncomeActual: 50000,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: 15000,
+    });
+    assert.equal(settledMidPeriod, 35000);
+
+    // 5. User reverts all expense items back to Pending (Salary remains Paid):
+    const allExpensesRevertedToPending = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: true,
+      totalIncomeActual: 50000,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: 0,
+    });
+    // Reverts back to starting salary amount (50,000)
+    assert.equal(allExpensesRevertedToPending, 50000);
+
+    // 6. User reverts Salary back to Pending as well (so ALL items in the period are now Pending):
+    const allItemsRevertedToPending = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: false,
+      totalIncomeActual: 0,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: 0,
+    });
+    // Accurately reverts back to starting estimated amount (50,000)
+    assert.equal(allItemsRevertedToPending, 50000);
+  });
+
+  it('accurately computes deficits and zero-income edge cases when items are paid or reverted to pending', () => {
+    // 1. Zero income setup with 4,000 in paid expenses
+    const deficitState = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: false,
+      totalIncomeActual: 0,
+      totalIncomeEstimated: 0,
+      totalExpensePaid: 4000,
+    });
+    assert.equal(deficitState, -4000);
+
+    // 2. Reverting that expense back to pending returns to 0
+    const zeroState = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: false,
+      totalIncomeActual: 0,
+      totalIncomeEstimated: 0,
+      totalExpensePaid: 0,
+    });
+    assert.equal(zeroState, 0);
+  });
+});
+
+describe('34. Decimal Precision, Centavos Formatting & Total Paid Alignment', () => {
+  it('formats whole numbers cleanly and preserves 2 decimal places when centavos exist', () => {
+    // Whole numbers without decimals show clean integers without trailing zeros
+    assert.equal(formatCurrency(5000), '5,000');
+    assert.equal(formatCurrency(0), '0');
+    assert.equal(formatCurrency(1234567), '1,234,567');
+
+    // Fractional cents/centavos are formatted to exactly 2 decimal places
+    assert.equal(formatCurrency(1250.5), '1,250.50');
+    assert.equal(formatCurrency(45.25), '45.25');
+    assert.equal(formatCurrency(100.05), '100.05');
+
+    // Negative amounts preserve cents correctly
+    assert.equal(formatCurrency(-125.75), '-125.75');
+    assert.equal(formatCurrency(-500), '-500');
+
+    // forceDecimals option forces 2 decimal places for whole numbers as well
+    assert.equal(formatCurrency(5000, { forceDecimals: true }), '5,000.00');
+    assert.equal(formatCurrency(0, { forceDecimals: true }), '0.00');
+
+    // Null, undefined, and NaN return '0'
+    assert.equal(formatCurrency(null), '0');
+    assert.equal(formatCurrency(undefined), '0');
+    assert.equal(formatCurrency(NaN), '0');
+  });
+
+  it('eliminates floating-point accumulation noise when summing expenses with cents', () => {
+    // Typical IEEE-754 precision trap: 0.1 + 0.2 = 0.30000000000000004
+    const expenseAmounts = [100.1, 200.2, 300.4, 45.25, 54.05];
+    const rawSum = expenseAmounts.reduce((a, b) => a + b, 0);
+    // Raw JavaScript sum produces 699.9999999999999 or 700.0000000000001
+    const roundedSum = Math.round(rawSum * 100) / 100;
+    assert.equal(roundedSum, 700);
+
+    // Filtered expense subtotals rounds each aggregate to 2 decimal places
+    const expenseRows = [
+      {
+        id: '1',
+        item: 'Water',
+        category: 'Utilities',
+        estimatedCost: 100.1,
+        actualCost: 100.1,
+        hasActualCost: true,
+        status: 'Paid' as const,
+      },
+      {
+        id: '2',
+        item: 'Electricity',
+        category: 'Utilities',
+        estimatedCost: 200.2,
+        actualCost: 200.2,
+        hasActualCost: true,
+        status: 'Paid' as const,
+      },
+      {
+        id: '3',
+        item: 'Internet',
+        category: 'Utilities',
+        estimatedCost: 300.4,
+        actualCost: 300.4,
+        hasActualCost: true,
+        status: 'Paid' as const,
+      },
+    ];
+
+    const subtotals = computeFilteredExpenseSubtotals(expenseRows);
+    assert.equal(subtotals.estimated, 600.7);
+    assert.equal(subtotals.actual, 600.7);
+    assert.equal(subtotals.projected, 600.7);
+    assert.equal(subtotals.pendingToPay, 0);
+    assert.equal(subtotals.variance, 0);
+  });
+
+  it('accurately computes remaining cash with exact decimal precision and no rounding discrepancy', () => {
+    // Salary 50,000.75 received, expenses paid: 12,345.50
+    const remaining = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: true,
+      totalIncomeActual: 50000.75,
+      totalIncomeEstimated: 50000.75,
+      totalExpensePaid: 12345.5,
+    });
+    // Exactly 37,655.25 without floating point residue
+    assert.equal(remaining, 37655.25);
+    assert.equal(formatCurrency(remaining), '37,655.25');
+  });
+
+  it('accurately rounds 6-channel split payments with cents without drift', () => {
+    const splitRows = [
+      {
+        id: 'split-1',
+        item: 'Grocery Split',
+        category: 'Food',
+        estimatedCost: 100.5,
+        actualCost: 100.5,
+        hasActualCost: true,
+        status: 'Paid' as const,
+        paymentBreakdown: {
+          cash: 25.25,
+          creditCard: 75.25,
+          gcashTransfer: 0,
+          kathAccount: 0,
+          checkAccount: 0,
+          bankTransfer: 0,
+        },
+      },
+    ];
+
+    const { paidTotals, projectedTotals } = computePaymentChannelSubtotals(splitRows);
+    assert.equal(paidTotals.Cash, 25.25);
+    assert.equal(paidTotals['Credit Card'], 75.25);
+    assert.equal(projectedTotals.Cash, 25.25);
+    assert.equal(projectedTotals['Credit Card'], 75.25);
+
+    // Sum of channels equals exactly actualCost
+    const channelSum = paidTotals.Cash + paidTotals['Credit Card'];
+    assert.equal(channelSum, 100.5);
+  });
+});
+
+
 
 

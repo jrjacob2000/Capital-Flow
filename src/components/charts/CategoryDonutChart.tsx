@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BudgetEntry, EntryType } from '../../types/finance';
-import { aggregateCategoryDistribution } from '../../utils/budgetCalculations';
+import { aggregateCategoryDistribution, formatCurrency } from '../../utils/budgetCalculations';
 
 interface CategoryDonutChartProps {
   entries: BudgetEntry[];
@@ -65,8 +65,7 @@ export const CategoryDonutChart: React.FC<CategoryDonutChartProps> = ({
     return ['M', start.x, start.y, 'A', radius, radius, 0, largeArcFlag, 0, end.x, end.y].join(' ');
   };
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   const hoveredSlice = slices.find((s) => s.category === hoveredCategory);
 

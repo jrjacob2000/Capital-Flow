@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { BudgetEntry, EntryFrequency } from '../../types/finance';
-import { aggregateCashflowByPeriod } from '../../utils/budgetCalculations';
+import { aggregateCashflowByPeriod, formatCurrency } from '../../utils/budgetCalculations';
 import { MONTH_NAMES } from '../../services/sampleData';
 
 interface CashflowChartProps {
@@ -42,8 +42,7 @@ export const CashflowChart: React.FC<CashflowChartProps> = ({
     return chartHeight - paddingBottom - ratio * usableHeight;
   };
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   const hoveredData = hoveredIdx !== null ? aggregatedData[hoveredIdx] : null;
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SavingsLedgerData } from '../../types/finance';
 import { TrendingUp, Award, ShieldCheck, Sparkles } from 'lucide-react';
+import { formatCurrency } from '../../utils/budgetCalculations';
 
 interface CapitalGrowthChartProps {
   ledger: SavingsLedgerData;
@@ -72,8 +73,7 @@ export const CapitalGrowthChart: React.FC<CapitalGrowthChartProps> = ({
         )},${chartHeight - paddingBottom} Z`
       : '';
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   const activePoint = hoveredPoint !== null ? points[hoveredPoint] : null;
 

@@ -666,6 +666,11 @@ export function computePaymentChannelSubtotals(rows: ExpenseSubtotalRowInput[]):
     }
   });
 
+  (Object.keys(paidTotals) as PaymentMethod[]).forEach((k) => {
+    paidTotals[k] = Math.round(paidTotals[k] * 100) / 100;
+    projectedTotals[k] = Math.round(projectedTotals[k] * 100) / 100;
+  });
+
   return { paidTotals, projectedTotals };
 }
 
@@ -751,11 +756,11 @@ export function computeFilteredExpenseSubtotals(
   });
 
   return {
-    estimated,
-    actual,
-    projected,
-    pendingToPay,
-    variance: estimated - projected,
+    estimated: Math.round(estimated * 100) / 100,
+    actual: Math.round(actual * 100) / 100,
+    projected: Math.round(projected * 100) / 100,
+    pendingToPay: Math.round(pendingToPay * 100) / 100,
+    variance: Math.round((estimated - projected) * 100) / 100,
     paidCount,
     totalCount: filteredRows.length,
   };
@@ -796,8 +801,13 @@ export function resolveSyncedEntryAndTemplateAmounts(input: {
     actNum = estNum;
   }
 
-  const diff = input.type === 'income' ? actNum - estNum : estNum - actNum;
-  return { estNum, actNum, diff };
+  const roundedEst = Math.round(estNum * 100) / 100;
+  const roundedAct = Math.round(actNum * 100) / 100;
+  const diff =
+    input.type === 'income'
+      ? Math.round((roundedAct - roundedEst) * 100) / 100
+      : Math.round((roundedEst - roundedAct) * 100) / 100;
+  return { estNum: roundedEst, actNum: roundedAct, diff };
 }
 
 /**
@@ -833,6 +843,41 @@ export function computeCarryOverSurplus(
 }
 
 /**
+ * Computes the remaining cash for the current period based on settled income (or estimated starting income
+ * if income has not yet been marked Paid) minus settled expenses.
+ * When all items are reverted back to pending (0 settled expenses), the remaining cash accurately
+ * reverts back to the starting amount (total income).
+ */
+export function computeCurrentRemainingPaid(input: {
+  hasAnyIncomeRecorded: boolean;
+  totalIncomeActual: number;
+  totalIncomeEstimated: number;
+  totalExpensePaid: number;
+}): number {
+  const baseIncome = input.hasAnyIncomeRecorded
+    ? input.totalIncomeActual
+    : input.totalIncomeEstimated;
+  return Math.round((baseIncome - input.totalExpensePaid) * 100) / 100;
+}
+
+/**
+ * Formats a monetary number with thousands separators, including 2 decimal places
+ * if fractional cents/centavos exist, or when forceDecimals is true.
+ */
+export function formatCurrency(
+  num: number | undefined | null,
+  options?: { forceDecimals?: boolean; locale?: string }
+): string {
+  if (num === undefined || num === null || isNaN(num)) return '0';
+  const hasFraction = Math.abs(num - Math.round(num)) > 0.0001;
+  const showDecimals = Boolean(options?.forceDecimals || hasFraction);
+  return new Intl.NumberFormat(options?.locale || 'en-PH', {
+    minimumFractionDigits: showDecimals ? 2 : 0,
+    maximumFractionDigits: 2,
+  }).format(num);
+}
+
+/**
  * Computes the active period's projected surplus (Projected Income - Projected Outflows [expenses + savings]),
  * exactly matching the calculation in the Budget Spreadsheet.
  */
@@ -850,6 +895,11 @@ export function computePeriodProjectedSurplus(
   projectedSurplus: number;
   hasRecordedEntries: boolean;
   hasPaidEntries: boolean;
+  currentRemainingPaid: number;
+  totalIncomeActual: number;
+  totalIncomeEstimated: number;
+  totalExpensePaid: number;
+  hasAnyIncomeRecorded: boolean;
 } {
   const recordedEntries = (budget.entries || []).filter((e) => e.period === period);
   const usedEntryIds = new Set<string>();
@@ -859,6 +909,10 @@ export function computePeriodProjectedSurplus(
   let projectedIncome = 0;
   let projectedExpense = 0;
   let hasPaidEntries = false;
+  let totalIncomeActual = 0;
+  let totalIncomeEstimated = 0;
+  let hasAnyIncomeRecorded = false;
+  let totalExpensePaid = 0;
 
   // 1. Process templates valid for this period and not excluded
   templates
@@ -869,12 +923,22 @@ export function computePeriodProjectedSurplus(
       }
       const shouldDisplay = shouldTemplateDisplayInBudget(tpl, true);
       const tplItemLower = tpl.item.toLowerCase().trim();
+      const tplCanonicalFundLower =
+        tpl.type === 'saving'
+          ? resolveCanonicalSinkingFundName(tpl.item, tpl.category).toLowerCase()
+          : '';
       const matchingCandidates = recordedEntries.filter(
         (e) =>
           !usedEntryIds.has(e.id) &&
           e.type === tpl.type &&
           (Boolean(tpl.loanId && e.loanId === tpl.loanId) ||
-            (e.item || e.description || '').toLowerCase().trim() === tplItemLower)
+            (e.item || e.description || '').toLowerCase().trim() === tplItemLower ||
+            (tpl.type === 'saving' &&
+              tplCanonicalFundLower.length > 0 &&
+              resolveCanonicalSinkingFundName(
+                e.item || e.description,
+                e.category
+              ).toLowerCase() === tplCanonicalFundLower))
       );
 
       const matchedEntry =
@@ -928,9 +992,17 @@ export function computePeriodProjectedSurplus(
           const isUserManual = matchedEntry.reference !== 'Auto-filled from template';
           if (shouldDisplay || act !== 0 || isUserManual) {
             projectedIncome += cost;
+            totalIncomeEstimated += est;
+            if (isPaid) {
+              totalIncomeActual += act;
+              hasAnyIncomeRecorded = true;
+            }
           }
         } else {
           projectedExpense += cost;
+          if (isPaid) {
+            totalExpensePaid += act;
+          }
         }
       } else {
         // Virtual estimate pre-populated from template
@@ -938,6 +1010,7 @@ export function computePeriodProjectedSurplus(
         const est = tpl.defaultEstimatedCost || 0;
         if (tpl.type === 'income') {
           projectedIncome += est;
+          totalIncomeEstimated += est;
         } else {
           projectedExpense += est;
         }
@@ -965,19 +1038,39 @@ export function computePeriodProjectedSurplus(
         const isUserManual = entry.reference !== 'Auto-filled from template';
         if (isRegularSalaryIncome(entry.item, entry.category) || act !== 0 || est !== 0 || isUserManual) {
           projectedIncome += cost;
+          totalIncomeEstimated += est;
+          if (isPaid) {
+            totalIncomeActual += act;
+            hasAnyIncomeRecorded = true;
+          }
         }
       } else {
         projectedExpense += cost;
+        if (isPaid) {
+          totalExpensePaid += act;
+        }
       }
     }
   });
 
+  const currentRemainingPaid = computeCurrentRemainingPaid({
+    hasAnyIncomeRecorded,
+    totalIncomeActual: Math.round(totalIncomeActual * 100) / 100,
+    totalIncomeEstimated: Math.round(totalIncomeEstimated * 100) / 100,
+    totalExpensePaid: Math.round(totalExpensePaid * 100) / 100,
+  });
+
   return {
-    projectedIncome,
-    projectedExpense,
-    projectedSurplus: projectedIncome - projectedExpense,
+    projectedIncome: Math.round(projectedIncome * 100) / 100,
+    projectedExpense: Math.round(projectedExpense * 100) / 100,
+    projectedSurplus: Math.round((projectedIncome - projectedExpense) * 100) / 100,
     hasRecordedEntries: recordedEntries.length > 0,
     hasPaidEntries,
+    currentRemainingPaid,
+    totalIncomeActual: Math.round(totalIncomeActual * 100) / 100,
+    totalIncomeEstimated: Math.round(totalIncomeEstimated * 100) / 100,
+    totalExpensePaid: Math.round(totalExpensePaid * 100) / 100,
+    hasAnyIncomeRecorded,
   };
 }
 

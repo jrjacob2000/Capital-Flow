@@ -28,6 +28,7 @@ import {
   BudgetEntry,
   SavingsTransaction,
 } from '../types/finance';
+import { formatCurrency } from '../utils/budgetCalculations';
 
 interface LoansViewProps {
   ledger: SavingsLedgerData;
@@ -118,8 +119,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
   const [payRecordInBudget, setPayRecordInBudget] = useState(true);
   const [payDepositAccountId, setPayDepositAccountId] = useState('');
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   // Helper to compute derived loan metrics
   const getLoanMetrics = (loan: LoanRecord) => {

@@ -23,7 +23,7 @@ import {
   MONTH_NAMES,
   BIWEEKLY_PERIODS,
 } from '../services/sampleData';
-import { computePeriodProjectedSurplus } from '../utils/budgetCalculations';
+import { computePeriodProjectedSurplus, formatCurrency } from '../utils/budgetCalculations';
 import { CashflowChart } from './charts/CashflowChart';
 import { CapitalGrowthChart } from './charts/CapitalGrowthChart';
 import { CategoryDonutChart } from './charts/CategoryDonutChart';
@@ -490,8 +490,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     };
   }, [ledger.loans, currentTotalCapital]);
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   const handleNavigateToActivePeriodBudget = () => {
     try {
@@ -544,22 +543,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   type="button"
                   onClick={handleNavigateToActivePeriodBudget}
                   title={`View ${activePeriod} Budget Sheet`}
-                  className="flex items-center gap-1.5 font-mono tabular-nums text-left hover:text-white transition-colors cursor-pointer group"
+                  className="inline-flex items-center gap-1.5 sm:gap-2 font-mono tabular-nums text-left hover:text-white transition-colors cursor-pointer group"
                 >
-                  <span className="text-indigo-200/80 font-sans group-hover:text-indigo-100">
-                    Current {activePeriod} Projected Surplus:
+                  <span className="text-indigo-200/90 font-sans font-medium group-hover:text-indigo-100">
+                    {activePeriod}:
                   </span>
-                  <span
-                    className={`font-semibold ${
-                      currentPeriodProjectedMetrics.projectedSurplus >= 0
-                        ? 'text-emerald-300'
-                        : 'text-rose-300'
-                    }`}
-                  >
-                    {currentPeriodProjectedMetrics.projectedSurplus >= 0 ? '+' : ''}
-                    {currencySymbol}{formatNumber(currentPeriodProjectedMetrics.projectedSurplus)}
+                  <span>
+                    <span className="text-slate-400 font-sans text-[11px] mr-1">Balance</span>
+                    <span
+                      className={`font-semibold ${
+                        currentPeriodProjectedMetrics.currentRemainingPaid >= 0
+                          ? 'text-emerald-300'
+                          : 'text-rose-300'
+                      }`}
+                    >
+                      {currencySymbol}{formatNumber(currentPeriodProjectedMetrics.currentRemainingPaid)}
+                    </span>
+                    {!currentPeriodProjectedMetrics.hasAnyIncomeRecorded && (
+                      <span className="text-[10px] text-indigo-300 font-sans font-normal ml-0.5">(Est)</span>
+                    )}
                   </span>
-                  <ChevronRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-0.5 transition-transform" />
+                  <span className="text-indigo-400/40" aria-hidden="true">&middot;</span>
+                  <span>
+                    <span className="text-slate-400 font-sans text-[11px] mr-1">Projected</span>
+                    <span
+                      className={`font-semibold ${
+                        currentPeriodProjectedMetrics.projectedSurplus >= 0
+                          ? 'text-emerald-300'
+                          : 'text-rose-300'
+                      }`}
+                    >
+                      {currentPeriodProjectedMetrics.projectedSurplus >= 0 ? '+' : ''}
+                      {currencySymbol}{formatNumber(currentPeriodProjectedMetrics.projectedSurplus)}
+                    </span>
+                  </span>
+                  <ChevronRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
                 </button>
               </div>
             </div>

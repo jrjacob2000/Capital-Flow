@@ -34,6 +34,7 @@ import {
   DEFAULT_SINKING_FUND_NAMES,
   MONTH_NAMES,
 } from '../services/sampleData';
+import { formatCurrency } from '../utils/budgetCalculations';
 
 const ACCOUNT_COLORS = [
   '#10b981', // Emerald
@@ -1116,8 +1117,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setDeletingAccount(null);
   };
 
-  const formatNumber = (num: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+  const formatNumber = (num: number) => formatCurrency(num);
 
   // Compound projector calculation
   const compoundResult = useMemo(() => {
