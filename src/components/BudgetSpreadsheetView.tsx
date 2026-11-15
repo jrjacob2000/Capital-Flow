@@ -1292,19 +1292,24 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     let targetItem = formItem;
 
     if (modalType === 'saving' && !isCreatingNewSinkingFund && newCat.trim()) {
-      const currentFundCat = formItem ? getSavingFundCategory(formItem) : '';
-      if (currentFundCat.toLowerCase() !== newCat.trim().toLowerCase()) {
-        const matchingFunds = existingSinkingFunds.filter(
-          (f) => getSavingFundCategory(f).toLowerCase() === newCat.trim().toLowerCase()
-        );
-        if (matchingFunds.length > 0) {
-          targetItem = matchingFunds[0];
-          setFormItem(targetItem);
-          const matchedTpl = itemTemplates.find(
-            (t) => t.type === 'saving' && t.item.toLowerCase() === targetItem.toLowerCase()
+      if (newCat.trim().toLowerCase() === 'unallocated cash pool') {
+        targetItem = 'General Reserves / Starting Capital';
+        setFormItem(targetItem);
+      } else {
+        const currentFundCat = formItem ? getSavingFundCategory(formItem) : '';
+        if (currentFundCat.toLowerCase() !== newCat.trim().toLowerCase()) {
+          const matchingFunds = existingSinkingFunds.filter(
+            (f) => getSavingFundCategory(f).toLowerCase() === newCat.trim().toLowerCase()
           );
-          if (matchedTpl?.defaultSavingAccountId) {
-            setFormSavingAccountId(matchedTpl.defaultSavingAccountId);
+          if (matchingFunds.length > 0) {
+            targetItem = matchingFunds[0];
+            setFormItem(targetItem);
+            const matchedTpl = itemTemplates.find(
+              (t) => t.type === 'saving' && t.item.toLowerCase() === targetItem.toLowerCase()
+            );
+            if (matchedTpl?.defaultSavingAccountId) {
+              setFormSavingAccountId(matchedTpl.defaultSavingAccountId);
+            }
           }
         }
       }
@@ -1411,7 +1416,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         : expenseCategories[0] || 'Utilities & Bills');
 
     // Persist newly typed custom category into budget.customCategories so it appears in future dropdowns
-    if (finalCategory) {
+    if (finalCategory && finalCategory.toLowerCase() !== 'unallocated cash pool') {
       const currentList =
         modalType === 'income'
           ? budget.customCategories?.income || INCOME_CATEGORIES
@@ -3886,7 +3891,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     {modalType === 'saving' && !isCreatingNewSinkingFund ? (
                       <select
                         value={
-                          existingSinkingFunds.includes(formItem)
+                          formItem.trim().toLowerCase() === 'general reserves / starting capital'
+                            ? 'General Reserves / Starting Capital'
+                            : existingSinkingFunds.includes(formItem)
                             ? formItem
                             : resolveCanonicalSinkingFundName(formItem, formCategory, existingSinkingFunds)
                         }
@@ -3901,11 +3908,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         }}
                         className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-500"
                       >
+                        <optgroup label="Unallocated Cash Pool (Bank Balance Only)">
+                          <option value="General Reserves / Starting Capital">
+                            General Reserves / Starting Capital (Unallocated)
+                          </option>
+                        </optgroup>
                         {(() => {
                           const allFunds = Array.from(
                             new Set([
                               ...existingSinkingFunds,
-                              ...(formItem && formItem.trim()
+                              ...(formItem &&
+                              formItem.trim() &&
+                              formItem.trim().toLowerCase() !== 'general reserves / starting capital'
                                 ? [resolveCanonicalSinkingFundName(formItem, formCategory, existingSinkingFunds)]
                                 : []),
                             ])
@@ -4042,7 +4056,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             ...(modalType === 'income'
                               ? incomeCategories
                               : modalType === 'saving'
-                              ? savingCategories
+                              ? ['Unallocated Cash Pool', ...savingCategories]
                               : expenseCategories),
                             ...(formCategory && formCategory.trim() ? [formCategory.trim()] : []),
                           ])

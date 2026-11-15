@@ -653,51 +653,75 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     });
 
     // Unallocated remainder (opening balances or unassigned capital)
-    const unallocatedRemainder = Math.max(0, Math.round((totalCapital - categorizedNetSum) * 100) / 100);
-    if (unallocatedRemainder > 0.005) {
-      const unallocatedAccounts: {
-        accountId: string;
-        accountName: string;
-        accountType?: string;
-        accountColor?: string;
-        amount: number;
-        percentage: number;
-      }[] = [];
+    const rawUnallocatedRemainder = Math.max(0, Math.round((totalCapital - categorizedNetSum) * 100) / 100);
+    const unallocatedAccounts: {
+      accountId: string;
+      accountName: string;
+      accountType?: string;
+      accountColor?: string;
+      amount: number;
+      percentage: number;
+    }[] = [];
 
-      ledger.accounts.forEach((acc) => {
-        let usedInFunds = 0;
-        result.forEach((rf) => {
-          const match = rf.accounts.find((a) => a.accountId === acc.id);
-          if (match) usedInFunds += match.amount;
+    let sumUnallocatedInAccounts = 0;
+    ledger.accounts.forEach((acc) => {
+      let usedInFunds = 0;
+      result.forEach((rf) => {
+        const match = rf.accounts.find((a) => a.accountId === acc.id);
+        if (match) usedInFunds += match.amount;
+      });
+      const unallocatedInAcc = Math.max(0, Math.round((acc.balance - usedInFunds) * 100) / 100);
+      if (unallocatedInAcc > 0.005) {
+        sumUnallocatedInAccounts = Math.round((sumUnallocatedInAccounts + unallocatedInAcc) * 100) / 100;
+        unallocatedAccounts.push({
+          accountId: acc.id,
+          accountName: acc.name,
+          accountType: acc.type,
+          accountColor: acc.color || '#64748b',
+          amount: unallocatedInAcc,
+          percentage: 0,
         });
-        const unallocatedInAcc = Math.max(0, Math.round((acc.balance - usedInFunds) * 100) / 100);
-        if (unallocatedInAcc > 0.005) {
-          unallocatedAccounts.push({
-            accountId: acc.id,
-            accountName: acc.name,
-            accountType: acc.type,
-            accountColor: acc.color || '#64748b',
-            amount: unallocatedInAcc,
-            percentage: unallocatedRemainder > 0 ? (unallocatedInAcc / unallocatedRemainder) * 100 : 0,
-          });
-        }
-      });
+      }
+    });
 
-      result.push({
-        id: 'fund-general-unallocated',
-        name: 'General Reserves / Starting Capital',
-        category: 'Unallocated Capital',
-        color: '#64748b',
-        totalInflow: unallocatedRemainder,
-        totalOutflow: 0,
-        currentBalance: unallocatedRemainder,
-        percentageOfTotal: totalCapital > 0 ? (unallocatedRemainder / totalCapital) * 100 : 0,
-        accounts: unallocatedAccounts,
-        transactionCount: 0,
-      });
-    }
+    const unallocatedRemainder = Math.max(rawUnallocatedRemainder, sumUnallocatedInAccounts);
+    unallocatedAccounts.forEach((ua) => {
+      ua.percentage = unallocatedRemainder > 0 ? (ua.amount / unallocatedRemainder) * 100 : 0;
+    });
 
-    return result.sort((a, b) => b.currentBalance - a.currentBalance);
+    const unallocatedTxs = ledger.transactions.filter((tx) => {
+      const cat = (tx.category || '').trim().toLowerCase();
+      const toCat = (tx.toCategory || '').trim().toLowerCase();
+      return (
+        cat === 'general reserves / starting capital' ||
+        toCat === 'general reserves / starting capital' ||
+        (tx.source === 'manual_deposit' && !cat)
+      );
+    });
+    const unallocatedLatestDate = unallocatedTxs.reduce<string | undefined>(
+      (latest, tx) => (!latest || new Date(tx.date) > new Date(latest) ? tx.date : latest),
+      undefined
+    );
+
+    result.push({
+      id: 'fund-general-unallocated',
+      name: 'General Reserves / Starting Capital',
+      category: 'Unallocated Capital',
+      color: '#64748b',
+      totalInflow: unallocatedRemainder,
+      totalOutflow: 0,
+      currentBalance: unallocatedRemainder,
+      percentageOfTotal: totalCapital > 0 ? (unallocatedRemainder / totalCapital) * 100 : 0,
+      accounts: unallocatedAccounts,
+      transactionCount: unallocatedTxs.length,
+      latestDate: unallocatedLatestDate,
+    });
+
+    return result.sort((a, b) => {
+      if (a.id === 'fund-general-unallocated' && a.currentBalance === 0 && b.currentBalance > 0) return 1;
+      if (b.id === 'fund-general-unallocated' && b.currentBalance === 0 && a.currentBalance > 0) return -1;
+      return b.currentBalance - a.currentBalance;
+    });
   }, [ledger.transactions, ledger.accounts, budget, totalCapital]);
 
   const unallocatedFund = useMemo(
@@ -764,10 +788,15 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
       if (selectedFundFilter !== 'all') {
         const cleanNote = tx.note.replace(/^(Budget Sync|Withdrawal|Manual Deposit):\s*/i, '').trim().toLowerCase();
-        const categoryMatch = (tx.category || '').toLowerCase();
-        const toCategoryMatch = (tx.toCategory || '').toLowerCase();
+        const categoryMatch = (tx.category || '').trim().toLowerCase();
+        const toCategoryMatch = (tx.toCategory || '').trim().toLowerCase();
         const filterKey = selectedFundFilter.toLowerCase();
+        const isUnallocatedDeposit =
+          filterKey === 'general reserves / starting capital' &&
+          tx.source === 'manual_deposit' &&
+          !categoryMatch;
         if (
+          !isUnallocatedDeposit &&
           cleanNote !== filterKey &&
           categoryMatch !== filterKey &&
           toCategoryMatch !== filterKey &&
@@ -3922,6 +3951,40 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto my-2.5 divide-y divide-slate-100 dark:divide-slate-800">
+              {unallocatedFund && (
+                <div className="py-2.5 flex items-center justify-between gap-2.5 bg-slate-50/70 dark:bg-slate-800/40 px-2 rounded-xl mb-1">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-3 h-3 rounded-full shrink-0"
+                      style={{ backgroundColor: unallocatedFund.color }}
+                    />
+                    <div className="min-w-0">
+                      <div className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white truncate">
+                        General Reserves / Starting Capital (Unallocated)
+                      </div>
+                      <div className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono tabular-nums">
+                        {currencySymbol}{formatNumber(unallocatedFund.currentBalance)} · System Unallocated Cash Pool
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsManageFundsModalOpen(false);
+                        setDepositType('manual_deposit');
+                        setDepositCategory('');
+                        setDepositNote('');
+                        const firstAcc = unallocatedFund.accounts[0];
+                        handleOpenTransactionModal('deposit', firstAcc ? firstAcc.accountId : undefined);
+                      }}
+                      className="h-8 px-2.5 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 rounded-lg font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <span>+ Deposit</span>
+                    </button>
+                  </div>
+                </div>
+              )}
               {categoryFunds.filter((f) => f.id !== 'fund-general-unallocated').length === 0 ? (
                 <div className="p-6 text-center text-slate-400">
                   No named Goal Funds yet. Allocate or deposit into a Goal Fund to create one.

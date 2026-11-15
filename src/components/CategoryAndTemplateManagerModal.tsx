@@ -1647,11 +1647,19 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="">Select Goal Fund...</option>
+                      <optgroup label="Unallocated Cash Pool (Bank Balance Only)">
+                        <option value="General Reserves / Starting Capital">
+                          General Reserves / Starting Capital (Unallocated)
+                        </option>
+                      </optgroup>
                       {(() => {
                         const allFunds = Array.from(
                           new Set([
                             ...existingSinkingFunds,
-                            ...(tplItem.trim() ? [tplItem.trim()] : []),
+                            ...(tplItem.trim() &&
+                            tplItem.trim().toLowerCase() !== 'general reserves / starting capital'
+                              ? [tplItem.trim()]
+                              : []),
                           ])
                         );
                         const grouped = new Map<string, string[]>();

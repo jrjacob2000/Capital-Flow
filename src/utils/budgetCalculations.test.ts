@@ -4672,3 +4672,126 @@ describe('37. Zero-Glitch Browser Tab Return & Fast-Boot Snapshot Persistence', 
   });
 });
 
+describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transfer & Loan Deduction', () => {
+  it('moves salary from Budget Sheet to Checking Account as Unallocated (General Reserves / Starting Capital) and deducts Loan Payment from it', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+
+    // 1. Verify canonical name and category resolution for General Reserves / Starting Capital
+    assert.equal(
+      resolveCanonicalSinkingFundName('General Reserves / Starting Capital', 'Unallocated Cash Pool'),
+      'General Reserves / Starting Capital'
+    );
+    assert.equal(
+      resolveFundCategoryWithTemplates('General Reserves / Starting Capital', [], [], []),
+      'Unallocated Cash Pool'
+    );
+
+    // 2. Set up a Checking Account starting at ₱0 and a Car Loan
+    ledger.accounts = [
+      {
+        id: 'acc-checking-unalloc',
+        name: 'Checking Account',
+        type: 'Traditional Bank (Savings / Checking)',
+        balance: 0,
+        color: '#0ea5e9',
+      },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+
+    const carLoan: LoanRecord = {
+      id: 'loan-car-pdc',
+      name: 'Auto Loan PDC',
+      direction: 'borrowed',
+      category: 'Auto / Vehicle Loan',
+      counterparty: 'BPI Family',
+      principalAmount: 240000,
+      totalContractAmount: 240000,
+      installmentAmount: 18500.75,
+      totalInstallments: 12,
+      frequency: 'monthly',
+      initialPaidAmount: 0,
+      initialInstallmentsPaid: 0,
+      startDate: '2026-01-01',
+      status: 'active',
+      payments: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    FinanceStorageService.saveLoanContract(carLoan, budget, 'monthly', { syncToTemplate: false });
+
+    // 3. Move ₱20,000 from Nov Budget Sheet salary to Checking Account using General Reserves / Starting Capital (Unallocated)
+    const salaryEntry = makeEntry({
+      id: 'entry-nov-sal',
+      year: 2026,
+      period: 'Nov',
+      periodIndex: 10,
+      date: '2026-11-05',
+      type: 'income',
+      category: 'Salary & Wages',
+      item: 'November Salary',
+      amount: 60000,
+      estimatedCost: 60000,
+      actualCost: 60000,
+      status: 'Paid',
+    });
+    const unallocatedTransferEntry = makeEntry({
+      id: 'entry-nov-unalloc-transfer',
+      year: 2026,
+      period: 'Nov',
+      periodIndex: 10,
+      date: '2026-11-06',
+      type: 'saving',
+      category: 'Unallocated Cash Pool',
+      item: 'General Reserves / Starting Capital',
+      amount: 20000,
+      estimatedCost: 20000,
+      actualCost: 20000,
+      status: 'Paid',
+      savingAccountId: 'acc-checking-unalloc',
+      savingAccountName: 'Checking Account',
+    });
+
+    const updatedBudget = FinanceStorageService.addMultipleBudgetEntries(budget, [
+      salaryEntry,
+      unallocatedTransferEntry,
+    ]).budget;
+
+    const ledgerAfterTransfer = FinanceStorageService.loadLocalSavingsLedger();
+    const checkingAcc = ledgerAfterTransfer.accounts.find((a) => a.id === 'acc-checking-unalloc');
+    assert.equal(checkingAcc?.balance, 20000);
+
+    // Synced ledger transaction is tagged with 'General Reserves / Starting Capital' so it remains Unallocated
+    const savedTransferEntry = updatedBudget.entries.find(
+      (e: BudgetEntry) => e.item === 'General Reserves / Starting Capital'
+    );
+    assert.ok(savedTransferEntry);
+    const syncTx = ledgerAfterTransfer.transactions.find(
+      (tx) => tx.budgetEntryId === savedTransferEntry!.id
+    );
+    assert.ok(syncTx);
+    assert.equal(syncTx?.category, 'General Reserves / Starting Capital');
+    assert.equal(syncTx?.amount, 20000);
+
+    // 4. Pay the ₱18,500.75 Auto Loan from Checking Account's Unallocated Cash Pool
+    const payRes = FinanceStorageService.recordLoanPayment(
+      'loan-car-pdc',
+      {
+        amount: 18500.75,
+        date: '2026-11-15',
+        note: 'Nov Auto PDC Cleared',
+        recordInBudget: false,
+        deductFromAccountId: 'acc-checking-unalloc',
+        deductFromFundCategory: 'General Reserves / Starting Capital',
+      },
+      updatedBudget,
+      'monthly'
+    );
+
+    const checkingAfterLoan = payRes.ledger.accounts.find((a) => a.id === 'acc-checking-unalloc');
+    assert.equal(roundCurrency(checkingAfterLoan?.balance || 0), 1499.25);
+    assert.equal(payRes.loan?.payments[0].fundCategory, 'General Reserves / Starting Capital');
+  });
+});
+
+
