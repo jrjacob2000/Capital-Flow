@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.23.0';
+export const APP_VERSION = '1.25.0';
 
 export type EntryType = 'income' | 'expense' | 'saving';
 
@@ -114,6 +114,7 @@ export interface LoanPayment {
   budgetEntryId?: string;
   accountId?: string;
   accountName?: string;
+  fundCategory?: string;
   ledgerTransactionId?: string;
   note?: string;
 }

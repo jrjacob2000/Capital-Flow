@@ -1074,5 +1074,10 @@ export function computePeriodProjectedSurplus(
   };
 }
 
-
-
+/**
+ * Rounds a currency value to 2 decimal places (centavos) to eliminate IEEE 754 floating-point drift.
+ */
+export function roundCurrency(val: number): number {
+  const num = Number(val) || 0;
+  return Math.round((num + Number.EPSILON) * 100) / 100;
+}

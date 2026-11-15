@@ -19,11 +19,12 @@ import {
   resolveCanonicalSinkingFundName,
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
+  resolveFundCategoryWithTemplates,
   DEFAULT_SINKING_FUND_NAMES,
   MONTH_NAMES,
   BIWEEKLY_PERIODS,
 } from '../services/sampleData';
-import { computePeriodProjectedSurplus, formatCurrency } from '../utils/budgetCalculations';
+import { computePeriodProjectedSurplus, formatCurrency, roundCurrency } from '../utils/budgetCalculations';
 import { CashflowChart } from './charts/CashflowChart';
 import { CapitalGrowthChart } from './charts/CapitalGrowthChart';
 import { CategoryDonutChart } from './charts/CategoryDonutChart';
@@ -61,17 +62,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const activeEntries = modeEntries.length > 0 ? modeEntries : budget.entries;
 
   // Core Cashflow Metrics (Settled / Paid entries)
-  const totalIncome = activeEntries
-    .filter((e) => e.type === 'income' && e.status !== 'Pending')
-    .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+  const totalIncome = roundCurrency(
+    activeEntries
+      .filter((e) => e.type === 'income' && e.status !== 'Pending')
+      .reduce((sum, e) => roundCurrency(sum + (e.actualCost ?? e.amount ?? 0)), 0)
+  );
 
-  const totalExpenses = activeEntries
-    .filter((e) => e.type === 'expense' && e.status !== 'Pending')
-    .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+  const totalExpenses = roundCurrency(
+    activeEntries
+      .filter((e) => e.type === 'expense' && e.status !== 'Pending')
+      .reduce((sum, e) => roundCurrency(sum + (e.actualCost ?? e.amount ?? 0)), 0)
+  );
 
-  const totalSavings = activeEntries
-    .filter((e) => e.type === 'saving' && e.status !== 'Pending')
-    .reduce((sum, e) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+  const totalSavings = roundCurrency(
+    activeEntries
+      .filter((e) => e.type === 'saving' && e.status !== 'Pending')
+      .reduce((sum, e) => roundCurrency(sum + (e.actualCost ?? e.amount ?? 0)), 0)
+  );
 
   // Active/current period resolution
   const activePeriod = useMemo(() => {
@@ -207,7 +214,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (!knownCanonicalPool.some((p) => p.toLowerCase() === key)) {
         knownCanonicalPool.push(trimmed);
       }
-      const resolvedCat = normalizeSavingCategoryGroup(trimmed, category);
+      const resolvedCat = resolveFundCategoryWithTemplates(
+        trimmed,
+        budget?.itemTemplates,
+        budget?.entries,
+        budget?.customCategories?.saving,
+        category
+      );
       if (!fundMap.has(key)) {
         const assignedColor = customColor || FUND_COLORS[fundMap.size % FUND_COLORS.length];
         fundMap.set(key, {
@@ -382,7 +395,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       plannedAnnualTarget?: number;
     }[] = [];
     fundMap.forEach((f) => {
-      const net = Math.max(0, f.inflow - f.outflow);
+      const net = Math.max(0, roundCurrency(f.inflow - f.outflow));
       result.push({
         id: f.id,
         name: f.name,
@@ -396,9 +409,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return result.sort((a, b) => b.currentBalance - a.currentBalance);
   }, [ledger.transactions, budget]);
 
-  const totalAllocatedCategoryReserves = categoryFunds.reduce((sum, f) => sum + f.currentBalance, 0);
-  const unallocatedCashReserve = Math.max(0, currentTotalCapital - totalAllocatedCategoryReserves);
-  const unallocatedBudgetSurplus = totalIncome - totalExpenses - totalSavings;
+  const totalAllocatedCategoryReserves = roundCurrency(
+    categoryFunds.reduce((sum, f) => roundCurrency(sum + f.currentBalance), 0)
+  );
+  const unallocatedCashReserve = Math.max(0, roundCurrency(currentTotalCapital - totalAllocatedCategoryReserves));
+  const unallocatedBudgetSurplus = roundCurrency(totalIncome - totalExpenses - totalSavings);
 
   // Loans & Debt Summary
   const loanSummary = useMemo(() => {
@@ -422,10 +437,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }[] = [];
 
     loans.forEach((ln) => {
-      const paymentsSum = (ln.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
-      const totalPaid = (ln.initialPaidAmount || 0) + paymentsSum;
-      const totalContract = ln.totalContractAmount || 0;
-      const remainingBalance = Math.max(0, totalContract - totalPaid);
+      const paymentsSum = roundCurrency(
+        (ln.payments || []).reduce((sum, p) => roundCurrency(sum + (p.amount || 0)), 0)
+      );
+      const totalPaid = roundCurrency((ln.initialPaidAmount || 0) + paymentsSum);
+      const totalContract = roundCurrency(ln.totalContractAmount || 0);
+      const remainingBalance = Math.max(0, roundCurrency(totalContract - totalPaid));
       const progressPct = totalContract > 0 ? Math.min(100, (totalPaid / totalContract) * 100) : 0;
 
       const recordedPaymentsCount = (ln.payments || []).length;
@@ -443,21 +460,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         ? 0
         : ln.frequency === 'bi-weekly'
         ? ln.biweeklyPeriod === 'both'
-          ? (ln.installmentAmount || 0) * 2
-          : ln.installmentAmount || 0
-        : ln.installmentAmount || 0;
+          ? roundCurrency((ln.installmentAmount || 0) * 2)
+          : roundCurrency(ln.installmentAmount || 0)
+        : roundCurrency(ln.installmentAmount || 0);
 
       if (ln.direction === 'borrowed') {
-        borrowedPaid += totalPaid;
-        borrowedContract += totalContract;
+        borrowedPaid = roundCurrency(borrowedPaid + totalPaid);
+        borrowedContract = roundCurrency(borrowedContract + totalContract);
         if (!isCompleted) {
-          borrowedRemaining += remainingBalance;
-          borrowedMonthlyCommitment += monthlyCommitment;
+          borrowedRemaining = roundCurrency(borrowedRemaining + remainingBalance);
+          borrowedMonthlyCommitment = roundCurrency(borrowedMonthlyCommitment + monthlyCommitment);
           activeBorrowedCount += 1;
         }
       } else {
         if (!isCompleted) {
-          lentRemaining += remainingBalance;
+          lentRemaining = roundCurrency(lentRemaining + remainingBalance);
           activeLentCount += 1;
         }
       }
@@ -476,8 +493,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
     activeLoanItems.sort((a, b) => b.remainingBalance - a.remainingBalance);
 
-    const netLoanPosition = lentRemaining - borrowedRemaining;
-    const trueNetWorth = currentTotalCapital + netLoanPosition;
+    const netLoanPosition = roundCurrency(lentRemaining - borrowedRemaining);
+    const trueNetWorth = roundCurrency(currentTotalCapital + netLoanPosition);
 
     return {
       borrowedRemaining,

@@ -27,12 +27,14 @@ import {
   computeCurrentRemainingPaid,
   computePeriodProjectedSurplus,
   formatCurrency,
+  roundCurrency,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
   resolveCanonicalSinkingFundName,
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
+  resolveFundCategoryWithTemplates,
   normalizeCategoryWording,
   deriveCategoryBudgetsFromTemplates,
   stripDefaultStarterTemplates,
@@ -57,7 +59,7 @@ import {
   resolveFirebaseEnvironmentConfig,
   sanitizeErrorForLog,
 } from '../services/firebase';
-import { BudgetEntry, BudgetItemTemplate, LoanRecord, SavingsLedgerData } from '../types/finance';
+import { BudgetEntry, BudgetItemTemplate, LoanRecord, SavingsLedgerData, YearBudgetData } from '../types/finance';
 
 // Set up in-memory localStorage mock for FinanceStorageService unit tests
 const memoryStorage = new Map<string, string>();
@@ -4343,6 +4345,330 @@ describe('34. Decimal Precision, Centavos Formatting & Total Paid Alignment', ()
   });
 });
 
+describe('35. Borrowed Loan Payment Deducted from Bank Account & Goal Fund (PDC / Check Account Workflow)', () => {
+  it('deducts borrowed loan payment from selected Bank Account & Goal Fund without double-deducting Budget Sheet salary, and restores balance on delete', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
 
+    // 1. Create a Checking Account (starting at ₱0)
+    ledger.accounts = [
+      {
+        id: 'acc-checking',
+        name: 'Checking Account (PDC)',
+        type: 'Traditional Bank (Savings / Checking)',
+        balance: 0,
+        color: '#3b82f6',
+      },
+    ];
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
 
+    // 2. Create a Pag-IBIG Housing Loan (Borrowed, ₱34,337.31/month)
+    const housingLoan: LoanRecord = {
+      id: 'loan-pagibig-housing',
+      name: 'Pag-IBIG Housing Loan',
+      direction: 'borrowed',
+      category: 'Housing / Mortgage',
+      counterparty: 'Pag-IBIG',
+      principalAmount: 412047.72,
+      totalContractAmount: 412047.72,
+      installmentAmount: 34337.31,
+      totalInstallments: 12,
+      frequency: 'monthly',
+      initialPaidAmount: 0,
+      initialInstallmentsPaid: 0,
+      startDate: '2026-01-01',
+      status: 'active',
+      payments: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    FinanceStorageService.saveLoanContract(housingLoan, budget, 'monthly', {
+      syncToTemplate: false,
+    });
+
+    // 3. On the Oct Budget Sheet: Receive ₱50,000 Salary and transfer ₱34,500 to Checking Account ("Check Account Fund")
+    const salaryEntry = makeEntry({
+      id: 'entry-oct-salary',
+      year: 2026,
+      period: 'Oct',
+      periodIndex: 9,
+      date: '2026-10-05',
+      type: 'income',
+      category: 'Salary & Wages',
+      item: 'Monthly Salary',
+      amount: 50000,
+      estimatedCost: 50000,
+      actualCost: 50000,
+      status: 'Paid',
+    });
+    const fundTransferEntry = makeEntry({
+      id: 'entry-oct-check-fund',
+      year: 2026,
+      period: 'Oct',
+      periodIndex: 9,
+      date: '2026-10-06',
+      type: 'saving',
+      category: 'Short-Term & General Savings',
+      item: 'Check Account Fund',
+      amount: 34500,
+      estimatedCost: 34500,
+      actualCost: 34500,
+      status: 'Paid',
+      savingAccountId: 'acc-checking',
+      savingAccountName: 'Checking Account (PDC)',
+    });
+
+    const workingBudget = FinanceStorageService.addMultipleBudgetEntries(budget, [
+      salaryEntry,
+      fundTransferEntry,
+    ]).budget;
+
+    // Verify Checking Account now has ₱34,500 and Oct Budget Remaining Cash is ₱15,500
+    const ledgerAfterFunding = FinanceStorageService.loadLocalSavingsLedger();
+    const checkingAfterFunding = ledgerAfterFunding.accounts.find((a) => a.id === 'acc-checking');
+    assert.equal(checkingAfterFunding?.balance, 34500);
+
+    const octPaidOutflowBeforeLoan = workingBudget.entries
+      .filter((e: BudgetEntry) => e.period === 'Oct' && e.type !== 'income' && e.status === 'Paid')
+      .reduce((sum: number, e: BudgetEntry) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+    const octRemainingCashBeforeLoan = computeCurrentRemainingPaid({
+      hasAnyIncomeRecorded: true,
+      totalIncomeActual: 50000,
+      totalIncomeEstimated: 50000,
+      totalExpensePaid: octPaidOutflowBeforeLoan,
+    });
+    assert.equal(octRemainingCashBeforeLoan, 15500);
+
+    // 4. Record the ₱34,337.31 PDC Loan Payment deducted from Checking Account & Check Account Fund (recordInBudget: false)
+    const payRes = FinanceStorageService.recordLoanPayment(
+      'loan-pagibig-housing',
+      {
+        amount: 34337.31,
+        date: '2026-10-15',
+        note: 'Oct PDC Cleared',
+        recordInBudget: false,
+        deductFromAccountId: 'acc-checking',
+        deductFromFundCategory: 'Check Account Fund',
+      },
+      workingBudget,
+      'monthly'
+    );
+
+    // Checking Account balance is now 34,500 - 34,337.31 = 162.69
+    const checkingAfterPayment = payRes.ledger.accounts.find((a) => a.id === 'acc-checking');
+    assert.equal(checkingAfterPayment?.balance, 162.69);
+
+    // Linked withdrawal transaction is recorded under "Check Account Fund"
+    const withdrawalTx = payRes.ledger.transactions.find(
+      (t) => t.source === 'withdrawal' && t.accountId === 'acc-checking'
+    );
+    assert.ok(withdrawalTx);
+    assert.equal(withdrawalTx?.amount, 34337.31);
+    assert.equal(withdrawalTx?.category, 'Check Account Fund');
+
+    // Loan remaining balance is reduced by 34,337.31
+    assert.equal(payRes.loan?.payments.length, 1);
+    assert.equal(payRes.loan?.payments[0].amount, 34337.31);
+    assert.equal(payRes.loan?.payments[0].accountId, 'acc-checking');
+    assert.equal(payRes.loan?.payments[0].fundCategory, 'Check Account Fund');
+
+    // Oct Budget Sheet salary remaining cash is still ₱15,500 (no double deduction!)
+    const budgetAfterLoan = FinanceStorageService.loadLocalBudget(2026);
+    const octPaidOutflowAfterLoan = budgetAfterLoan.entries
+      .filter((e: BudgetEntry) => e.period === 'Oct' && e.type !== 'income' && e.status === 'Paid')
+      .reduce((sum: number, e: BudgetEntry) => sum + (e.actualCost ?? e.amount ?? 0), 0);
+    assert.equal(octPaidOutflowAfterLoan, 34500);
+
+    // 5. Deleting the loan payment restores Checking Account back to ₱34,500.00
+    const paymentId = payRes.loan!.payments[0].id;
+    const delRes = FinanceStorageService.deleteLoanPayment(
+      'loan-pagibig-housing',
+      paymentId,
+      budgetAfterLoan
+    );
+    const checkingAfterDelete = delRes.ledger.accounts.find((a) => a.id === 'acc-checking');
+    assert.equal(checkingAfterDelete?.balance, 34500);
+    assert.equal(delRes.loan?.payments.length, 0);
+  });
+});
+
+describe('36. Goal Fund & Category Dropdown Synchronization (normalizeSavingCategoryGroup & resolveFundCategoryWithTemplates)', () => {
+  it('evaluates the selected Goal Fund name before fallback category so stale dropdown state never hijacks the category', () => {
+    // Previously, passing rawCategory='Emergency & Safety Net' caused every fund to match 'emergency'
+    assert.equal(
+      normalizeSavingCategoryGroup('General Savings', 'Emergency & Safety Net'),
+      'Short-Term & General Savings'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Check Account Fund', 'Emergency & Safety Net'),
+      'Short-Term & General Savings'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Pag-IBIG MP2', 'Emergency & Safety Net'),
+      'Long-Term & Wealth Investments'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Car Maintenance Fund', 'Emergency & Safety Net'),
+      'Vehicle & Maintenance Sinking Funds'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Travel & Vacation Fund', 'Home & Property Sinking Funds'),
+      'Family, Travel & Education Funds'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('House Repair & Maintenance Fund', 'Vehicle & Maintenance Sinking Funds'),
+      'Home & Property Sinking Funds'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Emergency Fund', 'Short-Term & General Savings'),
+      'Emergency & Safety Net'
+    );
+  });
+
+  it('resolves custom Goal Fund categories from templates or budget entries via resolveFundCategoryWithTemplates', () => {
+    const customTemplates: BudgetItemTemplate[] = [
+      {
+        id: 'tpl-wedding',
+        type: 'saving',
+        category: 'Family, Travel & Education Funds',
+        item: 'Dream Wedding 2027',
+        defaultEstimatedCost: 10000,
+      },
+      {
+        id: 'tpl-custom-cat',
+        type: 'saving',
+        category: 'Business Expansion Reserve',
+        item: 'Cafe Equipment Sinking Fund',
+        defaultEstimatedCost: 15000,
+      },
+    ];
+
+    // 1. Custom fund defined in template resolves to its template category even if no keyword matches
+    assert.equal(
+      resolveFundCategoryWithTemplates(
+        'Dream Wedding 2027',
+        customTemplates,
+        [],
+        [],
+        'Emergency & Safety Net'
+      ),
+      'Family, Travel & Education Funds'
+    );
+
+    // 2. Custom fund in a user-created custom saving category preserves that custom category
+    assert.equal(
+      resolveFundCategoryWithTemplates(
+        'Cafe Equipment Sinking Fund',
+        customTemplates,
+        [],
+        ['Business Expansion Reserve'],
+        'Emergency & Safety Net'
+      ),
+      'Business Expansion Reserve'
+    );
+
+    // 3. Built-in fund resolves to its canonical category regardless of fallback
+    assert.equal(
+      resolveFundCategoryWithTemplates(
+        'Holiday & Gift Fund',
+        customTemplates,
+        [],
+        [],
+        'Emergency & Safety Net'
+      ),
+      'Family, Travel & Education Funds'
+    );
+  });
+});
+
+describe('37. Zero-Glitch Browser Tab Return & Fast-Boot Snapshot Persistence', () => {
+  it('immediately restores non-starter budget, ledger, and active tab on browser reload even after setCloudSessionActive purged legacy localStorage keys', () => {
+    memoryStorage.clear();
+    FinanceStorageService.clearCloudSessionMemory();
+
+    // 1. User creates/loads their workspace and records an entry
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      entries: [
+        makeEntry({
+          id: 'entry-real-1',
+          year: 2026,
+          period: 'Nov',
+          periodIndex: 10,
+          date: '2026-11-05',
+          type: 'income',
+          category: 'Salary & Wages',
+          item: 'Real November Salary',
+          amount: 65000,
+          actualCost: 65000,
+          status: 'Paid',
+        }),
+      ],
+      isDefaultStarterData: false,
+    };
+    FinanceStorageService.saveLocalBudget(updatedBudget, { skipFirestoreWrite: true });
+    FinanceStorageService.saveUiSessionState({
+      currentYear: 2026,
+      frequency: 'bi-weekly',
+      activeTab: 'budget',
+    });
+
+    // 2. Cloud session activates and purges legacy localStorage keys
+    FinanceStorageService.setCloudSessionActive(true, 'uid-test-999');
+    assert.equal(localStorage.getItem('capitalflow_local_budget_2026'), null);
+    assert.equal(FinanceStorageService.hasActiveCloudSessionHint(), true);
+
+    // 3. Simulate browser tab being discarded in background and reloaded when user switches back to browser:
+    //    In-memory runtime starts empty & cloudMemoryActive starts false before Firebase Auth resolves,
+    //    while localStorage still holds the fast-boot snapshot and UI session state.
+    const savedFastBoot = localStorage.getItem('capitalflow_fast_boot_snapshot_v1');
+    const savedCloudUid = localStorage.getItem('capitalflow_active_cloud_uid');
+    const savedUiState = localStorage.getItem('capitalflow_ui_session_v1');
+    assert.ok(savedFastBoot);
+    assert.equal(savedCloudUid, 'uid-test-999');
+
+    FinanceStorageService.clearCloudSessionMemory();
+    localStorage.setItem('capitalflow_live_clean_v1', 'true');
+    localStorage.setItem('capitalflow_fast_boot_snapshot_v1', savedFastBoot!);
+    localStorage.setItem('capitalflow_active_cloud_uid', savedCloudUid!);
+    localStorage.setItem('capitalflow_ui_session_v1', savedUiState!);
+
+    // 4. First synchronous render frame on tab reload immediately restores real data (NOT Default Starter Sample Data!)
+    const restoredUi = FinanceStorageService.loadUiSessionState();
+    assert.equal(restoredUi?.activeTab, 'budget');
+    assert.equal(restoredUi?.frequency, 'bi-weekly');
+
+    const restoredBudget = FinanceStorageService.loadLocalBudget(2026);
+    assert.equal(isDefaultStarterBudget(restoredBudget), false);
+    assert.equal(restoredBudget.entries.length, 1);
+    assert.equal(restoredBudget.entries[0].item, 'Real November Salary');
+    assert.equal(restoredBudget.entries[0].amount, 65000);
+  });
+
+  it('prevents Default Starter Sample Data injection when an active cloud session hint exists and rounds centavos cleanly via roundCurrency', () => {
+    memoryStorage.clear();
+    FinanceStorageService.clearCloudSessionMemory();
+
+    // Simulate a browser tab with an active cloud session hint before snapshot hydration
+    localStorage.setItem('capitalflow_live_clean_v1', 'true');
+    localStorage.setItem('capitalflow_active_cloud_uid', 'uid-cloud-active');
+    assert.equal(FinanceStorageService.hasActiveCloudSessionHint(), true);
+
+    const fallbackBudget = FinanceStorageService.loadLocalBudget(2026);
+    const fallbackLedger = FinanceStorageService.loadLocalSavingsLedger();
+
+    // Must NOT inject starter sample entries or mark as default starter data when cloud session hint is present
+    assert.equal(fallbackBudget.entries.length, 0);
+    assert.equal(fallbackBudget.itemTemplates?.length, 0);
+    assert.equal(fallbackBudget.isDefaultStarterData, false);
+    assert.equal(isDefaultStarterBudget(fallbackBudget), false);
+    assert.equal(fallbackLedger.isDefaultStarterData, false);
+
+    // Verify roundCurrency eliminates IEEE 754 floating-point drift on centavos math
+    assert.equal(roundCurrency(34500 - 34337.31), 162.69);
+    assert.equal(roundCurrency(0.1 + 0.2), 0.3);
+    assert.equal(roundCurrency(412047.72 - 34337.31), 377710.41);
+  });
+});
 

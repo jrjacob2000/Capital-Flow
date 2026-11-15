@@ -59,6 +59,23 @@ const LOCAL_STORAGE_KEY_USER_TEMPLATE = 'capitalflow_user_template_profile';
 const LIVE_CLEAN_STORAGE_KEY = 'capitalflow_live_clean_v1';
 const OCT_2026_MIGRATION_KEY = 'capitalflow_oct_2026_migrated_v3';
 const OCT_2026_TEMPLATE_MIGRATION_KEY = 'capitalflow_oct_2026_template_migrated_v3';
+const FAST_BOOT_SNAPSHOT_KEY = 'capitalflow_fast_boot_snapshot_v1';
+const CLOUD_SESSION_HINT_KEY = 'capitalflow_active_cloud_uid';
+const UI_SESSION_STATE_KEY = 'capitalflow_ui_session_v1';
+
+export interface UiSessionState {
+  currentYear: number;
+  frequency: EntryFrequency;
+  activeTab: 'dashboard' | 'budget' | 'savings' | 'loans' | 'drive' | 'help';
+}
+
+interface FastBootSnapshot {
+  budgetsByYear: Record<string, YearBudgetData>;
+  ledger: SavingsLedgerData | null;
+  templateProfile: UserTemplateProfile | null;
+  knownYears: number[];
+  updatedAt: string;
+}
 
 export interface UserTemplateProfile {
   version?: string;
@@ -85,10 +102,174 @@ export class FinanceStorageService {
   private static cloudMemoryTemplateProfile: UserTemplateProfile | null = null;
   private static cloudMemoryKnownYears: number[] = [2026];
 
-  static setCloudSessionActive(active: boolean): void {
+  static setCloudSessionActive(active: boolean, uid?: string | null): void {
     FinanceStorageService.cloudMemoryActive = active;
     if (active) {
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
+          if (uid) {
+            localStorage.setItem(CLOUD_SESSION_HINT_KEY, uid);
+          } else if (!localStorage.getItem(CLOUD_SESSION_HINT_KEY)) {
+            localStorage.setItem(CLOUD_SESSION_HINT_KEY, auth?.currentUser?.uid || 'active');
+          }
+        }
+      } catch {
+        // Ignore storage errors
+      }
+      FinanceStorageService.persistFastBootSnapshot();
       FinanceStorageService.clearRedundantLocalCache();
+    }
+  }
+
+  static hasActiveCloudSessionHint(): boolean {
+    if (FinanceStorageService.cloudMemoryActive || Boolean(auth?.currentUser)) {
+      return true;
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        if (localStorage.getItem(CLOUD_SESSION_HINT_KEY)) {
+          return true;
+        }
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('firebase:authUser:')) {
+            return true;
+          }
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    return false;
+  }
+
+  static saveUiSessionState(state: UiSessionState): void {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(UI_SESSION_STATE_KEY, JSON.stringify(state));
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  static loadUiSessionState(): UiSessionState | null {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(UI_SESSION_STATE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Partial<UiSessionState>;
+          const validTabs = new Set(['dashboard', 'budget', 'savings', 'loans', 'drive', 'help']);
+          return {
+            currentYear:
+              typeof parsed.currentYear === 'number' && parsed.currentYear >= 2000 && parsed.currentYear <= 2100
+                ? parsed.currentYear
+                : 2026,
+            frequency: parsed.frequency === 'bi-weekly' ? 'bi-weekly' : 'monthly',
+            activeTab:
+              parsed.activeTab && validTabs.has(parsed.activeTab)
+                ? parsed.activeTab
+                : 'dashboard',
+          };
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    return null;
+  }
+
+  static persistFastBootSnapshot(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const budgetsByYear: Record<string, YearBudgetData> = {};
+      let hasNonStarterData = false;
+
+      FinanceStorageService.cloudMemoryBudgets.forEach((b, yr) => {
+        if (b && b.isDefaultStarterData === false) {
+          budgetsByYear[String(yr)] = b;
+          hasNonStarterData = true;
+        }
+      });
+
+      const nonStarterLedger =
+        FinanceStorageService.cloudMemoryLedger &&
+        FinanceStorageService.cloudMemoryLedger.isDefaultStarterData === false
+          ? FinanceStorageService.cloudMemoryLedger
+          : null;
+      if (nonStarterLedger) {
+        hasNonStarterData = true;
+      }
+
+      const nonStarterProfile =
+        FinanceStorageService.cloudMemoryTemplateProfile &&
+        FinanceStorageService.cloudMemoryTemplateProfile.isDefaultStarterData === false
+          ? FinanceStorageService.cloudMemoryTemplateProfile
+          : null;
+      if (nonStarterProfile) {
+        hasNonStarterData = true;
+      }
+
+      if (!hasNonStarterData) {
+        return;
+      }
+
+      const snapshot: FastBootSnapshot = {
+        budgetsByYear,
+        ledger: nonStarterLedger,
+        templateProfile: nonStarterProfile,
+        knownYears: [...FinanceStorageService.cloudMemoryKnownYears],
+        updatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
+      localStorage.setItem(FAST_BOOT_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Ignore storage quota or serialization errors
+    }
+  }
+
+  static restoreFromFastBootSnapshot(): boolean {
+    try {
+      if (typeof localStorage === 'undefined') return false;
+      const raw = localStorage.getItem(FAST_BOOT_SNAPSHOT_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as FastBootSnapshot;
+      if (!parsed || typeof parsed !== 'object') return false;
+
+      let restoredAny = false;
+      if (parsed.budgetsByYear && typeof parsed.budgetsByYear === 'object') {
+        Object.entries(parsed.budgetsByYear).forEach(([yrStr, b]) => {
+          const yr = Number(yrStr);
+          if (Number.isInteger(yr) && b && !FinanceStorageService.cloudMemoryBudgets.has(yr)) {
+            FinanceStorageService.cloudMemoryBudgets.set(yr, {
+              ...b,
+              isDefaultStarterData: false,
+            });
+            restoredAny = true;
+          }
+        });
+      }
+      if (parsed.ledger && !FinanceStorageService.cloudMemoryLedger) {
+        FinanceStorageService.cloudMemoryLedger = {
+          ...parsed.ledger,
+          isDefaultStarterData: false,
+        };
+        restoredAny = true;
+      }
+      if (parsed.templateProfile && !FinanceStorageService.cloudMemoryTemplateProfile) {
+        FinanceStorageService.cloudMemoryTemplateProfile = {
+          ...parsed.templateProfile,
+          isDefaultStarterData: false,
+        };
+        restoredAny = true;
+      }
+      if (Array.isArray(parsed.knownYears) && parsed.knownYears.length > 0) {
+        FinanceStorageService.cloudMemoryKnownYears = [...parsed.knownYears];
+      }
+      return restoredAny;
+    } catch {
+      return false;
     }
   }
 
@@ -98,6 +279,14 @@ export class FinanceStorageService {
     FinanceStorageService.cloudMemoryLedger = null;
     FinanceStorageService.cloudMemoryTemplateProfile = null;
     FinanceStorageService.cloudMemoryKnownYears = [2026];
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(FAST_BOOT_SNAPSHOT_KEY);
+        localStorage.removeItem(CLOUD_SESSION_HINT_KEY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
   }
 
   static isCloudSessionActive(): boolean {
@@ -141,6 +330,9 @@ export class FinanceStorageService {
       }
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY_USER_TEMPLATE);
       if (!raw) {
+        if (!FinanceStorageService.cloudMemoryTemplateProfile) {
+          FinanceStorageService.restoreFromFastBootSnapshot();
+        }
         if (FinanceStorageService.cloudMemoryTemplateProfile) {
           return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryTemplateProfile)) as UserTemplateProfile;
         }
@@ -298,6 +490,9 @@ export class FinanceStorageService {
     };
 
     FinanceStorageService.cloudMemoryTemplateProfile = JSON.parse(JSON.stringify(fullData));
+    if (!isStarterTpl) {
+      FinanceStorageService.persistFastBootSnapshot();
+    }
 
     if (!FinanceStorageService.cloudMemoryActive) {
       try {
@@ -653,6 +848,16 @@ export class FinanceStorageService {
    */
   static checkAndPerformAutoClean(): void {
     try {
+      if (
+        !FinanceStorageService.cloudMemoryActive &&
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem(LIVE_CLEAN_STORAGE_KEY) !== 'true'
+      ) {
+        FinanceStorageService.cloudMemoryBudgets.clear();
+        FinanceStorageService.cloudMemoryLedger = null;
+        FinanceStorageService.cloudMemoryTemplateProfile = null;
+        FinanceStorageService.cloudMemoryKnownYears = [2026];
+      }
       if (typeof window !== 'undefined' && localStorage.getItem(LIVE_CLEAN_STORAGE_KEY) !== 'true') {
         const keysToRemove: string[] = [];
         for (let i = 0; i < localStorage.length; i++) {
@@ -870,12 +1075,30 @@ export class FinanceStorageService {
       }
     }
 
+    if (!FinanceStorageService.cloudMemoryBudgets.has(year)) {
+      FinanceStorageService.restoreFromFastBootSnapshot();
+    }
+
     if (FinanceStorageService.cloudMemoryBudgets.has(year)) {
       return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryBudgets.get(year)!)) as YearBudgetData;
     }
 
     const savedProfile = FinanceStorageService.loadUserTemplateProfile();
-    const cleanBudget = createEmptyYearBudget(year, savedProfile || undefined);
+    const effectiveProfile =
+      savedProfile ||
+      (FinanceStorageService.hasActiveCloudSessionHint()
+        ? {
+            customCategories: {
+              expense: [...EXPENSE_CATEGORIES],
+              income: [...INCOME_CATEGORIES],
+              saving: [...SAVING_CATEGORIES],
+            },
+            itemTemplates: [],
+            isPersonalizedTemplate: false,
+            isDefaultStarterData: false,
+          }
+        : undefined);
+    const cleanBudget = createEmptyYearBudget(year, effectiveProfile);
     if (year === 2026) {
       localStorage.setItem(OCT_2026_MIGRATION_KEY, 'true');
       localStorage.setItem(OCT_2026_TEMPLATE_MIGRATION_KEY, 'true');
@@ -923,6 +1146,9 @@ export class FinanceStorageService {
 
     FinanceStorageService.cloudMemoryBudgets.set(budget.year, JSON.parse(JSON.stringify(budget)));
     FinanceStorageService.registerKnownYear(budget.year, { skipFirestoreWrite: true });
+    if (!isStarter) {
+      FinanceStorageService.persistFastBootSnapshot();
+    }
 
     if (!FinanceStorageService.cloudMemoryActive) {
       localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
@@ -1048,6 +1274,10 @@ export class FinanceStorageService {
       }
     }
 
+    if (!FinanceStorageService.cloudMemoryLedger) {
+      FinanceStorageService.restoreFromFastBootSnapshot();
+    }
+
     if (FinanceStorageService.cloudMemoryLedger) {
       return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryLedger)) as SavingsLedgerData;
     }
@@ -1055,8 +1285,9 @@ export class FinanceStorageService {
     const budget2026 = FinanceStorageService.loadLocalBudget(2026);
     const initialLedger = generateInitialSavingsLedger(budget2026);
     initialLedger.loans = [];
+    const hasCloudHint = FinanceStorageService.hasActiveCloudSessionHint();
     FinanceStorageService.saveLocalSavingsLedger(initialLedger, {
-      isDefaultStarter: true,
+      isDefaultStarter: !hasCloudHint,
       skipFirestoreWrite: true,
     });
     return initialLedger;
@@ -1104,17 +1335,20 @@ export class FinanceStorageService {
     const sorted = [...ledger.transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     sorted.forEach((tx) => {
       if (tx.source === 'withdrawal') {
-        running = Math.max(0, running - tx.amount);
+        running = Math.max(0, Math.round((running - tx.amount) * 100) / 100);
       } else if (tx.source === 'transfer' || tx.source === 'reallocation') {
         // Transfers between savings accounts or virtual category reallocations do not change total overall capital
       } else {
-        running += tx.amount;
+        running = Math.round((running + tx.amount) * 100) / 100;
       }
       tx.runningTotalCapital = running;
     });
     ledger.transactions = sorted;
 
     FinanceStorageService.cloudMemoryLedger = JSON.parse(JSON.stringify(ledger));
+    if (!isStarter) {
+      FinanceStorageService.persistFastBootSnapshot();
+    }
 
     if (!FinanceStorageService.cloudMemoryActive) {
       localStorage.setItem(LIVE_CLEAN_STORAGE_KEY, 'true');
@@ -1227,15 +1461,15 @@ export class FinanceStorageService {
           const linkedTxIdx = ledger.transactions.findIndex((t) => t.id === remPay.ledgerTransactionId);
           if (linkedTxIdx >= 0) {
             const removedTx = ledger.transactions.splice(linkedTxIdx, 1)[0];
-            const acc = ledger.accounts.find((a) => a.id === removedTx.accountId);
-            if (acc) {
-              acc.balance = Math.max(0, acc.balance - removedTx.amount);
-            }
+            FinanceStorageService.applyTxBalanceEffect(ledger.accounts, removedTx, true);
             txModified = true;
           } else if (remPay.accountId) {
             const acc = ledger.accounts.find((a) => a.id === remPay.accountId);
             if (acc) {
-              acc.balance = Math.max(0, acc.balance - remPay.amount);
+              acc.balance =
+                existingLoan.direction === 'borrowed'
+                  ? Math.round((acc.balance + remPay.amount) * 100) / 100
+                  : Math.max(0, Math.round((acc.balance - remPay.amount) * 100) / 100);
             }
           }
         }
@@ -1263,23 +1497,22 @@ export class FinanceStorageService {
         source: 'budget_sync',
         budgetEntryId: entry.id,
         accountId: prevPayment?.accountId,
+        accountName: prevPayment?.accountName,
+        fundCategory: prevPayment?.fundCategory,
         ledgerTransactionId: prevPayment?.ledgerTransactionId,
         note: `${entry.period} ${entry.year} Budget (${entry.item || entry.description || activeLoan.name})`,
       };
 
-      // If this payment also had a linked savings ledger deposit transaction, keep its amount and date synchronized
+      // If this payment also had a linked savings ledger deposit/withdrawal transaction, keep its amount and date synchronized
       if (prevPayment?.ledgerTransactionId) {
         const linkedTx = ledger.transactions.find((t) => t.id === prevPayment.ledgerTransactionId);
         if (linkedTx) {
-          const delta = effectiveAmount - linkedTx.amount;
+          FinanceStorageService.applyTxBalanceEffect(ledger.accounts, linkedTx, true);
           linkedTx.amount = effectiveAmount;
           linkedTx.date = entry.date;
           linkedTx.year = entry.year;
           linkedTx.period = entry.period;
-          const acc = ledger.accounts.find((a) => a.id === linkedTx.accountId);
-          if (acc && delta !== 0) {
-            acc.balance = Math.max(0, acc.balance + delta);
-          }
+          FinanceStorageService.applyTxBalanceEffect(ledger.accounts, linkedTx, false);
           txModified = true;
         }
       }
@@ -1424,18 +1657,18 @@ export class FinanceStorageService {
     const sign = reverse ? -1 : 1;
     if (tx.source === 'withdrawal') {
       const acc = accounts.find((a) => a.id === tx.accountId);
-      if (acc) acc.balance = Math.max(0, acc.balance - sign * tx.amount);
+      if (acc) acc.balance = Math.max(0, Math.round((acc.balance - sign * tx.amount) * 100) / 100);
     } else if (tx.source === 'transfer') {
       const fromAcc = accounts.find((a) => a.id === tx.accountId);
       const toAcc = accounts.find((a) => a.id === tx.toAccountId);
-      if (fromAcc) fromAcc.balance = Math.max(0, fromAcc.balance - sign * tx.amount);
-      if (toAcc) toAcc.balance = Math.max(0, toAcc.balance + sign * tx.amount);
+      if (fromAcc) fromAcc.balance = Math.max(0, Math.round((fromAcc.balance - sign * tx.amount) * 100) / 100);
+      if (toAcc) toAcc.balance = Math.max(0, Math.round((toAcc.balance + sign * tx.amount) * 100) / 100);
     } else if (tx.source === 'reallocation') {
       // Category reallocation only shifts virtual envelope allocations; physical account balances remain unchanged
       return;
     } else {
       const acc = accounts.find((a) => a.id === tx.accountId);
-      if (acc) acc.balance = Math.max(0, acc.balance + sign * tx.amount);
+      if (acc) acc.balance = Math.max(0, Math.round((acc.balance + sign * tx.amount) * 100) / 100);
     }
   }
 
@@ -1478,12 +1711,14 @@ export class FinanceStorageService {
     currentLedger.transactions[txIndex] = newTx;
     FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, newTx, false);
 
-    // If this transaction is linked to a loan payment (e.g. receivable collection deposit), keep accountId/amount/date in sync
+    // If this transaction is linked to a loan payment (e.g. receivable collection deposit or borrowed payment deduction), keep accountId/amount/date/category in sync
     if (Array.isArray(currentLedger.loans)) {
       currentLedger.loans.forEach((ln) => {
         (ln.payments || []).forEach((p) => {
           if (p.ledgerTransactionId === txId) {
             p.accountId = newTx.accountId;
+            p.accountName = newTx.accountName;
+            p.fundCategory = newTx.category;
             p.amount = newTx.amount;
             p.date = newTx.date;
           }
@@ -1556,6 +1791,8 @@ export class FinanceStorageService {
           if (p.ledgerTransactionId === txId) {
             delete p.ledgerTransactionId;
             delete p.accountId;
+            delete p.accountName;
+            delete p.fundCategory;
           }
         });
       });
@@ -2701,6 +2938,8 @@ export class FinanceStorageService {
       note: string;
       recordInBudget?: boolean;
       depositToAccountId?: string;
+      deductFromAccountId?: string;
+      deductFromFundCategory?: string;
     },
     currentBudget: YearBudgetData,
     frequency: EntryFrequency
@@ -2845,11 +3084,43 @@ export class FinanceStorageService {
     }
 
     let linkedLedgerTxId: string | undefined;
-    if (paymentData.depositToAccountId) {
+    let resolvedAccountId: string | undefined;
+    let resolvedAccountName: string | undefined;
+    let resolvedFundCategory: string | undefined;
+
+    if (loan.direction === 'borrowed' && paymentData.deductFromAccountId) {
+      const targetAcc = currentLedger.accounts.find((a) => a.id === paymentData.deductFromAccountId);
+      if (targetAcc) {
+        linkedLedgerTxId = `tx-loan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        resolvedAccountId = targetAcc.id;
+        resolvedAccountName = targetAcc.name;
+        resolvedFundCategory =
+          paymentData.deductFromFundCategory?.trim() || 'General Reserves / Starting Capital';
+        targetAcc.balance = Math.max(
+          0,
+          Math.round((targetAcc.balance - paymentData.amount) * 100) / 100
+        );
+        currentLedger.transactions.push({
+          id: linkedLedgerTxId,
+          date: paymentData.date,
+          year: parsedYear,
+          period: resolvedPeriod,
+          amount: paymentData.amount,
+          accountId: targetAcc.id,
+          accountName: targetAcc.name,
+          source: 'withdrawal',
+          category: resolvedFundCategory,
+          note: `Loan Payment: ${loan.name}${paymentData.note ? ` (${paymentData.note})` : ''}`,
+        });
+      }
+    } else if (paymentData.depositToAccountId) {
       const targetAcc = currentLedger.accounts.find((a) => a.id === paymentData.depositToAccountId);
       if (targetAcc) {
         linkedLedgerTxId = `tx-loan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        targetAcc.balance += paymentData.amount;
+        resolvedAccountId = targetAcc.id;
+        resolvedAccountName = targetAcc.name;
+        resolvedFundCategory = 'General Reserves / Starting Capital';
+        targetAcc.balance = Math.round((targetAcc.balance + paymentData.amount) * 100) / 100;
         currentLedger.transactions.push({
           id: linkedLedgerTxId,
           date: paymentData.date,
@@ -2859,7 +3130,7 @@ export class FinanceStorageService {
           accountId: targetAcc.id,
           accountName: targetAcc.name,
           source: 'manual_deposit',
-          category: 'General Reserves / Starting Capital',
+          category: resolvedFundCategory,
           note: `Loan Repayment Collected: ${loan.name}`,
         });
       }
@@ -2874,7 +3145,9 @@ export class FinanceStorageService {
       amount: paymentData.amount,
       source: linkedBudgetEntryId ? 'budget_sync' : 'manual_payment',
       budgetEntryId: linkedBudgetEntryId,
-      accountId: paymentData.depositToAccountId,
+      accountId: resolvedAccountId,
+      accountName: resolvedAccountName,
+      fundCategory: resolvedFundCategory,
       ledgerTransactionId: linkedLedgerTxId,
       note: paymentData.note,
     };
@@ -2901,7 +3174,7 @@ export class FinanceStorageService {
   }
 
   /**
-   * Deletes a loan payment, reversing any linked Savings Account deposit and removing any linked Budget Sheet entry
+   * Deletes a loan payment, reversing any linked Savings Account deposit/withdrawal and removing any linked Budget Sheet entry
    */
   static deleteLoanPayment(
     loanId: string,
@@ -2934,13 +3207,19 @@ export class FinanceStorageService {
       } else if (targetPay.accountId) {
         const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
         if (acc) {
-          acc.balance = Math.max(0, acc.balance - targetPay.amount);
+          acc.balance =
+            loan.direction === 'borrowed'
+              ? Math.round((acc.balance + targetPay.amount) * 100) / 100
+              : Math.max(0, Math.round((acc.balance - targetPay.amount) * 100) / 100);
         }
       }
     } else if (targetPay.accountId) {
       const acc = currentLedger.accounts.find((a) => a.id === targetPay.accountId);
       if (acc) {
-        acc.balance = Math.max(0, acc.balance - targetPay.amount);
+        acc.balance =
+          loan.direction === 'borrowed'
+            ? Math.round((acc.balance + targetPay.amount) * 100) / 100
+            : Math.max(0, Math.round((acc.balance - targetPay.amount) * 100) / 100);
       }
     }
 

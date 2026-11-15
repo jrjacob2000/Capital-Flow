@@ -80,20 +80,25 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [currentYear, setCurrentYear] = useState<number>(2026);
-  const [availableYears, setAvailableYears] = useState<number[]>([2026, 2025]);
-  const [frequency, setFrequency] = useState<EntryFrequency>('monthly');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'budget' | 'savings' | 'loans' | 'drive' | 'help'>('dashboard');
+  const [initialUiSession] = useState(() => FinanceStorageService.loadUiSessionState());
+  const [currentYear, setCurrentYear] = useState<number>(() => initialUiSession?.currentYear || 2026);
+  const [availableYears, setAvailableYears] = useState<number[]>(() => FinanceStorageService.getKnownYears());
+  const [frequency, setFrequency] = useState<EntryFrequency>(() => initialUiSession?.frequency || 'monthly');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'budget' | 'savings' | 'loans' | 'drive' | 'help'>(
+    () => initialUiSession?.activeTab || 'dashboard'
+  );
 
   // Core Financial Data
   const [budget, setBudget] = useState<YearBudgetData>(() =>
-    FinanceStorageService.loadLocalBudget(2026)
+    FinanceStorageService.loadLocalBudget(initialUiSession?.currentYear || 2026)
   );
   const [ledger, setLedger] = useState<SavingsLedgerData>(() =>
     FinanceStorageService.loadLocalSavingsLedger()
   );
   const [templateData, setTemplateData] = useState<BudgetTemplateData>(() =>
-    FinanceStorageService.loadLocalTemplateData(FinanceStorageService.loadLocalBudget(2026))
+    FinanceStorageService.loadLocalTemplateData(
+      FinanceStorageService.loadLocalBudget(initialUiSession?.currentYear || 2026)
+    )
   );
 
   // Firebase Cloud DB & Optional Google Drive State
@@ -117,8 +122,25 @@ export default function App() {
     isDriveBackupReady: false,
   });
   const [driveFiles, setDriveFiles] = useState<DriveFileInfo[]>([]);
+  const [isCloudHydrationPending, setIsCloudHydrationPending] = useState<boolean>(() =>
+    FinanceStorageService.hasActiveCloudSessionHint()
+  );
   const isInitialCloudHydrationDoneRef = useRef<boolean>(false);
   const isHydratingRef = useRef<boolean>(false);
+  const hydratedUidRef = useRef<string | null>(null);
+  const wasSignedInRef = useRef<boolean>(false);
+  const currentYearRef = useRef<number>(currentYear);
+  const frequencyRef = useRef<EntryFrequency>(frequency);
+
+  useEffect(() => {
+    currentYearRef.current = currentYear;
+    frequencyRef.current = frequency;
+    FinanceStorageService.saveUiSessionState({
+      currentYear,
+      frequency,
+      activeTab,
+    });
+  }, [currentYear, frequency, activeTab]);
 
   // Conflict / Overwrite Prevention Modal State
   const [conflictModalState, setConflictModalState] = useState<{
@@ -222,6 +244,8 @@ export default function App() {
         return;
       }
       isHydratingRef.current = true;
+      const activeYearNow = currentYearRef.current;
+      const activeFreqNow = frequencyRef.current;
       try {
         setDriveStatus((prev) => ({
           ...prev,
@@ -233,17 +257,17 @@ export default function App() {
         // High-performance parallel retrieval: fetch workspace and current-year budget concurrently
         const [remoteWorkspace, initialBudget] = await Promise.all([
           FirestoreSyncService.fetchWorkspace(user.uid),
-          FirestoreSyncService.fetchAnnualBudget(user.uid, currentYear),
+          FirestoreSyncService.fetchAnnualBudget(user.uid, activeYearNow),
         ]);
-        let localBudgetNow = FinanceStorageService.loadLocalBudget(currentYear);
+        let localBudgetNow = FinanceStorageService.loadLocalBudget(activeYearNow);
         let localLedgerNow = FinanceStorageService.loadLocalSavingsLedger();
         let localTemplateNow = FinanceStorageService.loadLocalTemplateData(localBudgetNow);
         let restoredFromFirebase = false;
 
         if (remoteWorkspace) {
-          const targetYr = remoteWorkspace.activeYear || currentYear;
+          const targetYr = remoteWorkspace.activeYear || activeYearNow;
           const remoteBudget =
-            targetYr === currentYear
+            targetYr === activeYearNow
               ? initialBudget
               : await FirestoreSyncService.fetchAnnualBudget(user.uid, targetYr);
 
@@ -340,9 +364,9 @@ export default function App() {
               const { files } = await FinanceStorageService.organizeFilesIntoFolder(optionalDriveToken);
               setDriveFiles(files);
 
-              const existingBudgetFile = files.find((f) => f.name === getBudgetFileName(currentYear));
+              const existingBudgetFile = files.find((f) => f.name === getBudgetFileName(activeYearNow));
               if (existingBudgetFile && isDefaultStarterBudget(localBudgetNow)) {
-                const driveBudgetRes = await FinanceStorageService.fetchBudgetFromDrive(optionalDriveToken, currentYear);
+                const driveBudgetRes = await FinanceStorageService.fetchBudgetFromDrive(optionalDriveToken, activeYearNow);
                 if (driveBudgetRes && !isDefaultStarterBudget(driveBudgetRes.budget)) {
                   const syncedDriveBudget: YearBudgetData = {
                     ...driveBudgetRes.budget,
@@ -402,7 +426,7 @@ export default function App() {
           await FirestoreSyncService.syncCompleteState(user.uid, {
             activeYear: localBudgetNow.year,
             knownYears: knownYrs,
-            frequency,
+            frequency: activeFreqNow,
             budget: localBudgetNow,
             templateData: localTemplateNow,
             ledgerData: localLedgerNow,
@@ -410,8 +434,11 @@ export default function App() {
         }
 
         // Activate Cloud Session & purge redundant localStorage cache now that Firebase Firestore + native IndexedDB cache are active
-        FinanceStorageService.setCloudSessionActive(true);
+        FinanceStorageService.setCloudSessionActive(true, user.uid);
+        hydratedUidRef.current = user.uid;
+        wasSignedInRef.current = true;
         isInitialCloudHydrationDoneRef.current = true;
+        setIsCloudHydrationPending(false);
         const nowStr = new Date().toLocaleTimeString();
         setDriveStatus((prev) => ({
           ...prev,
@@ -426,8 +453,11 @@ export default function App() {
         }
       } catch (err) {
         console.warn('Firebase Cloud DB initial sync note:', sanitizeErrorForLog(err));
-        FinanceStorageService.setCloudSessionActive(true);
+        FinanceStorageService.setCloudSessionActive(true, user.uid);
+        hydratedUidRef.current = user.uid;
+        wasSignedInRef.current = true;
         isInitialCloudHydrationDoneRef.current = true;
+        setIsCloudHydrationPending(false);
         setDriveStatus((prev) => ({
           ...prev,
           isFirebaseSyncing: false,
@@ -437,7 +467,7 @@ export default function App() {
         isHydratingRef.current = false;
       }
     },
-    [currentYear, frequency]
+    []
   );
 
   // Track direct Firestore CRUD writes in real time so header/status indicators reflect instant saves
@@ -473,8 +503,12 @@ export default function App() {
           error: null,
         }));
 
-        // 1. Hydrate/sync primary Firebase Firestore Database
-        await hydrateOrSyncFirebaseWorkspace(user, token);
+        // 1. Hydrate/sync primary Firebase Firestore Database (skip redundant full re-hydration on token refresh / tab focus)
+        if (!isInitialCloudHydrationDoneRef.current || hydratedUidRef.current !== user.uid) {
+          await hydrateOrSyncFirebaseWorkspace(user, token);
+        } else {
+          setIsCloudHydrationPending(false);
+        }
 
         // 2. If a valid optional Google Drive token is present, refresh the optional Drive backup index in background
         if (token && !isDriveTokenExpired()) {
@@ -494,10 +528,15 @@ export default function App() {
         }
       },
       () => {
-        FirestoreSyncService.clearMemoryCache();
-        FinanceStorageService.clearCloudSessionMemory();
+        if (wasSignedInRef.current) {
+          FirestoreSyncService.clearMemoryCache();
+          FinanceStorageService.clearCloudSessionMemory();
+        }
+        wasSignedInRef.current = false;
+        hydratedUidRef.current = null;
         isInitialCloudHydrationDoneRef.current = false;
         isHydratingRef.current = false;
+        setIsCloudHydrationPending(false);
         setDriveFiles([]);
         setDriveStatus((prev) => ({
           ...prev,
@@ -773,12 +812,15 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    wasSignedInRef.current = false;
+    hydratedUidRef.current = null;
+    isInitialCloudHydrationDoneRef.current = false;
+    isHydratingRef.current = false;
+    setIsCloudHydrationPending(false);
     FirestoreSyncService.clearMemoryCache();
     await logout();
     FinanceStorageService.clearCloudSessionMemory();
     FinanceStorageService.clearDriveFolderCache();
-    isInitialCloudHydrationDoneRef.current = false;
-    isHydratingRef.current = false;
     setDriveFiles([]);
     const guestBudget = FinanceStorageService.loadLocalBudget(currentYear);
     setBudget(guestBudget);
@@ -1478,6 +1520,8 @@ export default function App() {
       note: string;
       recordInBudget?: boolean;
       depositToAccountId?: string;
+      deductFromAccountId?: string;
+      deductFromFundCategory?: string;
     }
   ) => {
     const latestBudget = FinanceStorageService.loadLocalBudget(budget.year);
@@ -1499,10 +1543,13 @@ export default function App() {
 
     setLedger({ ...updatedLedger });
     setHasUnsavedChanges(true);
+    const deductedAcc = paymentData.deductFromAccountId
+      ? updatedLedger.accounts.find((a) => a.id === paymentData.deductFromAccountId)
+      : undefined;
     showToast(
       `Recorded ₱${paymentData.amount.toLocaleString()} for "${loan.name}"${
-        linkedBudgetEntryId ? ` & logged in ${resolvedPeriod} Budget Sheet` : ''
-      }`
+        deductedAcc ? ` (deducted from ${deductedAcc.name})` : ''
+      }${linkedBudgetEntryId ? ` & logged in ${resolvedPeriod} Budget Sheet` : ''}`
     );
   };
 
@@ -2599,7 +2646,11 @@ export default function App() {
         )}
 
         {/* Default Starter Sample Data Indicator & Protection Banner */}
-        {isDefaultStarterBudget(budget) && (
+        {isDefaultStarterBudget(budget) &&
+          !isCloudHydrationPending &&
+          !driveStatus.isSignedIn &&
+          !driveStatus.isFirebaseSyncing &&
+          !driveStatus.isSyncing && (
           <div className="mb-4 rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-amber-50/90 dark:bg-amber-950/40 px-3.5 py-2.5 sm:px-4 sm:py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-xs">
             <div className="flex items-start sm:items-center gap-2.5 min-w-0">
               <div className="p-1.5 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0">

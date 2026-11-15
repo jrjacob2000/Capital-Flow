@@ -1413,95 +1413,212 @@ export function findClosestSinkingFundMatch(
   return null;
 }
 
-/**
- * Maps any Sinking Fund name or legacy saving category into one of the clean Fund Category Groups.
- */
-export function normalizeSavingCategoryGroup(fundName?: string, rawCategory?: string): string {
-  const fLower = (fundName || '').trim().toLowerCase();
-  const cLower = (rawCategory || '').trim().toLowerCase();
-
-  // If rawCategory is already one of the canonical SAVING_CATEGORIES, check if fundName strongly belongs elsewhere first
-  const checkText = `${fLower} ${cLower}`;
+function matchSavingCategoryByText(textLower: string): string | null {
+  if (!textLower) return null;
 
   if (
-    fLower === 'general reserves / starting capital' ||
-    cLower === 'unallocated cash pool'
+    textLower === 'general reserves / starting capital' ||
+    textLower === 'unallocated cash pool'
   ) {
     return 'Unallocated Cash Pool';
   }
 
+  // Exact match in DEFAULT_SINKING_FUNDS_BY_CATEGORY (e.g. 'General Savings' -> 'Short-Term & General Savings')
+  for (const [catGroup, funds] of Object.entries(DEFAULT_SINKING_FUNDS_BY_CATEGORY)) {
+    if (funds.some((f) => f.toLowerCase() === textLower)) {
+      return catGroup;
+    }
+  }
+
   if (
-    checkText.includes('emergency') ||
-    checkText.includes('safety') ||
-    checkText.includes('medical') ||
-    checkText.includes('health buffer')
+    textLower.includes('emergency') ||
+    textLower.includes('safety') ||
+    textLower.includes('medical') ||
+    textLower.includes('health buffer')
   ) {
     return 'Emergency & Safety Net';
   }
 
   if (
-    checkText.includes('house') ||
-    checkText.includes('home') ||
-    checkText.includes('property') ||
-    checkText.includes('appliance') ||
-    checkText.includes('renovation')
+    textLower.includes('house') ||
+    textLower.includes('home') ||
+    textLower.includes('property') ||
+    textLower.includes('appliance') ||
+    textLower.includes('renovation')
   ) {
     return 'Home & Property Sinking Funds';
   }
 
   if (
-    checkText.includes('car ') ||
-    fLower === 'car' ||
-    checkText.includes('vehicle') ||
-    checkText.includes('vios') ||
-    checkText.includes('motorcycle') ||
-    checkText.includes('registration') ||
-    checkText.includes('auto ')
+    textLower.includes('car ') ||
+    textLower === 'car' ||
+    textLower.includes('vehicle') ||
+    textLower.includes('vios') ||
+    textLower.includes('motorcycle') ||
+    textLower.includes('registration') ||
+    textLower.includes('auto ')
   ) {
     return 'Vehicle & Maintenance Sinking Funds';
   }
 
   if (
-    checkText.includes('travel') ||
-    checkText.includes('vacation') ||
-    checkText.includes('trip') ||
-    checkText.includes('education') ||
-    checkText.includes('tuition') ||
-    checkText.includes('kids') ||
-    checkText.includes('school') ||
-    checkText.includes('family') ||
-    checkText.includes('holiday') ||
-    checkText.includes('gift')
+    textLower.includes('travel') ||
+    textLower.includes('vacation') ||
+    textLower.includes('trip') ||
+    textLower.includes('education') ||
+    textLower.includes('tuition') ||
+    textLower.includes('kids') ||
+    textLower.includes('school') ||
+    textLower.includes('family') ||
+    textLower.includes('holiday') ||
+    textLower.includes('gift')
   ) {
     return 'Family, Travel & Education Funds';
   }
 
   if (
-    checkText.includes('mp2') ||
-    checkText.includes('pag-ibig') ||
-    checkText.includes('pagibig') ||
-    checkText.includes('retirement') ||
-    checkText.includes('pera') ||
-    checkText.includes('stock') ||
-    checkText.includes('invest') ||
-    checkText.includes('uitf') ||
-    checkText.includes('mutual') ||
-    checkText.includes('crypto') ||
-    checkText.includes('time deposit') ||
-    checkText.includes('dividend') ||
-    checkText.includes('yield')
+    textLower.includes('mp2') ||
+    textLower.includes('pag-ibig') ||
+    textLower.includes('pagibig') ||
+    textLower.includes('retirement') ||
+    textLower.includes('pera') ||
+    textLower.includes('stock') ||
+    textLower.includes('invest') ||
+    textLower.includes('uitf') ||
+    textLower.includes('mutual') ||
+    textLower.includes('crypto') ||
+    textLower.includes('time deposit') ||
+    textLower.includes('dividend') ||
+    textLower.includes('yield')
   ) {
     return 'Long-Term & Wealth Investments';
   }
 
+  if (
+    textLower.includes('check account') ||
+    textLower.includes('checking') ||
+    textLower.includes('general saving') ||
+    textLower.includes('short-term') ||
+    textLower.includes('short term') ||
+    textLower.includes('personal buffer')
+  ) {
+    return 'Short-Term & General Savings';
+  }
+
   const exactCanonicalCat = SAVING_CATEGORIES.find(
-    (cat) => cat.toLowerCase() === cLower
+    (cat) => cat.toLowerCase() === textLower
   );
   if (exactCanonicalCat) {
     return exactCanonicalCat;
   }
 
+  return null;
+}
+
+/**
+ * Maps any Sinking Fund name or legacy saving category into one of the clean Fund Category Groups.
+ * Evaluates fundName on its own first so a stale rawCategory (such as 'Emergency & Safety Net'
+ * from a previous dropdown state) never hijacks a newly selected Goal Fund.
+ */
+export function normalizeSavingCategoryGroup(fundName?: string, rawCategory?: string): string {
+  const fLower = (fundName || '').trim().toLowerCase();
+  const cLower = (rawCategory || '').trim().toLowerCase();
+
+  // If fundName is a generic alias ('saving', 'savings', 'sinking fund') and rawCategory is a specific fund name
+  const isGenericAliasOnly =
+    fLower !== 'general savings' && GENERIC_SAVING_ALIASES.has(fLower);
+
+  if (fLower && !isGenericAliasOnly) {
+    const matchedByFund = matchSavingCategoryByText(fLower);
+    if (matchedByFund) {
+      return matchedByFund;
+    }
+  }
+
+  if (cLower) {
+    const matchedByCat = matchSavingCategoryByText(cLower);
+    if (matchedByCat) {
+      return matchedByCat;
+    }
+  }
+
   return 'Short-Term & General Savings';
+}
+
+/**
+ * Resolves the exact Saving Category Group for a Goal Fund name by checking built-in canonical
+ * funds and user-saved templates/entries first, then falling back cleanly.
+ */
+export function resolveFundCategoryWithTemplates(
+  fundName?: string,
+  templates?: Array<{ type: string; item: string; category: string }>,
+  entries?: Array<{ type: string; item?: string; description?: string; category: string }>,
+  customSavingCategories?: string[],
+  explicitFallbackCategory?: string
+): string {
+  const fClean = (fundName || '').trim();
+  const fLower = fClean.toLowerCase();
+
+  if (fLower === 'general reserves / starting capital') {
+    return 'Unallocated Cash Pool';
+  }
+
+  // Built-in default funds always map to their canonical category group
+  for (const [catGroup, funds] of Object.entries(DEFAULT_SINKING_FUNDS_BY_CATEGORY)) {
+    if (funds.some((f) => f.toLowerCase() === fLower)) {
+      return catGroup;
+    }
+  }
+
+  const validCustomCats = (customSavingCategories || []).map((c) => c.trim()).filter(Boolean);
+  const resolveValidGroup = (rawCat: string): string | null => {
+    const cTrim = (rawCat || '').trim();
+    const cLow = cTrim.toLowerCase();
+    if (!cLow || GENERIC_SAVING_ALIASES.has(cLow) || cLow === 'savings / envelope') {
+      return null;
+    }
+    const canon = SAVING_CATEGORIES.find((sc) => sc.toLowerCase() === cLow);
+    if (canon) return canon;
+    const custom = validCustomCats.find((cc) => cc.toLowerCase() === cLow);
+    if (custom) return custom;
+    return null;
+  };
+
+  if (fLower && templates && templates.length > 0) {
+    const matchedTpl = templates.find(
+      (t) => t.type === 'saving' && (t.item || '').trim().toLowerCase() === fLower
+    );
+    if (matchedTpl && matchedTpl.category) {
+      const validTplCat = resolveValidGroup(matchedTpl.category);
+      if (validTplCat) {
+        return validTplCat;
+      }
+    }
+  }
+
+  if (fLower && entries && entries.length > 0) {
+    const matchedEntry = entries.find(
+      (e) =>
+        e.type === 'saving' &&
+        (e.item || e.description || '').trim().toLowerCase() === fLower &&
+        Boolean(e.category)
+    );
+    if (matchedEntry && matchedEntry.category) {
+      const validEntryCat = resolveValidGroup(matchedEntry.category);
+      if (validEntryCat) {
+        return validEntryCat;
+      }
+    }
+  }
+
+  if (explicitFallbackCategory) {
+    const validFallback = resolveValidGroup(explicitFallbackCategory);
+    if (validFallback && !matchSavingCategoryByText(fLower)) {
+      return validFallback;
+    }
+  }
+
+  return normalizeSavingCategoryGroup(fClean, explicitFallbackCategory);
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   DEFAULT_SINKING_FUND_NAMES,
   resolveCanonicalSinkingFundName,
   normalizeSavingCategoryGroup,
+  resolveFundCategoryWithTemplates,
   stripDefaultStarterTemplates,
 } from '../services/sampleData';
 import {
@@ -166,11 +167,18 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       }
     });
 
-    (budget?.customCategories?.saving || []).forEach((c) => addFundName(c));
     basePool.forEach((d) => addFundName(d));
 
     return Array.from(names.values());
-  }, [templates, budget?.itemTemplates, budget?.entries, budget?.customCategories?.saving, ledger?.transactions]);
+  }, [templates, budget?.itemTemplates, budget?.entries, ledger?.transactions]);
+
+  const getTplFundCategory = (fundName: string) =>
+    resolveFundCategoryWithTemplates(
+      fundName,
+      templates,
+      budget?.entries,
+      budget?.customCategories?.saving
+    );
 
   // Category editing state
   const [newCatName, setNewCatName] = useState('');
@@ -1507,7 +1515,9 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       type="button"
                       onClick={() => {
                         setTplType('saving');
-                        setTplCategory(savingCats[0] || 'Savings');
+                        const defaultFund = existingSinkingFunds[0] || 'Emergency Fund';
+                        setTplItem(defaultFund);
+                        setTplCategory(getTplFundCategory(defaultFund));
                       }}
                       className={`px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer ${
                         tplType === 'saving'
@@ -1562,7 +1572,9 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                   type="button"
                   onClick={() => {
                     setTplType('saving');
-                    setTplCategory(savingCats[0] || 'Savings');
+                    const defaultFund = existingSinkingFunds[0] || 'Emergency Fund';
+                    setTplItem(defaultFund);
+                    setTplCategory(getTplFundCategory(defaultFund));
                   }}
                   className={`py-1 rounded-md font-semibold transition-all cursor-pointer text-center ${
                     tplType === 'saving'
@@ -1628,23 +1640,47 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         } else {
                           setTplItem(val);
                           if (val) {
-                            setTplCategory(normalizeSavingCategoryGroup(val, tplCategory));
+                            setTplCategory(getTplFundCategory(val));
                           }
                         }
                       }}
                       className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="">Select Goal Fund...</option>
-                      {Array.from(
-                        new Set([
-                          ...existingSinkingFunds,
-                          ...(tplItem.trim() ? [tplItem.trim()] : []),
-                        ])
-                      ).map((fund) => (
-                        <option key={fund} value={fund}>
-                          {fund}
-                        </option>
-                      ))}
+                      {(() => {
+                        const allFunds = Array.from(
+                          new Set([
+                            ...existingSinkingFunds,
+                            ...(tplItem.trim() ? [tplItem.trim()] : []),
+                          ])
+                        );
+                        const grouped = new Map<string, string[]>();
+                        allFunds.forEach((f) => {
+                          const grp = getTplFundCategory(f);
+                          if (!grouped.has(grp)) grouped.set(grp, []);
+                          grouped.get(grp)!.push(f);
+                        });
+                        const sortedGroups = Array.from(grouped.entries()).sort(([grpA], [grpB]) => {
+                          const activeCatLower = (tplCategory || '').trim().toLowerCase();
+                          if (grpA.toLowerCase() === activeCatLower) return -1;
+                          if (grpB.toLowerCase() === activeCatLower) return 1;
+                          const idxA = savingCats.findIndex((c) => c.toLowerCase() === grpA.toLowerCase());
+                          const idxB = savingCats.findIndex((c) => c.toLowerCase() === grpB.toLowerCase());
+                          if (idxA >= 0 && idxB >= 0) return idxA - idxB;
+                          if (idxA >= 0) return -1;
+                          if (idxB >= 0) return 1;
+                          return grpA.localeCompare(grpB);
+                        });
+                        return sortedGroups.map(([grpName, funds]) => (
+                          <optgroup key={grpName} label={grpName}>
+                            {funds.map((fund) => (
+                              <option key={fund} value={fund}>
+                                {fund}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ));
+                      })()}
                       <option value="__CREATE_NEW_TPL_FUND__">+ Custom Goal Fund...</option>
                     </select>
                   ) : (
@@ -1698,6 +1734,17 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                           setTplCategory('');
                         } else {
                           setTplCategory(val);
+                          if (tplType === 'saving' && !isCreatingCustomTplFund && val.trim()) {
+                            const currentCat = tplItem ? getTplFundCategory(tplItem) : '';
+                            if (currentCat.toLowerCase() !== val.trim().toLowerCase()) {
+                              const matchingFunds = existingSinkingFunds.filter(
+                                (f) => getTplFundCategory(f).toLowerCase() === val.trim().toLowerCase()
+                              );
+                              if (matchingFunds.length > 0) {
+                                setTplItem(matchingFunds[0]);
+                              }
+                            }
+                          }
                         }
                       }}
                       className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"

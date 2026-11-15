@@ -47,6 +47,7 @@ import {
   resolveCanonicalSinkingFundName,
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
+  resolveFundCategoryWithTemplates,
   DEFAULT_SINKING_FUND_NAMES,
 } from '../services/sampleData';
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
@@ -395,11 +396,21 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       }
     });
 
-    (budget.customCategories?.saving || []).forEach((c) => addFundName(c));
     basePool.forEach((d) => addFundName(d));
 
     return Array.from(names.values());
-  }, [itemTemplates, budget.itemTemplates, budget.entries, budget.customCategories?.saving, ledger?.transactions]);
+  }, [itemTemplates, budget.itemTemplates, budget.entries, ledger?.transactions]);
+
+  const getSavingFundCategory = useCallback(
+    (fundName: string) =>
+      resolveFundCategoryWithTemplates(
+        fundName,
+        itemTemplates,
+        budget.entries,
+        budget.customCategories?.saving
+      ),
+    [itemTemplates, budget.entries, budget.customCategories?.saving]
+  );
 
 
 
@@ -1190,7 +1201,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       type === 'income'
         ? incomeCategories[0] || 'Salary'
         : type === 'saving'
-        ? normalizeSavingCategoryGroup(defaultFund, savingCategories[0])
+        ? getSavingFundCategory(defaultFund)
         : expenseCategories[0] || 'Food & Dining'
     );
     setFormItem(type === 'saving' ? defaultFund : '');
@@ -1221,7 +1232,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
 
     setModalType(tpl.type);
     setIsCreatingCustomCategory(false);
-    setFormCategory(tpl.category);
+    setFormCategory(
+      tpl.type === 'saving' ? getSavingFundCategory(tpl.item) : tpl.category
+    );
     setFormItem(tpl.item);
     setFormIsOptional(Boolean(tpl.isOptional));
     const estCost = tpl.defaultEstimatedCost || 0;
@@ -1237,25 +1250,35 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     }
   };
 
-  // When user types or selects a line item: auto-populate estimate if matching (only in template mode)
+  // When user types or selects a line item: auto-populate estimate if matching (only in template mode) and keep saving category synced
   const handleItemChange = (newItemName: string) => {
     setFormItem(newItemName);
+    const tpl = itemTemplates.find(
+      (t) => t.type === modalType && t.item.toLowerCase() === newItemName.trim().toLowerCase()
+    );
+    if (modalType === 'saving' && newItemName.trim()) {
+      setFormCategory(getSavingFundCategory(newItemName));
+      if (tpl?.defaultSavingAccountId) {
+        setFormSavingAccountId(tpl.defaultSavingAccountId);
+      }
+    }
     // If user is adding an unplanned item, do not auto-fill estimate or tie to a template!
     if (entrySourceMode === 'unplanned') {
       return;
     }
-    const est = getEstimateForItem(newItemName, formCategory, modalType);
+    const resolvedCat =
+      modalType === 'saving' && newItemName.trim()
+        ? getSavingFundCategory(newItemName)
+        : formCategory;
+    const est = getEstimateForItem(newItemName, resolvedCat, modalType);
     if (est > 0) {
       setFormEstimated(String(est));
       if (!formActual || formActual.trim() === '') {
         setFormActual(String(est));
       }
     }
-    const tpl = itemTemplates.find(
-      (t) => t.type === modalType && t.item.toLowerCase() === newItemName.trim().toLowerCase()
-    );
     if (tpl) {
-      setFormCategory(tpl.category);
+      setFormCategory(modalType === 'saving' ? getSavingFundCategory(tpl.item) : tpl.category);
       setFormIsOptional(Boolean(tpl.isOptional));
       if (tpl.defaultPaymentMethod) setFormPaymentMethod(tpl.defaultPaymentMethod);
       if (tpl.defaultSavingAccountId) setFormSavingAccountId(tpl.defaultSavingAccountId);
@@ -1263,11 +1286,32 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     }
   };
 
-  // When user changes category: update estimate if applicable (only in template mode)
+  // When user changes category: keep Goal Fund dropdown in sync when in saving mode, and update estimate if applicable
   const handleCategoryChange = (newCat: string) => {
     setFormCategory(newCat);
+    let targetItem = formItem;
+
+    if (modalType === 'saving' && !isCreatingNewSinkingFund && newCat.trim()) {
+      const currentFundCat = formItem ? getSavingFundCategory(formItem) : '';
+      if (currentFundCat.toLowerCase() !== newCat.trim().toLowerCase()) {
+        const matchingFunds = existingSinkingFunds.filter(
+          (f) => getSavingFundCategory(f).toLowerCase() === newCat.trim().toLowerCase()
+        );
+        if (matchingFunds.length > 0) {
+          targetItem = matchingFunds[0];
+          setFormItem(targetItem);
+          const matchedTpl = itemTemplates.find(
+            (t) => t.type === 'saving' && t.item.toLowerCase() === targetItem.toLowerCase()
+          );
+          if (matchedTpl?.defaultSavingAccountId) {
+            setFormSavingAccountId(matchedTpl.defaultSavingAccountId);
+          }
+        }
+      }
+    }
+
     if (entrySourceMode === 'unplanned') return;
-    const est = getEstimateForItem(formItem, newCat, modalType);
+    const est = getEstimateForItem(targetItem, newCat, modalType);
     if (est > 0 && (!formEstimated || formEstimated === '0')) {
       setFormEstimated(String(est));
     }
@@ -3603,16 +3647,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         setModalType('saving');
                         setIsCreatingNewSinkingFund(false);
                         setIsCreatingCustomCategory(false);
-                        const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
+                        const defaultFund = existingSinkingFunds[0] || 'General Savings';
                         if (entrySourceMode === 'unplanned') {
-                          setFormCategory(savingCategories[0] || 'General Savings');
                           setFormItem(defaultFund);
+                          setFormCategory(getSavingFundCategory(defaultFund));
                         } else {
                           const firstTpl = itemTemplates.find((t) => t.type === 'saving');
                           if (firstTpl) handleSelectTemplate(firstTpl.id);
                           else {
-                            setFormCategory(savingCategories[0] || 'General Savings');
                             setFormItem(defaultFund);
+                            setFormCategory(getSavingFundCategory(defaultFund));
                             setSelectedTemplateId('');
                           }
                         }
@@ -3694,16 +3738,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     setModalType('saving');
                     setIsCreatingNewSinkingFund(false);
                     setIsCreatingCustomCategory(false);
-                    const defaultFund = existingSinkingFunds[0] || savingCategories[0] || 'General Savings';
+                    const defaultFund = existingSinkingFunds[0] || 'General Savings';
                     if (entrySourceMode === 'unplanned') {
-                      setFormCategory(savingCategories[0] || 'General Savings');
                       setFormItem(defaultFund);
+                      setFormCategory(getSavingFundCategory(defaultFund));
                     } else {
                       const firstTpl = itemTemplates.find((t) => t.type === 'saving');
                       if (firstTpl) handleSelectTemplate(firstTpl.id);
                       else {
-                        setFormCategory(savingCategories[0] || 'General Savings');
                         setFormItem(defaultFund);
+                        setFormCategory(getSavingFundCategory(defaultFund));
                         setSelectedTemplateId('');
                       }
                     }
@@ -3853,7 +3897,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             setFormItem('');
                           } else {
                             handleItemChange(val);
-                            setFormCategory(normalizeSavingCategoryGroup(val, formCategory));
                           }
                         }}
                         className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-500"
@@ -3869,11 +3912,22 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           );
                           const grouped = new Map<string, string[]>();
                           allFunds.forEach((f) => {
-                            const grp = normalizeSavingCategoryGroup(f);
+                            const grp = getSavingFundCategory(f);
                             if (!grouped.has(grp)) grouped.set(grp, []);
                             grouped.get(grp)!.push(f);
                           });
-                          return Array.from(grouped.entries()).map(([grpName, funds]) => (
+                          const sortedGroups = Array.from(grouped.entries()).sort(([grpA], [grpB]) => {
+                            const activeCatLower = (formCategory || '').trim().toLowerCase();
+                            if (grpA.toLowerCase() === activeCatLower) return -1;
+                            if (grpB.toLowerCase() === activeCatLower) return 1;
+                            const idxA = savingCategories.findIndex((c) => c.toLowerCase() === grpA.toLowerCase());
+                            const idxB = savingCategories.findIndex((c) => c.toLowerCase() === grpB.toLowerCase());
+                            if (idxA >= 0 && idxB >= 0) return idxA - idxB;
+                            if (idxA >= 0) return -1;
+                            if (idxB >= 0) return 1;
+                            return grpA.localeCompare(grpB);
+                          });
+                          return sortedGroups.map(([grpName, funds]) => (
                             <optgroup key={grpName} label={grpName}>
                               {funds.map((fundName) => (
                                 <option key={fundName} value={fundName}>

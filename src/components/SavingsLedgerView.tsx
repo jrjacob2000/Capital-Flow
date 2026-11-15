@@ -30,6 +30,7 @@ import {
   resolveCanonicalSinkingFundName,
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
+  resolveFundCategoryWithTemplates,
   SAVING_CATEGORIES,
   DEFAULT_SINKING_FUND_NAMES,
   MONTH_NAMES,
@@ -363,16 +364,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
     >();
 
-    const resolveSavingCategory = (fundName: string, fallbackCategory?: string): string => {
-      const clean = fundName.trim().toLowerCase();
-      const byItem = budget?.itemTemplates?.find(
-        (t) => t.type === 'saving' && t.item.trim().toLowerCase() === clean
+    const resolveSavingCategory = (fundName: string, fallbackCategory?: string): string =>
+      resolveFundCategoryWithTemplates(
+        fundName,
+        budget?.itemTemplates,
+        budget?.entries,
+        budget?.customCategories?.saving,
+        fallbackCategory
       );
-      if (byItem && byItem.category) {
-        return normalizeSavingCategoryGroup(fundName, byItem.category);
-      }
-      return normalizeSavingCategoryGroup(fundName, fallbackCategory);
-    };
 
     const knownCanonicalPool = Array.from(
       new Set([
@@ -617,20 +616,21 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     let categorizedNetSum = 0;
 
     fundMap.forEach((f) => {
-      const net = Math.max(0, f.inflow - f.outflow);
-      categorizedNetSum += net;
+      const net = Math.max(0, Math.round((f.inflow - f.outflow) * 100) / 100);
+      categorizedNetSum = Math.round((categorizedNetSum + net) * 100) / 100;
 
       const accList = Array.from(f.accounts.values())
-        .filter((a) => a.amount > 0)
+        .filter((a) => a.amount > 0.005)
         .map((a) => {
           const accInfo = ledger.accounts.find((acc) => acc.id === a.accountId);
+          const roundedAmt = Math.round(a.amount * 100) / 100;
           return {
             accountId: a.accountId,
             accountName: a.accountName,
             accountType: accInfo?.type,
             accountColor: accInfo?.color || '#10b981',
-            amount: a.amount,
-            percentage: net > 0 ? (a.amount / net) * 100 : 0,
+            amount: roundedAmt,
+            percentage: net > 0 ? (roundedAmt / net) * 100 : 0,
           };
         })
         .sort((a, b) => b.amount - a.amount);
@@ -640,8 +640,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         name: f.name,
         category: f.category,
         color: f.color,
-        totalInflow: f.inflow,
-        totalOutflow: f.outflow,
+        totalInflow: Math.round(f.inflow * 100) / 100,
+        totalOutflow: Math.round(f.outflow * 100) / 100,
         currentBalance: net,
         percentageOfTotal: totalCapital > 0 ? (net / totalCapital) * 100 : 0,
         accounts: accList,
@@ -653,8 +653,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     });
 
     // Unallocated remainder (opening balances or unassigned capital)
-    const unallocatedRemainder = Math.max(0, totalCapital - categorizedNetSum);
-    if (unallocatedRemainder > 1) {
+    const unallocatedRemainder = Math.max(0, Math.round((totalCapital - categorizedNetSum) * 100) / 100);
+    if (unallocatedRemainder > 0.005) {
       const unallocatedAccounts: {
         accountId: string;
         accountName: string;
@@ -670,8 +670,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           const match = rf.accounts.find((a) => a.accountId === acc.id);
           if (match) usedInFunds += match.amount;
         });
-        const unallocatedInAcc = Math.max(0, acc.balance - usedInFunds);
-        if (unallocatedInAcc > 0) {
+        const unallocatedInAcc = Math.max(0, Math.round((acc.balance - usedInFunds) * 100) / 100);
+        if (unallocatedInAcc > 0.005) {
           unallocatedAccounts.push({
             accountId: acc.id,
             accountName: acc.name,
@@ -2389,7 +2389,23 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
                   <select
                     value={depositCategory}
-                    onChange={(e) => setDepositCategory(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDepositCategory(val);
+                      if (val && val !== '__custom__') {
+                        const matchedTpl = budget?.itemTemplates?.find(
+                          (t) => t.type === 'saving' && t.item.trim().toLowerCase() === val.trim().toLowerCase()
+                        );
+                        const matchedFund = categoryFunds.find(
+                          (f) => f.name.toLowerCase() === val.trim().toLowerCase()
+                        );
+                        if (matchedTpl?.defaultSavingAccountId && ledger.accounts.some((a) => a.id === matchedTpl.defaultSavingAccountId)) {
+                          setDepositAccountId(matchedTpl.defaultSavingAccountId);
+                        } else if (matchedFund && matchedFund.accounts.length > 0) {
+                          setDepositAccountId(matchedFund.accounts[0].accountId);
+                        }
+                      }
+                    }}
                     className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
                   >
                     {depositType === 'interest_yield' ? (
@@ -2397,19 +2413,36 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     ) : (
                       <option value="">General Reserves / Starting Capital (Unallocated)</option>
                     )}
-                    {allKnownGoalFundNames.map((cat) => {
-                      const matchingFund = categoryFunds.find(
-                        (f) => f.name.toLowerCase() === cat.toLowerCase()
-                      );
-                      return (
-                        <option key={cat} value={cat}>
-                          {cat}
-                          {matchingFund
-                            ? ` (${currencySymbol}${formatNumber(matchingFund.currentBalance)})`
-                            : ''}
-                        </option>
-                      );
-                    })}
+                    {(() => {
+                      const grouped = new Map<string, string[]>();
+                      allKnownGoalFundNames.forEach((cat) => {
+                        const grp = resolveFundCategoryWithTemplates(
+                          cat,
+                          budget?.itemTemplates,
+                          budget?.entries,
+                          budget?.customCategories?.saving
+                        );
+                        if (!grouped.has(grp)) grouped.set(grp, []);
+                        grouped.get(grp)!.push(cat);
+                      });
+                      return Array.from(grouped.entries()).map(([grpName, funds]) => (
+                        <optgroup key={grpName} label={grpName}>
+                          {funds.map((cat) => {
+                            const matchingFund = categoryFunds.find(
+                              (f) => f.name.toLowerCase() === cat.toLowerCase()
+                            );
+                            return (
+                              <option key={cat} value={cat}>
+                                {cat}
+                                {matchingFund
+                                  ? ` (${currencySymbol}${formatNumber(matchingFund.currentBalance)})`
+                                  : ''}
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                      ));
+                    })()}
                     <option value="__custom__">+ New Goal Fund...</option>
                   </select>
                   {depositCategory === '__custom__' && (

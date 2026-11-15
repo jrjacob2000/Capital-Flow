@@ -28,7 +28,12 @@ import {
   BudgetEntry,
   SavingsTransaction,
 } from '../types/finance';
-import { formatCurrency } from '../utils/budgetCalculations';
+import {
+  resolveCanonicalSinkingFundName,
+  findClosestSinkingFundMatch,
+  DEFAULT_SINKING_FUND_NAMES,
+} from '../services/sampleData';
+import { formatCurrency, roundCurrency } from '../utils/budgetCalculations';
 
 interface LoansViewProps {
   ledger: SavingsLedgerData;
@@ -49,6 +54,8 @@ interface LoansViewProps {
       note: string;
       recordInBudget?: boolean;
       depositToAccountId?: string;
+      deductFromAccountId?: string;
+      deductFromFundCategory?: string;
     }
   ) => void;
   onDeleteLoanPayment: (loanId: string, paymentId: string) => void;
@@ -118,15 +125,187 @@ export const LoansView: React.FC<LoansViewProps> = ({
   const [payNote, setPayNote] = useState('');
   const [payRecordInBudget, setPayRecordInBudget] = useState(true);
   const [payDepositAccountId, setPayDepositAccountId] = useState('');
+  const [payDeductAccountId, setPayDeductAccountId] = useState('');
+  const [payDeductFundCategory, setPayDeductFundCategory] = useState('General Reserves / Starting Capital');
 
   const formatNumber = (num: number) => formatCurrency(num);
 
+  // Compute Goal Fund balances per Bank Account so borrowed loan payments can deduct from a specific Goal Fund
+  const goalFundsBreakdown = useMemo(() => {
+    const knownCanonicalPool = Array.from(
+      new Set([
+        ...DEFAULT_SINKING_FUND_NAMES,
+        ...(budget.itemTemplates || [])
+          .filter((t) => t.type === 'saving')
+          .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, DEFAULT_SINKING_FUND_NAMES)),
+      ])
+    );
+
+    const fundMap = new Map<
+      string,
+      {
+        name: string;
+        inflow: number;
+        outflow: number;
+        byAccount: Map<string, number>;
+      }
+    >();
+
+    const getOrCreate = (rawName: string, category?: string) => {
+      const canonical = resolveCanonicalSinkingFundName(rawName, category, knownCanonicalPool).trim();
+      const key = canonical.toLowerCase();
+      if (!knownCanonicalPool.some((p) => p.toLowerCase() === key)) {
+        knownCanonicalPool.push(canonical);
+      }
+      if (!fundMap.has(key)) {
+        fundMap.set(key, {
+          name: canonical,
+          inflow: 0,
+          outflow: 0,
+          byAccount: new Map(),
+        });
+      }
+      return fundMap.get(key)!;
+    };
+
+    (budget.itemTemplates || [])
+      .filter((t) => t.type === 'saving')
+      .forEach((tpl) => {
+        if (tpl.item.trim().toLowerCase() !== 'general reserves / starting capital') {
+          getOrCreate(tpl.item, tpl.category);
+        }
+      });
+
+    (ledger.transactions || []).forEach((tx) => {
+      const amt = tx.amount || 0;
+      if (tx.source === 'transfer') {
+        if (tx.category && tx.category.trim().toLowerCase() !== 'general reserves / starting capital') {
+          const f = getOrCreate(tx.category, tx.category);
+          f.byAccount.set(tx.accountId, (f.byAccount.get(tx.accountId) || 0) - amt);
+          if (tx.toAccountId) {
+            f.byAccount.set(tx.toAccountId, (f.byAccount.get(tx.toAccountId) || 0) + amt);
+          }
+        }
+        return;
+      }
+
+      if (tx.source === 'reallocation') {
+        const fromCat = (tx.category || 'General Reserves / Starting Capital').trim();
+        const toCat = (tx.toCategory || 'General Reserves / Starting Capital').trim();
+        if (fromCat.toLowerCase() !== 'general reserves / starting capital') {
+          const fromF = getOrCreate(fromCat, fromCat);
+          fromF.outflow += amt;
+          if (tx.accountId) {
+            fromF.byAccount.set(tx.accountId, (fromF.byAccount.get(tx.accountId) || 0) - amt);
+          }
+        }
+        if (toCat.toLowerCase() !== 'general reserves / starting capital') {
+          const toF = getOrCreate(toCat, toCat);
+          toF.inflow += amt;
+          if (tx.accountId) {
+            toF.byAccount.set(tx.accountId, (toF.byAccount.get(tx.accountId) || 0) + amt);
+          }
+        }
+        return;
+      }
+
+      const rawCat = (tx.category || '').trim();
+      if (rawCat.toLowerCase() === 'general reserves / starting capital') {
+        return;
+      }
+
+      let fundName = '';
+      if (tx.source === 'interest_yield') {
+        fundName = rawCat || 'Compounding Yields & Dividend';
+      } else if (tx.source === 'withdrawal') {
+        if (!rawCat || rawCat.toLowerCase() === 'general unallocated withdrawal') {
+          return;
+        }
+        const matched = findClosestSinkingFundMatch(rawCat, knownCanonicalPool);
+        fundName = matched || resolveCanonicalSinkingFundName(rawCat, rawCat, knownCanonicalPool);
+      } else {
+        const linkedEntry = tx.budgetEntryId
+          ? (budget.entries || []).find((e) => e.id === tx.budgetEntryId)
+          : undefined;
+        if (linkedEntry) {
+          const rawItem = (linkedEntry.item || linkedEntry.description || '').trim();
+          if (!rawItem || rawItem.toLowerCase() === 'general reserves / starting capital') return;
+          fundName = resolveCanonicalSinkingFundName(rawItem, linkedEntry.category, knownCanonicalPool);
+        } else if (rawCat) {
+          fundName = resolveCanonicalSinkingFundName(rawCat, rawCat, knownCanonicalPool);
+        } else {
+          const cleanNote = (tx.note || '')
+            .replace(/^Budget Sync:\s*/i, '')
+            .replace(/^Manual Deposit:\s*/i, '')
+            .replace(/^Direct Deposit:\s*/i, '')
+            .trim();
+          if (!cleanNote) return;
+          const canonNote = resolveCanonicalSinkingFundName(cleanNote, undefined, knownCanonicalPool);
+          if (fundMap.has(canonNote.toLowerCase())) {
+            fundName = canonNote;
+          } else {
+            return;
+          }
+        }
+      }
+
+      if (!fundName || fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+        return;
+      }
+
+      const f = getOrCreate(fundName, rawCat);
+      if (tx.source === 'withdrawal') {
+        f.outflow += amt;
+        f.byAccount.set(tx.accountId, (f.byAccount.get(tx.accountId) || 0) - amt);
+      } else {
+        f.inflow += amt;
+        f.byAccount.set(tx.accountId, (f.byAccount.get(tx.accountId) || 0) + amt);
+      }
+    });
+
+    const namedFunds = Array.from(fundMap.values()).map((f) => {
+      const currentBalance = Math.max(0, Math.round((f.inflow - f.outflow) * 100) / 100);
+      const accountBalances = new Map<string, number>();
+      f.byAccount.forEach((val, accId) => {
+        const rounded = Math.max(0, Math.round(val * 100) / 100);
+        if (rounded > 0.005) {
+          accountBalances.set(accId, rounded);
+        }
+      });
+      return {
+        name: f.name,
+        currentBalance,
+        accountBalances,
+      };
+    });
+
+    const unallocatedByAccount = new Map<string, number>();
+    let totalUnallocated = 0;
+    (ledger.accounts || []).forEach((acc) => {
+      let usedInAcc = 0;
+      namedFunds.forEach((nf) => {
+        usedInAcc += nf.accountBalances.get(acc.id) || 0;
+      });
+      const unalloc = Math.max(0, Math.round((acc.balance - usedInAcc) * 100) / 100);
+      unallocatedByAccount.set(acc.id, unalloc);
+      totalUnallocated = Math.round((totalUnallocated + unalloc) * 100) / 100;
+    });
+
+    return {
+      namedFunds: namedFunds.sort((a, b) => b.currentBalance - a.currentBalance),
+      unallocatedByAccount,
+      totalUnallocated,
+    };
+  }, [ledger.transactions, ledger.accounts, budget.itemTemplates, budget.entries]);
+
   // Helper to compute derived loan metrics
   const getLoanMetrics = (loan: LoanRecord) => {
-    const paymentsSum = (loan.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
-    const totalPaid = (loan.initialPaidAmount || 0) + paymentsSum;
-    const totalContract = loan.totalContractAmount || 0;
-    const remainingBalance = Math.max(0, totalContract - totalPaid);
+    const paymentsSum = roundCurrency(
+      (loan.payments || []).reduce((sum, p) => roundCurrency(sum + (p.amount || 0)), 0)
+    );
+    const totalPaid = roundCurrency((loan.initialPaidAmount || 0) + paymentsSum);
+    const totalContract = roundCurrency(loan.totalContractAmount || 0);
+    const remainingBalance = Math.max(0, roundCurrency(totalContract - totalPaid));
     const progressPct = totalContract > 0 ? Math.min(100, (totalPaid / totalContract) * 100) : 0;
 
     // Installment count math
@@ -150,9 +329,9 @@ export const LoansView: React.FC<LoansViewProps> = ({
         ? 0
         : loan.frequency === 'bi-weekly'
         ? loan.biweeklyPeriod === 'both'
-          ? (loan.installmentAmount || 0) * 2
-          : loan.installmentAmount || 0
-        : loan.installmentAmount || 0;
+          ? roundCurrency((loan.installmentAmount || 0) * 2)
+          : roundCurrency(loan.installmentAmount || 0)
+        : roundCurrency(loan.installmentAmount || 0);
 
     // Check if linked to an active template
     const targetTplType = loan.direction === 'borrowed' ? 'expense' : 'income';
@@ -202,27 +381,27 @@ export const LoansView: React.FC<LoansViewProps> = ({
         completedCount += 1;
       }
       if (ln.direction === 'borrowed') {
-        borrowedPaid += m.totalPaid;
-        borrowedContract += m.totalContract;
+        borrowedPaid = roundCurrency(borrowedPaid + m.totalPaid);
+        borrowedContract = roundCurrency(borrowedContract + m.totalContract);
         if (!m.isCompleted) {
-          borrowedRemaining += m.remainingBalance;
-          borrowedMonthlyCommitment += m.monthlyCommitment;
+          borrowedRemaining = roundCurrency(borrowedRemaining + m.remainingBalance);
+          borrowedMonthlyCommitment = roundCurrency(borrowedMonthlyCommitment + m.monthlyCommitment);
           activeBorrowedCount += 1;
         }
       } else {
-        lentCollected += m.totalPaid;
-        lentContract += m.totalContract;
+        lentCollected = roundCurrency(lentCollected + m.totalPaid);
+        lentContract = roundCurrency(lentContract + m.totalContract);
         if (!m.isCompleted) {
-          lentRemaining += m.remainingBalance;
-          lentMonthlyExpected += m.monthlyCommitment;
+          lentRemaining = roundCurrency(lentRemaining + m.remainingBalance);
+          lentMonthlyExpected = roundCurrency(lentMonthlyExpected + m.monthlyCommitment);
           activeLentCount += 1;
         }
       }
     });
 
-    const netLoanPosition = lentRemaining - borrowedRemaining;
-    const totalAllContract = borrowedContract + lentContract;
-    const totalAllPaid = borrowedPaid + lentCollected;
+    const netLoanPosition = roundCurrency(lentRemaining - borrowedRemaining);
+    const totalAllContract = roundCurrency(borrowedContract + lentContract);
+    const totalAllPaid = roundCurrency(borrowedPaid + lentCollected);
     const overallProgress = totalAllContract > 0 ? (totalAllPaid / totalAllContract) * 100 : 0;
 
     return {
@@ -409,6 +588,8 @@ export const LoansView: React.FC<LoansViewProps> = ({
     );
     setPayRecordInBudget(true);
     setPayDepositAccountId('');
+    setPayDeductAccountId('');
+    setPayDeductFundCategory('General Reserves / Starting Capital');
   };
 
   const handleSubmitPayment = (e: React.FormEvent) => {
@@ -422,7 +603,14 @@ export const LoansView: React.FC<LoansViewProps> = ({
       date: payDate || new Date().toISOString().split('T')[0],
       note: payNote.trim() || `${paymentModalLoan.name} payment`,
       recordInBudget: payRecordInBudget,
-      depositToAccountId: payDepositAccountId || undefined,
+      depositToAccountId:
+        paymentModalLoan.direction === 'lent' && payDepositAccountId ? payDepositAccountId : undefined,
+      deductFromAccountId:
+        paymentModalLoan.direction === 'borrowed' && payDeductAccountId ? payDeductAccountId : undefined,
+      deductFromFundCategory:
+        paymentModalLoan.direction === 'borrowed' && payDeductAccountId
+          ? payDeductFundCategory || 'General Reserves / Starting Capital'
+          : undefined,
     });
     setPaymentModalLoan(null);
   };
@@ -867,12 +1055,27 @@ export const LoansView: React.FC<LoansViewProps> = ({
                               <div className="font-medium text-slate-800 dark:text-slate-200 truncate">
                                 {pay.note || 'Installment payment'}
                               </div>
-                              <div className="text-[10px] text-slate-400 flex items-center gap-1 font-mono tabular-nums">
+                              <div className="text-[10px] text-slate-400 flex items-center gap-1 flex-wrap font-mono tabular-nums">
                                 <span>{pay.date}</span>
                                 <span aria-hidden="true">&middot;</span>
                                 <span>
                                   {pay.source === 'budget_sync' ? 'Budget Sheet Sync' : 'Direct Entry'}
                                 </span>
+                                {(pay.accountName || pay.accountId) && (
+                                  <>
+                                    <span aria-hidden="true">&middot;</span>
+                                    <span className="text-indigo-600 dark:text-indigo-400 font-sans font-medium truncate">
+                                      {pay.accountName ||
+                                        ledger.accounts.find((a) => a.id === pay.accountId)?.name ||
+                                        'Bank Account'}
+                                      {pay.fundCategory &&
+                                      pay.fundCategory.trim().toLowerCase() !==
+                                        'general reserves / starting capital'
+                                        ? ` (${pay.fundCategory})`
+                                        : ''}
+                                    </span>
+                                  </>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
@@ -1430,6 +1633,162 @@ export const LoansView: React.FC<LoansViewProps> = ({
                 />
               </div>
 
+              {/* Optional Deduct from Bank Account & Goal Fund for Borrowed Loans */}
+              {paymentModalLoan.direction === 'borrowed' && ledger.accounts.length > 0 && (
+                <div className="space-y-2.5 p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+                  <div>
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                        Deduct from Bank Account (Optional)
+                      </label>
+                    </div>
+                    <select
+                      value={payDeductAccountId}
+                      onChange={(e) => {
+                        const nextAccId = e.target.value;
+                        setPayDeductAccountId(nextAccId);
+                        if (nextAccId) {
+                          // Automatically uncheck Budget Sheet Expense so we don't double-deduct from Period Salary
+                          setPayRecordInBudget(false);
+                          // Auto-select the top Goal Fund held in this Bank Account (or General Reserves)
+                          const topFundInBank = goalFundsBreakdown.namedFunds
+                            .map((nf) => ({
+                              name: nf.name,
+                              amt: nf.accountBalances.get(nextAccId) || 0,
+                            }))
+                            .filter((item) => item.amt > 0.005)
+                            .sort((a, b) => b.amt - a.amt)[0];
+                          setPayDeductFundCategory(
+                            topFundInBank ? topFundInBank.name : 'General Reserves / Starting Capital'
+                          );
+                        } else {
+                          setPayRecordInBudget(true);
+                          setPayDeductFundCategory('General Reserves / Starting Capital');
+                        }
+                      }}
+                      className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="">Do not deduct from a Bank Account (Pay via Budget Sheet)</option>
+                      {ledger.accounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {payDeductAccountId && (() => {
+                    const selAcc = ledger.accounts.find((a) => a.id === payDeductAccountId);
+                    const accLabel = selAcc?.name || 'Selected Account';
+                    const fundsInSelectedBank = goalFundsBreakdown.namedFunds
+                      .map((nf) => ({
+                        name: nf.name,
+                        inBankAmount: nf.accountBalances.get(payDeductAccountId) || 0,
+                        totalAmount: nf.currentBalance,
+                      }))
+                      .filter((item) => item.inBankAmount > 0.005);
+
+                    const unallocInBank =
+                      goalFundsBreakdown.unallocatedByAccount.get(payDeductAccountId) || 0;
+                    const totalUnalloc = goalFundsBreakdown.totalUnallocated;
+
+                    const otherFunds = goalFundsBreakdown.namedFunds.filter(
+                      (nf) => !fundsInSelectedBank.some((inB) => inB.name === nf.name)
+                    );
+
+                    const pAmt = parseFloat(payAmount) || 0;
+                    const isGeneral =
+                      payDeductFundCategory.trim().toLowerCase() ===
+                      'general reserves / starting capital';
+                    const selectedNamedFund = isGeneral
+                      ? undefined
+                      : goalFundsBreakdown.namedFunds.find((nf) => nf.name === payDeductFundCategory);
+                    const fundBalBefore = isGeneral
+                      ? unallocInBank > 0
+                        ? unallocInBank
+                        : totalUnalloc
+                      : selectedNamedFund?.accountBalances.get(payDeductAccountId) ??
+                        selectedNamedFund?.currentBalance ??
+                        0;
+                    const fundBalAfter = Math.max(0, Math.round((fundBalBefore - pAmt) * 100) / 100);
+                    const accBalBefore = selAcc?.balance || 0;
+                    const accBalAfter = Math.max(0, Math.round((accBalBefore - pAmt) * 100) / 100);
+
+                    return (
+                      <>
+                        <div>
+                          <div className="flex items-center justify-between h-4 mb-1">
+                            <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
+                              Deduct from Goal Fund / Reserve
+                            </label>
+                          </div>
+                          <select
+                            value={payDeductFundCategory}
+                            onChange={(e) => setPayDeductFundCategory(e.target.value)}
+                            className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            {(fundsInSelectedBank.length > 0 || unallocInBank > 0.005) && (
+                              <optgroup label={`Funds Held in ${accLabel}`}>
+                                {fundsInSelectedBank.map((f) => (
+                                  <option key={f.name} value={f.name}>
+                                    {f.name} ({currencySymbol}{formatNumber(f.inBankAmount)} in {accLabel})
+                                  </option>
+                                ))}
+                                {unallocInBank > 0.005 && (
+                                  <option value="General Reserves / Starting Capital">
+                                    General Reserves / Unallocated ({currencySymbol}{formatNumber(unallocInBank)} in {accLabel})
+                                  </option>
+                                )}
+                              </optgroup>
+                            )}
+                            <optgroup label="Other Goal Funds (Total Balance)">
+                              {unallocInBank <= 0.005 && (
+                                <option value="General Reserves / Starting Capital">
+                                  General Reserves / Unallocated ({currencySymbol}{formatNumber(totalUnalloc)} total)
+                                </option>
+                              )}
+                              {otherFunds.map((f) => (
+                                <option key={f.name} value={f.name}>
+                                  {f.name} ({currencySymbol}{formatNumber(f.currentBalance)} total)
+                                </option>
+                              ))}
+                            </optgroup>
+                          </select>
+                        </div>
+
+                        <div className="p-2 rounded-lg bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-700/80 space-y-1 text-[11px]">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-500 dark:text-slate-400 truncate">
+                              Bank: <strong className="text-slate-800 dark:text-slate-200">{accLabel}</strong>
+                            </span>
+                            <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
+                              {currencySymbol}{formatNumber(accBalBefore)} &rarr;{' '}
+                              <strong className="text-rose-600 dark:text-rose-400">
+                                {currencySymbol}{formatNumber(accBalAfter)}
+                              </strong>
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-500 dark:text-slate-400 truncate">
+                              Fund:{' '}
+                              <strong className="text-slate-800 dark:text-slate-200">
+                                {isGeneral ? 'General Reserves' : payDeductFundCategory}
+                              </strong>
+                            </span>
+                            <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 shrink-0">
+                              {currencySymbol}{formatNumber(fundBalBefore)} &rarr;{' '}
+                              <strong className="text-rose-600 dark:text-rose-400">
+                                {currencySymbol}{formatNumber(fundBalAfter)}
+                              </strong>
+                            </span>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+
               {/* Optional Sync to Current Budget */}
               <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
                 <input
@@ -1446,7 +1805,9 @@ export const LoansView: React.FC<LoansViewProps> = ({
                   </span>
                   <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
                     {paymentModalLoan.direction === 'borrowed'
-                      ? 'Logs a Paid Expense (Loans) entry in your Budget for this period.'
+                      ? payDeductAccountId && !payRecordInBudget
+                        ? 'Unchecked so it will not deduct a second time from your Period Salary (since this payment is deducted from your Bank Account / Goal Fund above).'
+                        : 'Logs a Paid Expense (Loans) entry in your Budget for this period.'
                       : 'Logs a Paid Income entry in your Budget for this period (same cashflow pool as your salary).'}
                   </span>
                 </div>
