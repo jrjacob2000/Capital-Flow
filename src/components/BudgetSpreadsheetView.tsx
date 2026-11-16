@@ -546,6 +546,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
             (e.item || e.description || '').toLowerCase().trim() === tplItemLower ||
             (tpl.type === 'saving' &&
               tplCanonicalFundLower.length > 0 &&
+              tplCanonicalFundLower !== 'general reserves / starting capital' &&
               resolveCanonicalSinkingFundName(
                 e.item || e.description,
                 e.category
@@ -1257,7 +1258,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
       (t) => t.type === modalType && t.item.toLowerCase() === newItemName.trim().toLowerCase()
     );
     if (modalType === 'saving' && newItemName.trim()) {
-      setFormCategory(getSavingFundCategory(newItemName));
+      if (!isCreatingNewSinkingFund && formCategory.trim().toLowerCase() !== 'unallocated cash pool') {
+        setFormCategory(getSavingFundCategory(newItemName));
+      }
       if (tpl?.defaultSavingAccountId) {
         setFormSavingAccountId(tpl.defaultSavingAccountId);
       }
@@ -1291,11 +1294,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     setFormCategory(newCat);
     let targetItem = formItem;
 
-    if (modalType === 'saving' && !isCreatingNewSinkingFund && newCat.trim()) {
+    if (modalType === 'saving' && newCat.trim()) {
       if (newCat.trim().toLowerCase() === 'unallocated cash pool') {
-        targetItem = 'General Reserves / Starting Capital';
-        setFormItem(targetItem);
-      } else {
+        if (!isCreatingNewSinkingFund && !formItem.trim()) {
+          targetItem = 'General Reserves / Starting Capital';
+          setFormItem(targetItem);
+        }
+      } else if (!isCreatingNewSinkingFund) {
         const currentFundCat = formItem ? getSavingFundCategory(formItem) : '';
         if (currentFundCat.toLowerCase() !== newCat.trim().toLowerCase()) {
           const matchingFunds = existingSinkingFunds.filter(
@@ -1327,8 +1332,8 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
     e.preventDefault();
     const resolvedFundOrItem =
       modalType === 'saving'
-        ? isCreatingNewSinkingFund
-          ? formItem.trim() || formCategory
+        ? isCreatingNewSinkingFund || formCategory.trim().toLowerCase() === 'unallocated cash pool'
+          ? formItem.trim() || 'General Reserves / Starting Capital'
           : resolveCanonicalSinkingFundName(formItem.trim() || formCategory, formCategory, existingSinkingFunds)
         : formItem.trim() || formCategory;
 
@@ -2788,7 +2793,12 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                       : 'font-bold text-slate-900 dark:text-white'
                                   }`}
                                 >
-                                  {exp.item}
+                                  {exp.item.trim().toLowerCase() === 'general reserves / starting capital' &&
+                                  exp.reference &&
+                                  exp.reference.trim() &&
+                                  exp.reference.trim() !== 'Auto-filled from template'
+                                    ? `General Reserves — ${exp.reference.trim()}`
+                                    : exp.item}
                                 </span>
                               </div>
                             </div>
@@ -3255,7 +3265,12 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                   : 'font-semibold text-slate-900 dark:text-white'
                               }`}
                             >
-                              {exp.item}
+                              {exp.item.trim().toLowerCase() === 'general reserves / starting capital' &&
+                              exp.reference &&
+                              exp.reference.trim() &&
+                              exp.reference.trim() !== 'Auto-filled from template'
+                                ? `General Reserves — ${exp.reference.trim()}`
+                                : exp.item}
                             </span>
                           </div>
                           <div
@@ -3912,6 +3927,20 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           <option value="General Reserves / Starting Capital">
                             General Reserves / Starting Capital (Unallocated)
                           </option>
+                          {Array.from(
+                            new Set([
+                              ...itemTemplates
+                                .filter((t) => t.type === 'saving' && (t.category || '').toLowerCase() === 'unallocated cash pool' && t.item.toLowerCase() !== 'general reserves / starting capital')
+                                .map((t) => t.item),
+                              ...(budget.entries || [])
+                                .filter((e) => e.type === 'saving' && (e.category || '').toLowerCase() === 'unallocated cash pool' && (e.item || '').toLowerCase() !== 'general reserves / starting capital')
+                                .map((e) => e.item || e.description || ''),
+                            ])
+                          ).filter(Boolean).map((fundName) => (
+                            <option key={fundName} value={fundName}>
+                              {fundName} (Unallocated)
+                            </option>
+                          ))}
                         </optgroup>
                         {(() => {
                           const allFunds = Array.from(
@@ -4386,12 +4415,18 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
-                        Reference / Note
+                        {modalType === 'saving'
+                          ? 'Purpose / Reference (Shown on Sheet)'
+                          : 'Reference / Note'}
                       </label>
                     </div>
                     <input
                       type="text"
-                      placeholder="Receipt, check #, memo..."
+                      placeholder={
+                        modalType === 'saving'
+                          ? 'e.g. Pag-IBIG Mortgage, Check #...'
+                          : 'Receipt, check #, memo...'
+                      }
                       value={formReference}
                       onChange={(e) => setFormReference(e.target.value)}
                       className="block w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-indigo-500"

@@ -1524,6 +1524,16 @@ export function normalizeSavingCategoryGroup(fundName?: string, rawCategory?: st
   const fLower = (fundName || '').trim().toLowerCase();
   const cLower = (rawCategory || '').trim().toLowerCase();
 
+  if (
+    cLower === 'unallocated cash pool' ||
+    cLower === 'unallocated capital' ||
+    cLower === 'general reserves / starting capital' ||
+    fLower === 'general reserves / starting capital' ||
+    fLower === 'unallocated cash pool'
+  ) {
+    return 'Unallocated Cash Pool';
+  }
+
   // If fundName is a generic alias ('saving', 'savings', 'sinking fund') and rawCategory is a specific fund name
   const isGenericAliasOnly =
     fLower !== 'general savings' && GENERIC_SAVING_ALIASES.has(fLower);
@@ -1558,8 +1568,15 @@ export function resolveFundCategoryWithTemplates(
 ): string {
   const fClean = (fundName || '').trim();
   const fLower = fClean.toLowerCase();
+  const fallbackLower = (explicitFallbackCategory || '').trim().toLowerCase();
 
-  if (fLower === 'general reserves / starting capital') {
+  if (
+    fallbackLower === 'unallocated cash pool' ||
+    fallbackLower === 'unallocated capital' ||
+    fallbackLower === 'general reserves / starting capital' ||
+    fLower === 'general reserves / starting capital' ||
+    fLower === 'unallocated cash pool'
+  ) {
     return 'Unallocated Cash Pool';
   }
 
@@ -1577,6 +1594,7 @@ export function resolveFundCategoryWithTemplates(
     if (!cLow || GENERIC_SAVING_ALIASES.has(cLow) || cLow === 'savings / envelope') {
       return null;
     }
+    if (cLow === 'unallocated cash pool' || cLow === 'unallocated capital') return 'Unallocated Cash Pool';
     const canon = SAVING_CATEGORIES.find((sc) => sc.toLowerCase() === cLow);
     if (canon) return canon;
     const custom = validCustomCats.find((cc) => cc.toLowerCase() === cLow);
@@ -1589,6 +1607,9 @@ export function resolveFundCategoryWithTemplates(
       (t) => t.type === 'saving' && (t.item || '').trim().toLowerCase() === fLower
     );
     if (matchedTpl && matchedTpl.category) {
+      if (matchedTpl.category.trim().toLowerCase() === 'unallocated cash pool') {
+        return 'Unallocated Cash Pool';
+      }
       const validTplCat = resolveValidGroup(matchedTpl.category);
       if (validTplCat) {
         return validTplCat;
@@ -1604,6 +1625,9 @@ export function resolveFundCategoryWithTemplates(
         Boolean(e.category)
     );
     if (matchedEntry && matchedEntry.category) {
+      if (matchedEntry.category.trim().toLowerCase() === 'unallocated cash pool') {
+        return 'Unallocated Cash Pool';
+      }
       const validEntryCat = resolveValidGroup(matchedEntry.category);
       if (validEntryCat) {
         return validEntryCat;
@@ -1613,7 +1637,7 @@ export function resolveFundCategoryWithTemplates(
 
   if (explicitFallbackCategory) {
     const validFallback = resolveValidGroup(explicitFallbackCategory);
-    if (validFallback && !matchSavingCategoryByText(fLower)) {
+    if (validFallback && (validFallback === 'Unallocated Cash Pool' || !matchSavingCategoryByText(fLower))) {
       return validFallback;
     }
   }
@@ -1637,7 +1661,7 @@ export function resolveCanonicalSinkingFundName(
 
   if (
     itemClean.toLowerCase() === 'general reserves / starting capital' ||
-    (!itemClean && catClean.toLowerCase() === 'general reserves / starting capital')
+    (!itemClean && (catClean.toLowerCase() === 'general reserves / starting capital' || catClean.toLowerCase() === 'unallocated cash pool'))
   ) {
     return 'General Reserves / Starting Capital';
   }

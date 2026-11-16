@@ -344,8 +344,9 @@ export class FinanceStorageService {
         const cleanedTemplates: BudgetItemTemplate[] = [];
         stripDefaultStarterTemplates(parsed.itemTemplates).forEach((t) => {
           if (t.type === 'saving') {
-            const canonItem = resolveCanonicalSinkingFundName(t.item, t.category);
-            const normCat = normalizeSavingCategoryGroup(canonItem, t.category);
+            const isUnallocCat = (t.category || '').trim().toLowerCase() === 'unallocated cash pool';
+            const canonItem = isUnallocCat ? t.item.trim() : resolveCanonicalSinkingFundName(t.item, t.category);
+            const normCat = isUnallocCat ? 'Unallocated Cash Pool' : normalizeSavingCategoryGroup(canonItem, t.category);
             if (canonItem !== t.item || normCat !== t.category) didUpdateCategories = true;
             const existingIdx = cleanedTemplates.findIndex(
               (c) => c.type === 'saving' && c.item.trim().toLowerCase() === canonItem.toLowerCase()
@@ -433,8 +434,9 @@ export class FinanceStorageService {
     const cleanedTemplates: BudgetItemTemplate[] = [];
     stripDefaultStarterTemplates(profile.itemTemplates).forEach((t) => {
       if (t.type === 'saving') {
-        const canonItem = resolveCanonicalSinkingFundName(t.item, t.category);
-        const normCat = normalizeSavingCategoryGroup(canonItem, t.category);
+        const isUnallocCat = (t.category || '').trim().toLowerCase() === 'unallocated cash pool';
+        const canonItem = isUnallocCat ? t.item.trim() : resolveCanonicalSinkingFundName(t.item, t.category);
+        const normCat = isUnallocCat ? 'Unallocated Cash Pool' : normalizeSavingCategoryGroup(canonItem, t.category);
         const existingIdx = cleanedTemplates.findIndex(
           (c) => c.type === 'saving' && c.item.trim().toLowerCase() === canonItem.toLowerCase()
         );
@@ -712,8 +714,9 @@ export class FinanceStorageService {
 
       budget.itemTemplates.forEach((t) => {
         if (t.type === 'saving') {
-          const normItem = resolveCanonicalSinkingFundName(t.item, t.category);
-          const normCat = normalizeSavingCategoryGroup(normItem, t.category);
+          const isUnallocCat = (t.category || '').trim().toLowerCase() === 'unallocated cash pool';
+          const normItem = isUnallocCat ? t.item.trim() : resolveCanonicalSinkingFundName(t.item, t.category);
+          const normCat = isUnallocCat ? 'Unallocated Cash Pool' : normalizeSavingCategoryGroup(normItem, t.category);
           if (normItem !== t.item || normCat !== t.category) {
             didMigrate = true;
           }
@@ -745,8 +748,9 @@ export class FinanceStorageService {
     if (Array.isArray(budget.entries)) {
       budget.entries = budget.entries.map((e) => {
         if (e.type === 'saving') {
-          const normItem = resolveCanonicalSinkingFundName(e.item || e.description, e.category);
-          const normCat = normalizeSavingCategoryGroup(normItem, e.category);
+          const isUnallocCat = (e.category || '').trim().toLowerCase() === 'unallocated cash pool';
+          const normItem = isUnallocCat ? (e.item || e.description || '').trim() : resolveCanonicalSinkingFundName(e.item || e.description, e.category);
+          const normCat = isUnallocCat ? 'Unallocated Cash Pool' : normalizeSavingCategoryGroup(normItem, e.category);
           if (normItem !== e.item || normCat !== e.category) {
             didMigrate = true;
           }
@@ -1572,11 +1576,27 @@ export class FinanceStorageService {
       const targetAccount = ledger.accounts.find((a) => a.id === accountId) || ledger.accounts[0];
       const safeAccId = targetAccount ? targetAccount.id : accountId;
       const safeAccName = targetAccount ? targetAccount.name : (entry.savingAccountName || 'Savings Account');
-      const canonicalFund = resolveCanonicalSinkingFundName(
-        entry.item || entry.description,
-        entry.category
-      );
-      const entryNote = canonicalFund || entry.category || 'General Savings';
+      const rawItemTrim = (entry.item || entry.description || '').trim();
+      const isUnallocatedCategory = (entry.category || '').trim().toLowerCase() === 'unallocated cash pool';
+      const canonicalFund = isUnallocatedCategory || rawItemTrim.toLowerCase() === 'general reserves / starting capital'
+        ? 'General Reserves / Starting Capital'
+        : resolveCanonicalSinkingFundName(rawItemTrim, entry.category);
+      const customRef =
+        entry.reference && entry.reference.trim() && entry.reference.trim() !== 'Auto-filled from template'
+          ? entry.reference.trim()
+          : '';
+      const isUnallocatedFund = canonicalFund.trim().toLowerCase() === 'general reserves / starting capital';
+      const entryNote = isUnallocatedFund
+        ? rawItemTrim && rawItemTrim.toLowerCase() !== 'general reserves / starting capital'
+          ? customRef
+            ? `${rawItemTrim} — ${customRef}`
+            : rawItemTrim
+          : customRef
+          ? `General Reserves / Starting Capital — ${customRef}`
+          : 'General Reserves / Starting Capital'
+        : customRef
+        ? `${canonicalFund} — ${customRef}`
+        : canonicalFund || entry.category || 'General Savings';
 
       if (existingIndex >= 0) {
         // Update existing transaction

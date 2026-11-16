@@ -171,7 +171,10 @@ export const LoansView: React.FC<LoansViewProps> = ({
     (budget.itemTemplates || [])
       .filter((t) => t.type === 'saving')
       .forEach((tpl) => {
-        if (tpl.item.trim().toLowerCase() !== 'general reserves / starting capital') {
+        if (
+          tpl.item.trim().toLowerCase() !== 'general reserves / starting capital' &&
+          (tpl.category || '').trim().toLowerCase() !== 'unallocated cash pool'
+        ) {
           getOrCreate(tpl.item, tpl.category);
         }
       });

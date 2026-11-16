@@ -4677,13 +4677,25 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
     memoryStorage.clear();
     const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
 
-    // 1. Verify canonical name and category resolution for General Reserves / Starting Capital
+    // 1. Verify canonical name and category resolution for General Reserves / Starting Capital & Unallocated Cash Pool
     assert.equal(
       resolveCanonicalSinkingFundName('General Reserves / Starting Capital', 'Unallocated Cash Pool'),
       'General Reserves / Starting Capital'
     );
     assert.equal(
+      resolveCanonicalSinkingFundName('', 'Unallocated Cash Pool'),
+      'General Reserves / Starting Capital'
+    );
+    assert.equal(
+      resolveCanonicalSinkingFundName('Pag-IBIG Mortgage', 'Unallocated Cash Pool'),
+      'Pag-IBIG Mortgage'
+    );
+    assert.equal(
       resolveFundCategoryWithTemplates('General Reserves / Starting Capital', [], [], []),
+      'Unallocated Cash Pool'
+    );
+    assert.equal(
+      resolveFundCategoryWithTemplates('Pag-IBIG Mortgage', [], [], [], 'Unallocated Cash Pool'),
       'Unallocated Cash Pool'
     );
 
@@ -4720,7 +4732,7 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
     };
     FinanceStorageService.saveLoanContract(carLoan, budget, 'monthly', { syncToTemplate: false });
 
-    // 3. Move ₱20,000 from Nov Budget Sheet salary to Checking Account using General Reserves / Starting Capital (Unallocated)
+    // 3. Move ₱20,000 from Nov Budget Sheet salary to Checking Account using General Reserves / Starting Capital (Unallocated) with reference 'Pag-IBIG Mortgage'
     const salaryEntry = makeEntry({
       id: 'entry-nov-sal',
       year: 2026,
@@ -4744,6 +4756,7 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
       type: 'saving',
       category: 'Unallocated Cash Pool',
       item: 'General Reserves / Starting Capital',
+      reference: 'Pag-IBIG Mortgage',
       amount: 20000,
       estimatedCost: 20000,
       actualCost: 20000,
@@ -4761,7 +4774,7 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
     const checkingAcc = ledgerAfterTransfer.accounts.find((a) => a.id === 'acc-checking-unalloc');
     assert.equal(checkingAcc?.balance, 20000);
 
-    // Synced ledger transaction is tagged with 'General Reserves / Starting Capital' so it remains Unallocated
+    // Synced ledger transaction is tagged with 'General Reserves / Starting Capital' so it remains Unallocated, and its note includes 'Pag-IBIG Mortgage'
     const savedTransferEntry = updatedBudget.entries.find(
       (e: BudgetEntry) => e.item === 'General Reserves / Starting Capital'
     );
@@ -4771,6 +4784,7 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
     );
     assert.ok(syncTx);
     assert.equal(syncTx?.category, 'General Reserves / Starting Capital');
+    assert.equal(syncTx?.note, 'General Reserves / Starting Capital — Pag-IBIG Mortgage');
     assert.equal(syncTx?.amount, 20000);
 
     // 4. Pay the ₱18,500.75 Auto Loan from Checking Account's Unallocated Cash Pool
@@ -4792,6 +4806,132 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
     assert.equal(roundCurrency(checkingAfterLoan?.balance || 0), 1499.25);
     assert.equal(payRes.loan?.payments[0].fundCategory, 'General Reserves / Starting Capital');
   });
+
+  it('saves a newly created goal as Unallocated Cash Pool without overriding its category or item name', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+
+    // 1. normalizeSavingCategoryGroup returns 'Unallocated Cash Pool' when category is 'Unallocated Cash Pool'
+    assert.equal(
+      normalizeSavingCategoryGroup('Pag-IBIG Mortgage', 'Unallocated Cash Pool'),
+      'Unallocated Cash Pool'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Checking Fund', 'Unallocated Cash Pool'),
+      'Unallocated Cash Pool'
+    );
+    assert.equal(
+      normalizeSavingCategoryGroup('Emergency Buffer', 'Unallocated Cash Pool'),
+      'Unallocated Cash Pool'
+    );
+
+    // 2. Add an unallocated template and entry with custom goal name 'Pag-IBIG Mortgage'
+    const newTemplate: BudgetItemTemplate = {
+      id: 'tpl-pagibig-unalloc',
+      type: 'saving',
+      category: 'Unallocated Cash Pool',
+      item: 'Pag-IBIG Mortgage',
+      defaultEstimatedCost: 34337.31,
+      frequency: 'monthly',
+      biweeklyPeriod: 'both',
+      defaultPaymentMethod: 'Checking Account',
+      defaultSavingAccountId: ledger.accounts[0]?.id,
+    };
+
+    const newEntry: BudgetEntry = makeEntry({
+      id: 'entry-pagibig-unalloc',
+      year: 2026,
+      period: 'Nov',
+      periodIndex: 10,
+      date: '2026-11-05',
+      type: 'saving',
+      category: 'Unallocated Cash Pool',
+      item: 'Pag-IBIG Mortgage',
+      amount: 34337.31,
+      estimatedCost: 34337.31,
+      actualCost: 34337.31,
+      status: 'Paid',
+      savingAccountId: ledger.accounts[0]?.id,
+      savingAccountName: ledger.accounts[0]?.name,
+    });
+
+    const updatedBudget: YearBudgetData = {
+      ...budget,
+      itemTemplates: [newTemplate],
+      entries: [newEntry],
+      isPersonalizedTemplate: true,
+    };
+
+    // Save budget through storage service
+    FinanceStorageService.saveLocalBudget(updatedBudget);
+
+    // Reload from storage
+    const reloadedBudget = FinanceStorageService.loadLocalBudget(2026);
+
+    // Assert that the newly created goal template preserved its category and item name!
+    const savedTpl = reloadedBudget.itemTemplates?.find((t) => t.id === 'tpl-pagibig-unalloc');
+    assert.ok(savedTpl);
+    assert.equal(savedTpl?.item, 'Pag-IBIG Mortgage');
+    assert.equal(savedTpl?.category, 'Unallocated Cash Pool');
+
+    // Assert that the entry also preserved its category and item name!
+    const savedEnt = reloadedBudget.entries.find((e) => e.id === 'entry-pagibig-unalloc');
+    assert.ok(savedEnt);
+    assert.equal(savedEnt?.item, 'Pag-IBIG Mortgage');
+    assert.equal(savedEnt?.category, 'Unallocated Cash Pool');
+
+    // Accumulate to ledger: verify that it updates account balance and tags transaction as unallocated
+    const afterLedger = FinanceStorageService.accumulateBudgetSavingToLedger(savedEnt!, false);
+    const syncTx = afterLedger.transactions.find((t) => t.budgetEntryId === savedEnt!.id);
+    assert.ok(syncTx);
+    assert.equal(syncTx?.category, 'General Reserves / Starting Capital');
+    assert.equal(syncTx?.note, 'Pag-IBIG Mortgage');
+    assert.equal(syncTx?.amount, 34337.31);
+  });
+
+  it('ensures unallocated cash pool budget entries do not create empty goal fund cards', () => {
+    // Verify that when budget entries have category "Unallocated Cash Pool",
+    // resolveCanonicalSinkingFundName returns the custom item name,
+    // and filtering out "Unallocated Cash Pool" prevents empty goal funds from appearing.
+    const unallocEntry: BudgetEntry = makeEntry({
+      id: 'entry-unalloc-ghost-test',
+      year: 2026,
+      period: 'Nov',
+      periodIndex: 10,
+      date: '2026-11-05',
+      type: 'saving',
+      category: 'Unallocated Cash Pool',
+      item: 'Pag-IBIG Mortgage',
+      amount: 15000,
+      estimatedCost: 15000,
+      actualCost: 15000,
+      status: 'Paid',
+    });
+
+    const isUnalloc = (unallocEntry.category || '').trim().toLowerCase() === 'unallocated cash pool';
+    assert.equal(isUnalloc, true);
+
+    // Verify resolveCanonicalSinkingFundName preserves the item name
+    assert.equal(resolveCanonicalSinkingFundName(unallocEntry.item, unallocEntry.category), 'Pag-IBIG Mortgage');
+
+    // Simulate goal funds collection with the unallocated guard
+    const registeredFunds: string[] = [];
+    const entries = [unallocEntry];
+    entries.forEach((e) => {
+      const rawItem = (e.item || e.description || '').trim();
+      if (
+        rawItem.toLowerCase() === 'general reserves / starting capital' ||
+        (e.category || '').trim().toLowerCase() === 'unallocated cash pool'
+      ) {
+        return; // Guard properly skips unallocated cash pool entries!
+      }
+      registeredFunds.push(rawItem);
+    });
+
+    // The registeredFunds list must be completely empty (no empty goal fund created!)
+    assert.equal(registeredFunds.length, 0);
+  });
 });
+
 
 

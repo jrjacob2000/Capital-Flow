@@ -104,6 +104,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
   ).filter(Boolean);
   const savingCats = Array.from(
     new Set([
+      'Unallocated Cash Pool',
       ...(budget?.customCategories?.saving && budget.customCategories.saving.length > 0
         ? budget.customCategories.saving
         : SAVING_CATEGORIES),
@@ -135,6 +136,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       ...(budget?.itemTemplates || []).filter((t) => t.type === 'saving'),
     ];
     allSavingTemplates.forEach((t) => {
+      if ((t.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
       addFundName(resolveCanonicalSinkingFundName(t.item, t.category, basePool));
     });
 
@@ -142,6 +144,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     (budget?.entries || [])
       .filter((e) => e.type === 'saving')
       .forEach((e) => {
+        if ((e.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
         addFundName(
           resolveCanonicalSinkingFundName(e.item || e.description, e.category, combinedPool)
         );
@@ -1651,6 +1654,20 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         <option value="General Reserves / Starting Capital">
                           General Reserves / Starting Capital (Unallocated)
                         </option>
+                        {Array.from(
+                          new Set([
+                            ...templates
+                              .filter((t) => t.type === 'saving' && (t.category || '').toLowerCase() === 'unallocated cash pool' && t.item.toLowerCase() !== 'general reserves / starting capital')
+                              .map((t) => t.item),
+                            ...(budget?.entries || [])
+                              .filter((e) => e.type === 'saving' && (e.category || '').toLowerCase() === 'unallocated cash pool' && (e.item || '').toLowerCase() !== 'general reserves / starting capital')
+                              .map((e) => e.item || e.description || ''),
+                          ])
+                        ).filter(Boolean).map((fundName) => (
+                          <option key={fundName} value={fundName}>
+                            {fundName} (Unallocated)
+                          </option>
+                        ))}
                       </optgroup>
                       {(() => {
                         const allFunds = Array.from(
@@ -1742,7 +1759,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                           setTplCategory('');
                         } else {
                           setTplCategory(val);
-                          if (tplType === 'saving' && !isCreatingCustomTplFund && val.trim()) {
+                          if (tplType === 'saving' && !isCreatingCustomTplFund && val.trim() && val.trim().toLowerCase() !== 'unallocated cash pool') {
                             const currentCat = tplItem ? getTplFundCategory(tplItem) : '';
                             if (currentCat.toLowerCase() !== val.trim().toLowerCase()) {
                               const matchingFunds = existingSinkingFunds.filter(

@@ -239,6 +239,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       budget.itemTemplates
         .filter((t) => t.type === 'saving')
         .forEach((tpl, idx) => {
+          if (
+            tpl.item.trim().toLowerCase() === 'general reserves / starting capital' ||
+            (tpl.category || '').trim().toLowerCase() === 'unallocated cash pool'
+          ) {
+            return;
+          }
           const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
           const annualMultiplier =
             tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both') ? 24 : 12;
@@ -254,11 +260,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         .filter((e) => e.type === 'saving')
         .forEach((entry) => {
           const rawItem = (entry.item || entry.description || '').trim();
-          if (rawItem.toLowerCase() === 'general reserves / starting capital') {
+          if (
+            rawItem.toLowerCase() === 'general reserves / starting capital' ||
+            (entry.category || '').trim().toLowerCase() === 'unallocated cash pool'
+          ) {
             return;
           }
           const fundName = resolveCanonicalSinkingFundName(rawItem, entry.category, knownCanonicalPool);
-          if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+          if (
+            fundName.trim().toLowerCase() === 'general reserves / starting capital' ||
+            fundName.trim().toLowerCase() === 'unallocated cash pool'
+          ) {
             return;
           }
           getOrCreateFund(fundName, entry.category || 'General Savings');
@@ -395,6 +407,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       plannedAnnualTarget?: number;
     }[] = [];
     fundMap.forEach((f) => {
+      if (
+        f.category?.trim().toLowerCase() === 'unallocated cash pool' ||
+        f.name.trim().toLowerCase() === 'unallocated cash pool' ||
+        f.name.trim().toLowerCase() === 'general reserves / starting capital'
+      ) {
+        return;
+      }
       const net = Math.max(0, roundCurrency(f.inflow - f.outflow));
       result.push({
         id: f.id,

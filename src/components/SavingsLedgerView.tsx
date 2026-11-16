@@ -411,6 +411,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       budget.itemTemplates
         .filter((t) => t.type === 'saving')
         .forEach((tpl, idx) => {
+          if (
+            tpl.item.trim().toLowerCase() === 'general reserves / starting capital' ||
+            (tpl.category || '').trim().toLowerCase() === 'unallocated cash pool'
+          ) {
+            return;
+          }
           const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
           const annualMultiplier =
             tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both') ? 24 : 12;
@@ -427,7 +433,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         .filter((e) => e.type === 'saving')
         .forEach((entry) => {
           const rawItem = (entry.item || entry.description || '').trim();
-          if (rawItem.toLowerCase() === 'general reserves / starting capital') {
+          if (
+            rawItem.toLowerCase() === 'general reserves / starting capital' ||
+            (entry.category || '').trim().toLowerCase() === 'unallocated cash pool'
+          ) {
             return;
           }
           const fundName = resolveCanonicalSinkingFundName(
@@ -435,7 +444,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
             entry.category,
             knownCanonicalPool
           );
-          if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
+          if (
+            fundName.trim().toLowerCase() === 'general reserves / starting capital' ||
+            fundName.trim().toLowerCase() === 'unallocated cash pool'
+          ) {
             return;
           }
           const fund = getOrCreateFund(fundName, entry.category || 'General Savings');
@@ -616,6 +628,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     let categorizedNetSum = 0;
 
     fundMap.forEach((f) => {
+      if (
+        f.category?.trim().toLowerCase() === 'unallocated cash pool' ||
+        f.name.trim().toLowerCase() === 'unallocated cash pool' ||
+        f.name.trim().toLowerCase() === 'general reserves / starting capital'
+      ) {
+        return;
+      }
       const net = Math.max(0, Math.round((f.inflow - f.outflow) * 100) / 100);
       categorizedNetSum = Math.round((categorizedNetSum + net) * 100) / 100;
 
@@ -753,12 +772,16 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       .forEach((f) => addFundName(f.name));
     (budget?.itemTemplates || [])
       .filter((t) => t.type === 'saving')
-      .forEach((t) => addFundName(resolveCanonicalSinkingFundName(t.item, t.category)));
+      .forEach((t) => {
+        if ((t.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
+        addFundName(resolveCanonicalSinkingFundName(t.item, t.category));
+      });
     (budget?.entries || [])
       .filter((e) => e.type === 'saving')
-      .forEach((e) =>
-        addFundName(resolveCanonicalSinkingFundName(e.item || e.description, e.category))
-      );
+      .forEach((e) => {
+        if ((e.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
+        addFundName(resolveCanonicalSinkingFundName(e.item || e.description, e.category));
+      });
     (ledger.transactions || []).forEach((tx) => {
       if (tx.category) addFundName(tx.category);
       if (tx.toCategory) addFundName(tx.toCategory);
