@@ -1979,9 +1979,21 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               ) : (
                                 <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                               )}
-                              <span className="font-semibold text-xs text-slate-900 dark:text-white leading-snug line-clamp-2 break-words">
-                                {inc.item}
-                              </span>
+                              <div className="min-w-0 flex-1">
+                                <span className="font-semibold text-xs text-slate-900 dark:text-white leading-snug line-clamp-2 break-words">
+                                  {inc.item}
+                                </span>
+                                {inc.reference &&
+                                  inc.reference.trim() &&
+                                  inc.reference.trim() !== 'Auto-filled from template' && (
+                                    <div
+                                      className="text-[10px] text-slate-500 dark:text-slate-400 italic truncate leading-tight mt-0.5"
+                                      title={inc.reference.trim()}
+                                    >
+                                      {inc.reference.trim()}
+                                    </div>
+                                  )}
+                              </div>
                             </div>
                           </div>
 
@@ -2280,6 +2292,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               {inc.item}
                             </span>
                           </div>
+                          {inc.reference &&
+                            inc.reference.trim() &&
+                            inc.reference.trim() !== 'Auto-filled from template' && (
+                              <div
+                                className="text-[10px] md:text-[11px] text-slate-500 dark:text-slate-400 italic truncate leading-tight mt-0.5"
+                                title={inc.reference.trim()}
+                              >
+                                {inc.reference.trim()}
+                              </div>
+                            )}
                           <div className="text-[10px] md:text-xs text-slate-400 dark:text-slate-500 truncate leading-tight">
                             {inc.category}
                           </div>
@@ -2778,7 +2800,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           >
                             <div className="min-w-0 flex-1">
                               {/* Line 1: Subtle Settled Icon or Chevron + Full Item Title (up to 2 lines so mobile names are never cut off) */}
-                              <div className="flex items-start gap-1.5">
+                              <div className="flex items-start gap-1.5 min-w-0 flex-1">
                                 {isPaid ? (
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
                                 ) : isExpanded ? (
@@ -2786,20 +2808,33 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 ) : (
                                   <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                                 )}
-                                <span
-                                  className={`text-xs leading-snug line-clamp-2 break-words ${
-                                    isPaid
-                                      ? 'font-semibold text-slate-900 dark:text-white'
-                                      : 'font-bold text-slate-900 dark:text-white'
-                                  }`}
-                                >
-                                  {exp.item.trim().toLowerCase() === 'general reserves / starting capital' &&
-                                  exp.reference &&
-                                  exp.reference.trim() &&
-                                  exp.reference.trim() !== 'Auto-filled from template'
-                                    ? `General Reserves — ${exp.reference.trim()}`
-                                    : exp.item}
-                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <span
+                                    className={`text-xs leading-snug line-clamp-2 break-words ${
+                                      isPaid
+                                        ? 'font-semibold text-slate-900 dark:text-white'
+                                        : 'font-bold text-slate-900 dark:text-white'
+                                    }`}
+                                  >
+                                    {exp.item.trim().toLowerCase() === 'general reserves / starting capital' &&
+                                    exp.reference &&
+                                    exp.reference.trim() &&
+                                    exp.reference.trim() !== 'Auto-filled from template'
+                                      ? `General Reserves — ${exp.reference.trim()}`
+                                      : exp.item}
+                                  </span>
+                                  {exp.reference &&
+                                    exp.reference.trim() &&
+                                    exp.reference.trim() !== 'Auto-filled from template' &&
+                                    exp.item.trim().toLowerCase() !== 'general reserves / starting capital' && (
+                                      <div
+                                        className="text-[10px] text-slate-500 dark:text-slate-400 italic truncate leading-tight mt-0.5"
+                                        title={exp.reference.trim()}
+                                      >
+                                        {exp.reference.trim()}
+                                      </div>
+                                    )}
+                                </div>
                               </div>
                             </div>
 
@@ -3273,6 +3308,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 : exp.item}
                             </span>
                           </div>
+                          {exp.reference &&
+                            exp.reference.trim() &&
+                            exp.reference.trim() !== 'Auto-filled from template' &&
+                            exp.item.trim().toLowerCase() !== 'general reserves / starting capital' && (
+                              <div
+                                className="text-[10px] md:text-[11px] text-slate-500 dark:text-slate-400 italic truncate leading-tight mt-0.5"
+                                title={exp.reference.trim()}
+                              >
+                                {exp.reference.trim()}
+                              </div>
+                            )}
                           <div
                             className={`text-[10px] md:text-xs truncate leading-tight ${
                               isSaving

@@ -1642,8 +1642,17 @@ export const LoansView: React.FC<LoansViewProps> = ({
                   <div>
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
-                        Deduct from Bank Account (Optional)
+                        Deduct from Bank Account (Pre-Funded Envelope)
                       </label>
+                      {payDeductAccountId ? (
+                        <span className="text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                          Pre-Funded Deduction
+                        </span>
+                      ) : payRecordInBudget ? (
+                        <span className="text-[9px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                          Budget Expense Active
+                        </span>
+                      ) : null}
                     </div>
                     <select
                       value={payDeductAccountId}
@@ -1651,7 +1660,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
                         const nextAccId = e.target.value;
                         setPayDeductAccountId(nextAccId);
                         if (nextAccId) {
-                          // Automatically uncheck Budget Sheet Expense so we don't double-deduct from Period Salary
+                          // Automatically uncheck and lock Budget Sheet Expense so we don't double-deduct from Period Salary
                           setPayRecordInBudget(false);
                           // Auto-select the top Goal Fund held in this Bank Account (or General Reserves)
                           const topFundInBank = goalFundsBreakdown.namedFunds
@@ -1671,7 +1680,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       }}
                       className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      <option value="">Do not deduct from a Bank Account (Pay via Budget Sheet)</option>
+                      <option value="">Do not deduct from a Bank Account (Pay via Budget Sheet Expense)</option>
                       {ledger.accounts.map((acc) => (
                         <option key={acc.id} value={acc.id}>
                           {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
@@ -1793,24 +1802,44 @@ export const LoansView: React.FC<LoansViewProps> = ({
               )}
 
               {/* Optional Sync to Current Budget */}
-              <label className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 cursor-pointer">
+              <label
+                className={`flex items-start gap-2.5 p-2.5 sm:p-3 rounded-xl border transition-all ${
+                  paymentModalLoan.direction === 'borrowed' && payDeductAccountId
+                    ? 'bg-slate-100/70 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 cursor-not-allowed opacity-75'
+                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200/70 dark:border-slate-700/70 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600'
+                }`}
+              >
                 <input
                   type="checkbox"
                   checked={payRecordInBudget}
-                  onChange={(e) => setPayRecordInBudget(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  disabled={paymentModalLoan.direction === 'borrowed' && Boolean(payDeductAccountId)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setPayRecordInBudget(checked);
+                    if (checked && paymentModalLoan.direction === 'borrowed') {
+                      setPayDeductAccountId('');
+                    }
+                  }}
+                  className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
-                <div className="text-[11px]">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 block">
-                    {paymentModalLoan.direction === 'borrowed'
-                      ? `Record in ${budget.year} Budget (Expense)`
-                      : `Record in ${budget.year} Budget (Income)`}
-                  </span>
+                <div className="text-[11px] min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      {paymentModalLoan.direction === 'borrowed'
+                        ? `Record in ${budget.year} Budget (Expense Sheet)`
+                        : `Record in ${budget.year} Budget (Income)`}
+                    </span>
+                    {paymentModalLoan.direction === 'borrowed' && payDeductAccountId && (
+                      <span className="text-[9px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/80 px-1.5 py-0.2 rounded border border-amber-300 dark:border-amber-700">
+                        Locked Off
+                      </span>
+                    )}
+                  </div>
                   <span className="text-slate-500 dark:text-slate-400 text-[10px] leading-snug block mt-0.5">
                     {paymentModalLoan.direction === 'borrowed'
-                      ? payDeductAccountId && !payRecordInBudget
-                        ? 'Unchecked so it will not deduct a second time from your Period Salary (since this payment is deducted from your Bank Account / Goal Fund above).'
-                        : 'Logs a Paid Expense (Loans) entry in your Budget for this period.'
+                      ? payDeductAccountId
+                        ? 'Disabled to prevent double deduction. This payment is already deducted from your Bank Account / Goal Fund above.'
+                        : 'Logs a Paid Expense (Loans) entry in your Budget for this period, deducting from current salary.'
                       : 'Logs a Paid Income entry in your Budget for this period (same cashflow pool as your salary).'}
                   </span>
                 </div>

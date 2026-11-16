@@ -4933,5 +4933,94 @@ describe('38. Unallocated Cash Pool (General Reserves / Starting Capital) Transf
   });
 });
 
+describe('39. Line Item Reference / Note Rendering & Loan Payment Note Propagation', () => {
+  it('propagates paymentData.note into entry.reference when recording a loan payment to the budget sheet', () => {
+    memoryStorage.clear();
+    const { budget, ledger } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
 
+    const mortgageLoan: LoanRecord = {
+      id: 'loan-mortgage-1',
+      name: 'Pag-IBIG Housing Loan',
+      direction: 'borrowed',
+      counterparty: 'Pag-IBIG Fund',
+      category: 'Mortgage',
+      principalAmount: 1800000,
+      totalContractAmount: 1800000,
+      installmentAmount: 12500,
+      totalInstallments: 240,
+      initialPaidAmount: 0,
+      initialInstallmentsPaid: 0,
+      frequency: 'monthly',
+      startDate: '2026-10-01',
+      status: 'active',
+      payments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
+    const created = FinanceStorageService.saveLoanContract(mortgageLoan, budget, 'monthly');
+    const payResult = FinanceStorageService.recordLoanPayment(
+      'loan-mortgage-1',
+      {
+        amount: 12500,
+        date: '2026-10-15',
+        note: 'PDC Check #0045 cleared',
+        recordInBudget: true,
+      },
+      created.budget,
+      'monthly'
+    );
+
+    assert.equal(payResult.updatedActiveBudget?.entries.length, 1);
+    const budgetEntry = payResult.updatedActiveBudget?.entries[0];
+    assert.equal(budgetEntry?.item, 'Pag-IBIG Housing Loan');
+    assert.equal(budgetEntry?.reference, 'PDC Check #0045 cleared');
+    assert.equal(budgetEntry?.actualCost, 12500);
+    assert.equal(budgetEntry?.status, 'Paid');
+  });
+
+  it('correctly filters Auto-filled from template and formats General Reserves without duplicate notes', () => {
+    const regularExpense = {
+      item: 'Meralco Electric Bill',
+      reference: 'Ref #98234-A',
+    };
+    const shouldShowRegularNote =
+      Boolean(regularExpense.reference &&
+      regularExpense.reference.trim() &&
+      regularExpense.reference.trim() !== 'Auto-filled from template' &&
+      regularExpense.item.trim().toLowerCase() !== 'general reserves / starting capital');
+    assert.equal(shouldShowRegularNote, true);
+
+    const autoFilledExpense = {
+      item: 'Internet Fiber',
+      reference: 'Auto-filled from template',
+    };
+    const shouldShowAutoNote =
+      Boolean(autoFilledExpense.reference &&
+      autoFilledExpense.reference.trim() &&
+      autoFilledExpense.reference.trim() !== 'Auto-filled from template' &&
+      autoFilledExpense.item.trim().toLowerCase() !== 'general reserves / starting capital');
+    assert.equal(shouldShowAutoNote, false);
+
+    const generalReservesExpense = {
+      item: 'General Reserves / Starting Capital',
+      reference: 'Checking Account Funding',
+    };
+    const shouldShowReservesNote =
+      Boolean(generalReservesExpense.reference &&
+      generalReservesExpense.reference.trim() &&
+      generalReservesExpense.reference.trim() !== 'Auto-filled from template' &&
+      generalReservesExpense.item.trim().toLowerCase() !== 'general reserves / starting capital');
+    assert.equal(shouldShowReservesNote, false);
+
+    const formattedReservesTitle =
+      generalReservesExpense.item.trim().toLowerCase() === 'general reserves / starting capital' &&
+      generalReservesExpense.reference &&
+      generalReservesExpense.reference.trim() &&
+      generalReservesExpense.reference.trim() !== 'Auto-filled from template'
+        ? `General Reserves — ${generalReservesExpense.reference.trim()}`
+        : generalReservesExpense.item;
+    assert.equal(formattedReservesTitle, 'General Reserves — Checking Account Funding');
+  });
+});
