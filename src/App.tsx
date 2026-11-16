@@ -183,6 +183,17 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges, driveStatus.isSignedIn]);
 
+  // Dismiss mobile virtual keyboard and blur active inputs on form submit
+  useEffect(() => {
+    const handleGlobalSubmit = () => {
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    };
+    document.addEventListener('submit', handleGlobalSubmit, true);
+    return () => document.removeEventListener('submit', handleGlobalSubmit, true);
+  }, []);
+
   // Create New Year Modal State
   const [isNewYearModalOpen, setIsNewYearModalOpen] = useState<boolean>(false);
   const [newYearInput, setNewYearInput] = useState<string>('');

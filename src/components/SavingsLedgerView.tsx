@@ -36,6 +36,8 @@ import {
   MONTH_NAMES,
 } from '../services/sampleData';
 import { formatCurrency } from '../utils/budgetCalculations';
+import { AccountSelectDropdown } from './AccountSelectDropdown';
+import { CustomSelect } from './CustomSelect';
 
 const ACCOUNT_COLORS = [
   '#10b981', // Emerald
@@ -1902,24 +1904,24 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 />
               </div>
 
-              <select
+              <AccountSelectDropdown
                 value={selectedAccountFilter}
-                onChange={(e) => setSelectedAccountFilter(e.target.value)}
-                className="min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
-              >
-                <option value="all">All Bank Accounts</option>
-                {ledger.accounts.map((acc) => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedAccountFilter}
+                accounts={ledger.accounts}
+                currencySymbol={currencySymbol}
+                showBalance={false}
+                variant="white"
+                emptyOption={{
+                  value: 'all',
+                  label: 'All Bank Accounts',
+                }}
+              />
 
               <div className="flex items-center gap-2">
-                <select
+                <CustomSelect
                   value={selectedFundFilter}
                   onChange={(e) => setSelectedFundFilter(e.target.value)}
-                  className="flex-1 min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 text-xs outline-none"
+                  className="flex-1 min-w-0 h-8 sm:h-9 px-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium outline-none"
                 >
                   <option value="all">All Goal Funds</option>
                   {categoryFunds.map((f) => (
@@ -1927,7 +1929,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       {f.name}
                     </option>
                   ))}
-                </select>
+                </CustomSelect>
 
                 {(selectedFundFilter !== 'all' ||
                   selectedAccountFilter !== 'all' ||
@@ -2403,17 +2405,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         <span className="hidden sm:inline">Destination Bank Account</span>
                       </label>
                     </div>
-                    <select
+                    <AccountSelectDropdown
                       value={depositAccountId}
-                      onChange={(e) => setDepositAccountId(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                    >
-                      {ledger.accounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setDepositAccountId}
+                      accounts={ledger.accounts}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                    />
                   </div>
 
                   <div className="min-w-0">
@@ -2439,7 +2437,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       Goal Fund
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={depositCategory}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -2458,7 +2456,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         }
                       }
                     }}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                   >
                     {depositType === 'interest_yield' ? (
                       <option value="">Compounding Yields &amp; Dividend (Default)</option>
@@ -2496,7 +2494,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       ));
                     })()}
                     <option value="__custom__">+ New Goal Fund...</option>
-                  </select>
+                  </CustomSelect>
                   {depositCategory === '__custom__' && (
                     <input
                       type="text"
@@ -2566,21 +2564,16 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Bank Account</label>
                     </div>
-                    <select
+                    <AccountSelectDropdown
                       value={withdrawAccountId}
-                      onChange={(e) => {
-                        const nextAccId = e.target.value;
+                      onChange={(nextAccId) => {
                         setWithdrawAccountId(nextAccId);
                         setWithdrawCategory(getDefaultFundForAccount(nextAccId));
                       }}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                    >
-                      {ledger.accounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                        </option>
-                      ))}
-                    </select>
+                      accounts={ledger.accounts}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                    />
                   </div>
 
                   <div className="min-w-0">
@@ -2680,10 +2673,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       );
 
                       return (
-                        <select
+                        <CustomSelect
                           value={withdrawCategory}
                           onChange={(e) => setWithdrawCategory(e.target.value)}
-                          className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                          className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                         >
                           {(fundsInSelectedBank.length > 0 || unallocInSelectedBank > 0) && (
                             <optgroup label={`Funds Held in ${accLabel}`}>
@@ -2717,7 +2710,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                               </option>
                             ))}
                           </optgroup>
-                        </select>
+                        </CustomSelect>
                       );
                     })()}
                   </div>
@@ -2860,43 +2853,32 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">From Bank Account</label>
                     </div>
-                    <select
+                    <AccountSelectDropdown
                       value={transferFromAccountId}
-                      onChange={(e) => {
-                        const newFrom = e.target.value;
+                      onChange={(newFrom) => {
                         setTransferFromAccountId(newFrom);
                         if (newFrom === transferToAccountId) {
                           const other = ledger.accounts.find((a) => a.id !== newFrom);
                           if (other) setTransferToAccountId(other.id);
                         }
                       }}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                    >
-                      {ledger.accounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                        </option>
-                      ))}
-                    </select>
+                      accounts={ledger.accounts}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                    />
                   </div>
 
                   <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
                       <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">To Bank Account</label>
                     </div>
-                    <select
+                    <AccountSelectDropdown
                       value={transferToAccountId}
-                      onChange={(e) => setTransferToAccountId(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                    >
-                      {ledger.accounts
-                        .filter((acc) => acc.id !== transferFromAccountId)
-                        .map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                          </option>
-                        ))}
-                    </select>
+                      onChange={setTransferToAccountId}
+                      accounts={ledger.accounts.filter((acc) => acc.id !== transferFromAccountId)}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                    />
                   </div>
                 </div>
 
@@ -3128,17 +3110,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       Category
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={accType}
                     onChange={(e) => setAccType(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                   >
                     {ACCOUNT_CATEGORIES.map((cat) => (
                       <option key={cat} value={cat}>
                         {cat}
                       </option>
                     ))}
-                  </select>
+                  </CustomSelect>
                 </div>
 
                 <div className="min-w-0">
@@ -3274,17 +3256,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       Category
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={editType}
                     onChange={(e) => setEditType(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                   >
                     {Array.from(new Set([...ACCOUNT_CATEGORIES, ...(editType ? [editType] : [])])).map((cat) => (
                       <option key={cat} value={cat}>
                         {cat}
                       </option>
                     ))}
-                  </select>
+                  </CustomSelect>
                 </div>
 
                 <div className="min-w-0">
@@ -3422,19 +3404,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
                   Transfer Balance &amp; History To:
                 </label>
-                <select
+                <AccountSelectDropdown
                   value={reassignAccountId}
-                  onChange={(e) => setReassignAccountId(e.target.value)}
-                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                >
-                  {ledger.accounts
-                    .filter((a) => a.id !== deletingAccount.id)
-                    .map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                      </option>
-                    ))}
-                </select>
+                  onChange={setReassignAccountId}
+                  accounts={ledger.accounts.filter((a) => a.id !== deletingAccount.id)}
+                  currencySymbol={currencySymbol}
+                  showBalance={true}
+                />
               </div>
 
               <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
@@ -3493,7 +3469,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         From Goal Fund (Source)
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={reallocateFromCategory}
                       onChange={(e) => {
                         const nextFrom = e.target.value;
@@ -3521,7 +3497,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           }
                         }
                       }}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                     >
                       {!categoryFunds.some((f) => f.id === 'fund-general-unallocated') && (
                         <option value="General Reserves / Starting Capital">
@@ -3553,7 +3529,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                             {reallocateFromCategory} ({currencySymbol}0)
                           </option>
                         )}
-                    </select>
+                    </CustomSelect>
                   </div>
 
                   <div className="flex justify-center sm:pb-0.5">
@@ -3575,10 +3551,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         To Goal Fund (Target)
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={reallocateToCategory}
                       onChange={(e) => setReallocateToCategory(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                     >
                       <option value="">-- Select Target --</option>
                       {reallocateFromCategory !== 'General Reserves / Starting Capital' &&
@@ -3606,7 +3582,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           </option>
                         ))}
                       <option value="__custom__">+ New Goal Fund...</option>
-                    </select>
+                    </CustomSelect>
                   </div>
                 </div>
               </div>
@@ -3618,7 +3594,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   placeholder="Enter new fund name (e.g. House Downpayment)"
                   value={reallocateCustomCategory}
                   onChange={(e) => setReallocateCustomCategory(e.target.value)}
-                  className="w-full h-8 sm:h-9 px-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                 />
               )}
 
@@ -3628,10 +3604,9 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     Bank Account Holding This Fund
                   </label>
                 </div>
-                <select
+                <AccountSelectDropdown
                   value={reallocateAccountId}
-                  onChange={(e) => {
-                    const nextAccId = e.target.value;
+                  onChange={(nextAccId) => {
                     setReallocateAccountId(nextAccId);
                     if (
                       nextAccId &&
@@ -3643,10 +3618,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       }
                     }
                   }}
-                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                >
-                  <option value="">All / Unspecified Account</option>
-                  {ledger.accounts.map((acc) => {
+                  accounts={ledger.accounts}
+                  currencySymbol={currencySymbol}
+                  emptyOption={{
+                    value: '',
+                    label: 'All / Unspecified Account',
+                  }}
+                  getAccountLabelSuffix={(acc) => {
                     const isFromUnallocated =
                       reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
                     const sourceFundObj = isFromUnallocated
@@ -3654,14 +3632,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       : categoryFunds.find((f) => f.name === reallocateFromCategory);
                     const heldInAcc =
                       sourceFundObj?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
-                    return (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)}
-                        {` · In ${isFromUnallocated ? 'Unallocated' : reallocateFromCategory}: ${currencySymbol}${formatNumber(heldInAcc)}`})
-                      </option>
-                    );
-                  })}
-                </select>
+                    return ` (${currencySymbol}${formatNumber(acc.balance)} · In ${
+                      isFromUnallocated ? 'Unallocated' : reallocateFromCategory
+                    }: ${currencySymbol}${formatNumber(heldInAcc)})`;
+                  }}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
@@ -3835,17 +3810,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       Bank Account
                     </label>
                   </div>
-                  <select
+                  <AccountSelectDropdown
                     value={editTxAccountId}
-                    onChange={(e) => setEditTxAccountId(e.target.value)}
-                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
-                  >
-                    {ledger.accounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setEditTxAccountId}
+                    accounts={ledger.accounts}
+                    currencySymbol={currencySymbol}
+                    showBalance={true}
+                  />
                 </div>
                 {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
                   <div>
@@ -3854,10 +3825,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         Goal Fund
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={editTxCategory}
                       onChange={(e) => setEditTxCategory(e.target.value)}
-                      className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                      className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                     >
                       <option value="">General Reserves / Starting Capital (Unallocated)</option>
                       {Array.from(
@@ -3871,7 +3842,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         </option>
                       ))}
                       <option value="__custom__">+ New Goal Fund...</option>
-                    </select>
+                    </CustomSelect>
                   {editTxCategory === '__custom__' && (
                     <input
                       type="text"
@@ -4129,7 +4100,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     Merge Into Existing Fund (Optional)
                   </label>
                 </div>
-                <select
+                <CustomSelect
                   value={editFundMergeTarget}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -4148,7 +4119,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       setEditFundCategory(normalizeSavingCategoryGroup(editingFund.name, editingFund.category));
                     }
                   }}
-                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                  className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                 >
                   <option value="">-- Keep Separate (Rename Only) --</option>
                   {categoryFunds
@@ -4169,7 +4140,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                         Merge into &quot;{cat}&quot; ({currencySymbol}0)
                       </option>
                     ))}
-                </select>
+                </CustomSelect>
               </div>
 
               {!editFundMergeTarget && (
@@ -4184,7 +4155,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     required
                     value={editFundName}
                     onChange={(e) => setEditFundName(e.target.value)}
-                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                   />
                 </div>
               )}
@@ -4196,10 +4167,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       Category Group
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={editFundCategory}
                     onChange={(e) => setEditFundCategory(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                   >
                     {Array.from(
                       new Set([
@@ -4214,7 +4185,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           {cat}
                         </option>
                       ))}
-                  </select>
+                  </CustomSelect>
                 </div>
 
                 <div className="min-w-0">
@@ -4230,7 +4201,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     value={editFundMonthlyTarget}
                     onChange={(e) => setEditFundMonthlyTarget(e.target.value)}
                     placeholder="0"
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-slate-900 dark:text-white outline-none"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono tabular-nums text-[11px] sm:text-xs text-slate-900 dark:text-white outline-none"
                   />
                 </div>
               </div>
@@ -4286,10 +4257,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
                     Reassign Balance &amp; Entries To:
                   </label>
-                  <select
+                  <CustomSelect
                     value={deleteFundReassignTo}
                     onChange={(e) => setDeleteFundReassignTo(e.target.value)}
-                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none"
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                   >
                     <option value="General Reserves / Starting Capital">
                       General Reserves / Starting Capital (Unallocated)
@@ -4301,7 +4272,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                           {f.name} ({currencySymbol}{formatNumber(f.currentBalance)})
                         </option>
                       ))}
-                  </select>
+                  </CustomSelect>
                 </div>
               )}
 

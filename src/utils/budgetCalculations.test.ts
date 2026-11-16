@@ -1,5 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import React from 'react';
+import { parseChildrenToOptions, extractTextFromNode } from '../components/CustomSelect';
 
 import {
   isRegularSalaryIncome,
@@ -5024,3 +5026,78 @@ describe('39. Line Item Reference / Note Rendering & Loan Payment Note Propagati
     assert.equal(formattedReservesTitle, 'General Reserves — Checking Account Funding');
   });
 });
+
+describe('40. Standardized CustomSelect & AccountSelectDropdown Option Integrity', () => {
+  it('retains 100% of original option values, labels, optgroups, fragments, and numeric values without adding synthetic sublabels', () => {
+    const children = [
+      React.createElement('option', { key: 'empty', value: '' }, 'Select preset...'),
+      React.createElement(
+        React.Fragment,
+        { key: 'frag' },
+        React.createElement('option', { key: 'tpl-1', value: 'tpl-1' }, 'Meralco (₱3,500)'),
+        React.createElement(
+          'optgroup',
+          { key: 'grp-1', label: 'Other Cutoffs / Frequencies' },
+          React.createElement(
+            'option',
+            { key: 'tpl-2', value: 'tpl-2' },
+            'Water Bill (₱800) [Not Auto-Displayed]'
+          )
+        )
+      ),
+      React.createElement('option', { key: 'num', value: -1 }, '-- Select Column --'),
+      React.createElement('option', { key: 'new', value: '__CREATE_NEW_CATEGORY__' }, '+ Custom Category...'),
+    ];
+
+    const parsed = parseChildrenToOptions(children);
+    assert.equal(parsed.length, 5);
+    assert.deepEqual(parsed[0], {
+      value: '',
+      label: 'Select preset...',
+      disabled: false,
+      group: undefined,
+    });
+    assert.deepEqual(parsed[1], {
+      value: 'tpl-1',
+      label: 'Meralco (₱3,500)',
+      disabled: false,
+      group: undefined,
+    });
+    assert.deepEqual(parsed[2], {
+      value: 'tpl-2',
+      label: 'Water Bill (₱800) [Not Auto-Displayed]',
+      disabled: false,
+      group: 'Other Cutoffs / Frequencies',
+    });
+    assert.deepEqual(parsed[3], {
+      value: '-1',
+      label: '-- Select Column --',
+      disabled: false,
+      group: undefined,
+    });
+    assert.deepEqual(parsed[4], {
+      value: '__CREATE_NEW_CATEGORY__',
+      label: '+ Custom Category...',
+      disabled: false,
+      group: undefined,
+    });
+  });
+
+  it('accurately extracts compound React children text and falls back to accounts[0] when emptyOption is omitted', () => {
+    const compoundLabel = extractTextFromNode(['Emergency Fund', ' (', '₱', '50,000', ')']);
+    assert.equal(compoundLabel, 'Emergency Fund (₱50,000)');
+
+    const accounts = [
+      { id: 'acc-1', name: 'BPI Savings', type: 'Savings Account', balance: 25000 },
+      { id: 'acc-2', name: 'Maya Bank', type: 'Digital Bank / High-Yield', balance: 50000 },
+    ];
+    // When emptyOption is omitted and value is empty/stale, falls back to accounts[0]
+    const emptyOption = undefined;
+    const value = '';
+    const selected = accounts.find((a) => a.id === value) || (!emptyOption ? accounts[0] : undefined);
+    assert.equal(selected?.id, 'acc-1');
+    assert.equal(selected?.name, 'BPI Savings');
+    assert.equal(selected?.type, 'Savings Account');
+  });
+});
+

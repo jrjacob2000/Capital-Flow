@@ -50,6 +50,8 @@ import {
   formatCurrency,
 } from '../utils/budgetCalculations';
 import { ConfirmationModal } from './ConfirmationModal';
+import { AccountSelectDropdown } from './AccountSelectDropdown';
+import { CustomSelect } from './CustomSelect';
 
 interface CategoryAndTemplateManagerModalProps {
   isOpen: boolean;
@@ -1594,12 +1596,12 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
               {!tplId && (
                 <div className="flex items-center gap-2 bg-amber-50/70 dark:bg-amber-950/30 px-2.5 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800/60 min-w-0">
                   <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                  <select
+                  <CustomSelect
                     defaultValue=""
                     onChange={(e) => {
                       if (e.target.value) handleApplyHelperItem(e.target.value);
                     }}
-                    className="w-full min-w-0 bg-transparent text-[11px] font-medium text-amber-900 dark:text-amber-200 outline-none"
+                    className="w-full min-w-0 bg-transparent text-[11px] sm:text-xs font-medium text-amber-900 dark:text-amber-200 outline-none"
                   >
                     <option value="">Quick-fill from common starter item (optional)...</option>
                     {DEFAULT_ITEM_TEMPLATES.map((d) => (
@@ -1607,7 +1609,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         [{d.type === 'saving' ? 'Funds' : d.type.toUpperCase()}] {d.item} ({d.category})
                       </option>
                     ))}
-                  </select>
+                  </CustomSelect>
                 </div>
               )}
 
@@ -1633,7 +1635,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     )}
                   </div>
                   {tplType === 'saving' && !isCreatingCustomTplFund ? (
-                    <select
+                    <CustomSelect
                       value={tplItem}
                       onChange={(e) => {
                         const val = e.target.value;
@@ -1647,7 +1649,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                           }
                         }
                       }}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="">Select Goal Fund...</option>
                       <optgroup label="Unallocated Cash Pool (Bank Balance Only)">
@@ -1707,7 +1709,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         ));
                       })()}
                       <option value="__CREATE_NEW_TPL_FUND__">+ Custom Goal Fund...</option>
-                    </select>
+                    </CustomSelect>
                   ) : (
                     <input
                       type="text"
@@ -1719,7 +1721,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       }
                       value={tplItem}
                       onChange={(e) => setTplItem(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   )}
                 </div>
@@ -1750,7 +1752,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     )}
                   </div>
                   {!isCreatingCustomTplCat ? (
-                    <select
+                    <CustomSelect
                       value={tplCategory}
                       onChange={(e) => {
                         const val = e.target.value;
@@ -1772,7 +1774,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                           }
                         }
                       }}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       {Array.from(
                         new Set([
@@ -1789,7 +1791,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         </option>
                       ))}
                       <option value="__CREATE_NEW_TPL_CATEGORY__">+ Custom Category...</option>
-                    </select>
+                    </CustomSelect>
                   ) : (
                     <input
                       type="text"
@@ -1797,7 +1799,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       value={tplCategory}
                       onChange={(e) => setTplCategory(e.target.value)}
                       placeholder="New category name..."
-                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   )}
                 </div>
@@ -1817,7 +1819,7 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                     placeholder="0.00"
                     value={tplEstimated}
                     onChange={(e) => setTplEstimated(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-xs sm:text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
 
@@ -1828,17 +1830,13 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         Fund Account
                       </label>
                     </div>
-                    <select
+                    <AccountSelectDropdown
                       value={tplSavingAccountId}
-                      onChange={(e) => setTplSavingAccountId(e.target.value)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      {accounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setTplSavingAccountId}
+                      accounts={accounts}
+                      currencySymbol={currencySymbol}
+                      showBalance={false}
+                    />
                   </div>
                 ) : (
                   <div className="min-w-0">
@@ -1847,17 +1845,17 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         Default Channel
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={tplMethod}
                       onChange={(e) => setTplMethod(e.target.value as PaymentMethod)}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       {PAYMENT_METHODS.map((pm) => (
                         <option key={pm} value={pm}>
                           {pm}
                         </option>
                       ))}
-                    </select>
+                    </CustomSelect>
                   </div>
                 )}
               </div>
@@ -1869,15 +1867,15 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                       Frequency
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={tplFrequency}
                     onChange={(e) => setTplFrequency(e.target.value as 'monthly' | 'bi-weekly' | 'both')}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="monthly">Monthly</option>
                     <option value="bi-weekly">Bi-Weekly (P1 / P2)</option>
                     <option value="both">Both (Monthly &amp; Bi-Weekly)</option>
-                  </select>
+                  </CustomSelect>
                 </div>
 
                 {(tplFrequency === 'bi-weekly' || tplFrequency === 'both') && (
@@ -1887,15 +1885,15 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                         Half-Month
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={tplBiweeklyPeriod}
                       onChange={(e) => setTplBiweeklyPeriod(e.target.value as 'P1' | 'P2' | 'both')}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="both">Both (P1 &amp; P2)</option>
                       <option value="P1">P1 (1st–15th)</option>
                       <option value="P2">P2 (16th–End)</option>
-                    </select>
+                    </CustomSelect>
                   </div>
                 )}
               </div>

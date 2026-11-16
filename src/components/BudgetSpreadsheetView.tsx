@@ -53,6 +53,8 @@ import {
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
 import { CarryOverModal } from './CarryOverModal';
 import { ExcelImportModal } from './ExcelImportModal';
+import { AccountSelectDropdown } from './AccountSelectDropdown';
+import { CustomSelect } from './CustomSelect';
 import {
   computeCarryOverSurplus,
   computeCurrentRemainingPaid,
@@ -1330,6 +1332,9 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   // Submit modal entry
   const handleSubmitForm = (e: React.FormEvent) => {
     e.preventDefault();
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     const resolvedFundOrItem =
       modalType === 'saving'
         ? isCreatingNewSinkingFund || formCategory.trim().toLowerCase() === 'unallocated cash pool'
@@ -2100,7 +2105,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                                 </span>
                               )}
                               {inc.reference && inc.reference !== 'Auto-filled from template' && (
-                                <span className="truncate max-w-[220px]">
+                                <span className="break-words leading-relaxed">
                                   Notes: <strong className="text-slate-700 dark:text-slate-200">{inc.reference}</strong>
                                 </span>
                               )}
@@ -2557,7 +2562,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                 {/* Sort Selector & Direction Toggle (Works in both Cards and Table Views) */}
                 <div className="flex items-center gap-1 bg-slate-100/90 dark:bg-slate-800 px-2 py-1 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] shrink-0">
                   <ArrowUpDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                  <select
+                  <CustomSelect
                     value={expenseSortField}
                     onChange={(e) => {
                       const nextField = e.target.value as ExpenseSortField;
@@ -2569,7 +2574,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       }
                     }}
                     aria-label="Sort budget items by"
-                    className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none cursor-pointer pr-1"
+                    className="bg-transparent text-[11px] sm:text-xs text-slate-700 dark:text-slate-200 font-semibold outline-none cursor-pointer pr-1"
                   >
                     <option value="default" className="bg-white dark:bg-slate-900">Sort: Default</option>
                     <option value="item" className="bg-white dark:bg-slate-900">Sort: Item Name</option>
@@ -2579,7 +2584,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     <option value="actual" className="bg-white dark:bg-slate-900">Sort: Actual Paid</option>
                     <option value="variance" className="bg-white dark:bg-slate-900">Sort: Variance (Saved/Over)</option>
                     <option value="mode" className="bg-white dark:bg-slate-900">Sort: Payment Mode</option>
-                  </select>
+                  </CustomSelect>
                   {expenseSortField !== 'default' && (
                     <button
                       type="button"
@@ -3016,7 +3021,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               </div>
 
                               {exp.reference && exp.reference !== 'Auto-filled from template' && (
-                                <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                <div className="text-[10px] text-slate-500 dark:text-slate-400 break-words leading-relaxed pt-0.5">
                                   Notes: <strong className="text-slate-700 dark:text-slate-200">{exp.reference}</strong>
                                 </div>
                               )}
@@ -3287,7 +3292,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               ? 'bg-indigo-50 dark:bg-slate-900'
                               : 'bg-white dark:bg-slate-900'
                           } group-hover:bg-slate-50 dark:group-hover:bg-slate-800`}
-                          title={`${exp.item} (${categorySubtitle})`}
+                          title={`${exp.item}${
+                            exp.reference && exp.reference.trim() && exp.reference.trim() !== 'Auto-filled from template'
+                              ? ` [${exp.reference.trim()}]`
+                              : ''
+                          } (${categorySubtitle})`}
                         >
                           <div className="flex items-center gap-1 md:gap-1.5 min-w-0">
                             {isPaid && (
@@ -3456,9 +3465,6 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               }
                             >
                               {activeChannels[0].label}
-                              {exp.reference && exp.reference !== 'Auto-filled from template'
-                                ? ` · ${exp.reference}`
-                                : ''}
                             </div>
                           ) : (
                             <div
@@ -3880,10 +3886,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     </div>
 
                     {entrySourceMode === 'template' && (
-                      <select
+                      <CustomSelect
                         value={selectedTemplateId}
                         onChange={(e) => handleSelectTemplate(e.target.value)}
-                        className="w-full min-w-0 h-8 px-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-lg text-[11px] text-slate-900 dark:text-white font-medium outline-none"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl text-[11px] sm:text-xs text-slate-900 dark:text-white font-medium outline-none"
                       >
                         <option value="">Select preset...</option>
                         {(() => {
@@ -3923,7 +3929,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             </>
                           );
                         })()}
-                      </select>
+                      </CustomSelect>
                     )}
                   </div>
                 )}
@@ -3950,7 +3956,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                     </div>
 
                     {modalType === 'saving' && !isCreatingNewSinkingFund ? (
-                      <select
+                      <CustomSelect
                         value={
                           formItem.trim().toLowerCase() === 'general reserves / starting capital'
                             ? 'General Reserves / Starting Capital'
@@ -3967,7 +3973,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             handleItemChange(val);
                           }
                         }}
-                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                       >
                         <optgroup label="Unallocated Cash Pool (Bank Balance Only)">
                           <option value="General Reserves / Starting Capital">
@@ -4027,7 +4033,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           ));
                         })()}
                         <option value="__CREATE_NEW_FUND__">+ New Goal Fund...</option>
-                      </select>
+                      </CustomSelect>
                     ) : (
                       <div className="space-y-1">
                         <input
@@ -4040,7 +4046,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           }
                           value={formItem}
                           onChange={(e) => handleItemChange(e.target.value)}
-                          className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         {modalType === 'saving' && (
                           <>
@@ -4113,7 +4119,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       </div>
                     </div>
                     {!isCreatingCustomCategory ? (
-                      <select
+                      <CustomSelect
                         value={formCategory}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -4124,7 +4130,7 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                             handleCategoryChange(val);
                           }
                         }}
-                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                       >
                         {Array.from(
                           new Set([
@@ -4141,14 +4147,14 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                           </option>
                         ))}
                         <option value="__CREATE_NEW_CATEGORY__">+ Custom Category...</option>
-                      </select>
+                      </CustomSelect>
                     ) : (
                       <input
                         type="text"
                         required
                         value={formCategory}
                         onChange={(e) => handleCategoryChange(e.target.value)}
-                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                         placeholder="New category name..."
                       />
                     )}
@@ -4293,17 +4299,17 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         </div>
 
                         {!isSplitPayment ? (
-                          <select
+                          <CustomSelect
                             value={formPaymentMethod}
                             onChange={(e) => setFormPaymentMethod(e.target.value as PaymentMethod)}
-                            className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                           >
                             {PAYMENT_METHODS.map((pm) => (
                               <option key={pm} value={pm}>
                                 {pm}
                               </option>
                             ))}
-                          </select>
+                          </CustomSelect>
                         ) : (
                           <div className="h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-xl text-[11px] text-indigo-700 dark:text-indigo-300 font-semibold flex items-center justify-between gap-1.5 min-w-0">
                             <span className="truncate">Split (6)</span>
@@ -4320,17 +4326,13 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                               <span className="hidden sm:inline">Destination Bank Account</span>
                             </label>
                           </div>
-                          <select
+                          <AccountSelectDropdown
                             value={formSavingAccountId}
-                            onChange={(e) => setFormSavingAccountId(e.target.value)}
-                            className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-indigo-50/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white font-medium outline-none focus:ring-2 focus:ring-indigo-500"
-                          >
-                            {accounts.map((acc) => (
-                              <option key={acc.id} value={acc.id}>
-                                {acc.name} ({acc.type})
-                              </option>
-                            ))}
-                          </select>
+                            onChange={setFormSavingAccountId}
+                            accounts={accounts}
+                            currencySymbol={currencySymbol}
+                            showBalance={false}
+                          />
                         </div>
                       ) : (
                         <div className="min-w-0">

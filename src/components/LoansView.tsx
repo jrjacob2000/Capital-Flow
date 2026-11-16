@@ -33,6 +33,8 @@ import {
   findClosestSinkingFundMatch,
   DEFAULT_SINKING_FUND_NAMES,
 } from '../services/sampleData';
+import { AccountSelectDropdown } from './AccountSelectDropdown';
+import { CustomSelect } from './CustomSelect';
 import { formatCurrency, roundCurrency } from '../utils/budgetCalculations';
 
 interface LoansViewProps {
@@ -523,6 +525,9 @@ export const LoansView: React.FC<LoansViewProps> = ({
 
   const handleSubmitLoanForm = (e: React.FormEvent) => {
     e.preventDefault();
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     const cleanName = formName.trim();
     if (!cleanName) return;
 
@@ -597,6 +602,9 @@ export const LoansView: React.FC<LoansViewProps> = ({
 
   const handleSubmitPayment = (e: React.FormEvent) => {
     e.preventDefault();
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     if (!paymentModalLoan) return;
     const amt = parseFloat(payAmount);
     if (isNaN(amt) || amt <= 0) return;
@@ -1263,10 +1271,10 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       Loan Category
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formCategory}
                     onChange={(e) => setFormCategory(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-[11px] sm:text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     {Array.from(
                       new Set([
@@ -1278,7 +1286,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
                         {cat}
                       </option>
                     ))}
-                  </select>
+                  </CustomSelect>
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center justify-between h-4 mb-1">
@@ -1391,14 +1399,14 @@ export const LoansView: React.FC<LoansViewProps> = ({
                         Frequency
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={formFrequency}
                       onChange={(e) => setFormFrequency(e.target.value as 'monthly' | 'bi-weekly')}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 text-[11px] sm:text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="monthly">Monthly</option>
                       <option value="bi-weekly">Bi-Weekly (Cutoff)</option>
-                    </select>
+                    </CustomSelect>
                   </div>
 
                   <div className="min-w-0">
@@ -1412,7 +1420,7 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       value={formDueDay}
                       onChange={(e) => setFormDueDay(e.target.value)}
                       placeholder="e.g. 15th, 30th"
-                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-[11px] sm:text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
@@ -1425,15 +1433,15 @@ export const LoansView: React.FC<LoansViewProps> = ({
                         Bi-Weekly Cutoff Allocation
                       </label>
                     </div>
-                    <select
+                    <CustomSelect
                       value={formBiweeklyPeriod}
                       onChange={(e) => setFormBiweeklyPeriod(e.target.value as 'P1' | 'P2' | 'both')}
-                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-[11px] sm:text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="both">Both Cutoffs (Period 1 and Period 2)</option>
                       <option value="P1">1st Cutoff Only (Period 1)</option>
                       <option value="P2">2nd Cutoff Only (Period 2)</option>
-                    </select>
+                    </CustomSelect>
                   </div>
                 )}
               </div>
@@ -1526,18 +1534,20 @@ export const LoansView: React.FC<LoansViewProps> = ({
                   <p className="text-[10px] sm:text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
                     Which Bank Account did this lent money come from? Select a Bank Account below to deduct the principal ({currencySymbol}{formatNumber(parseFloat(formPrincipal) || parseFloat(formTotalContract) || 0)}) from its balance now, or leave unselected to track the receivable agreement without moving Bank Account funds.
                   </p>
-                  <select
+                  <AccountSelectDropdown
                     value={formDisburseAccountId}
-                    onChange={(e) => setFormDisburseAccountId(e.target.value)}
-                    className="w-full min-w-0 h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
-                  >
-                    <option value="">Do not deduct from a Bank Account (track agreement only)</option>
-                    {ledger.accounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} — Current Balance: {currencySymbol}{formatNumber(acc.balance)}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setFormDisburseAccountId}
+                    accounts={ledger.accounts}
+                    currencySymbol={currencySymbol}
+                    variant="white"
+                    emptyOption={{
+                      value: '',
+                      label: 'Do not deduct from a Bank Account (track agreement only)',
+                    }}
+                    getAccountLabelSuffix={(acc) =>
+                      ` — Current Balance: ${currencySymbol}${formatNumber(acc.balance)}`
+                    }
+                  />
                 </div>
               )}
 
@@ -1654,10 +1664,9 @@ export const LoansView: React.FC<LoansViewProps> = ({
                         </span>
                       ) : null}
                     </div>
-                    <select
+                    <AccountSelectDropdown
                       value={payDeductAccountId}
-                      onChange={(e) => {
-                        const nextAccId = e.target.value;
+                      onChange={(nextAccId) => {
                         setPayDeductAccountId(nextAccId);
                         if (nextAccId) {
                           // Automatically uncheck and lock Budget Sheet Expense so we don't double-deduct from Period Salary
@@ -1678,15 +1687,15 @@ export const LoansView: React.FC<LoansViewProps> = ({
                           setPayDeductFundCategory('General Reserves / Starting Capital');
                         }
                       }}
-                      className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="">Do not deduct from a Bank Account (Pay via Budget Sheet Expense)</option>
-                      {ledger.accounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} ({currencySymbol}{formatNumber(acc.balance)})
-                        </option>
-                      ))}
-                    </select>
+                      accounts={ledger.accounts}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                      variant="white"
+                      emptyOption={{
+                        value: '',
+                        label: 'Do not deduct from a Bank Account (Pay via Budget Sheet Expense)',
+                      }}
+                    />
                   </div>
 
                   {payDeductAccountId && (() => {
@@ -1734,21 +1743,23 @@ export const LoansView: React.FC<LoansViewProps> = ({
                               Deduct from Goal Fund / Reserve
                             </label>
                           </div>
-                          <select
+                          <CustomSelect
                             value={payDeductFundCategory}
                             onChange={(e) => setPayDeductFundCategory(e.target.value)}
-                            className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="w-full h-8 sm:h-9 px-2.5 text-[11px] sm:text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                           >
                             {(fundsInSelectedBank.length > 0 || unallocInBank > 0.005) && (
                               <optgroup label={`Funds Held in ${accLabel}`}>
                                 {fundsInSelectedBank.map((f) => (
-                                  <option key={f.name} value={f.name}>
-                                    {f.name} ({currencySymbol}{formatNumber(f.inBankAmount)} in {accLabel})
+                                  <option key={`in-${f.name}`} value={f.name}>
+                                    {f.name} — {currencySymbol}
+                                    {formatNumber(f.inBankAmount)} (in {accLabel})
                                   </option>
                                 ))}
                                 {unallocInBank > 0.005 && (
                                   <option value="General Reserves / Starting Capital">
-                                    General Reserves / Unallocated ({currencySymbol}{formatNumber(unallocInBank)} in {accLabel})
+                                    General Reserves / Unallocated — {currencySymbol}
+                                    {formatNumber(unallocInBank)} (in {accLabel})
                                   </option>
                                 )}
                               </optgroup>
@@ -1756,16 +1767,18 @@ export const LoansView: React.FC<LoansViewProps> = ({
                             <optgroup label="Other Goal Funds (Total Balance)">
                               {unallocInBank <= 0.005 && (
                                 <option value="General Reserves / Starting Capital">
-                                  General Reserves / Unallocated ({currencySymbol}{formatNumber(totalUnalloc)} total)
+                                  General Reserves / Unallocated ({currencySymbol}
+                                  {formatNumber(totalUnalloc)})
                                 </option>
                               )}
                               {otherFunds.map((f) => (
-                                <option key={f.name} value={f.name}>
-                                  {f.name} ({currencySymbol}{formatNumber(f.currentBalance)} total)
+                                <option key={`other-${f.name}`} value={f.name}>
+                                  {f.name} ({currencySymbol}
+                                  {formatNumber(f.currentBalance)} total)
                                 </option>
                               ))}
                             </optgroup>
-                          </select>
+                          </CustomSelect>
                         </div>
 
                         <div className="p-2 rounded-lg bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-700/80 space-y-1 text-[11px]">
@@ -1853,18 +1866,21 @@ export const LoansView: React.FC<LoansViewProps> = ({
                       Deposit to Bank Account — General Reserves (Optional)
                     </label>
                   </div>
-                  <select
+                  <AccountSelectDropdown
                     value={payDepositAccountId}
-                    onChange={(e) => setPayDepositAccountId(e.target.value)}
-                    className="w-full h-8 sm:h-9 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="">Do not deposit to a Bank Account (Budget only)</option>
-                    {ledger.accounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} ({currencySymbol}{formatNumber(acc.balance)}) → General Reserves
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setPayDepositAccountId}
+                    accounts={ledger.accounts}
+                    currencySymbol={currencySymbol}
+                    showBalance={true}
+                    variant="white"
+                    emptyOption={{
+                      value: '',
+                      label: 'Do not deposit to a Bank Account (Budget only)',
+                    }}
+                    getAccountLabelSuffix={(acc) =>
+                      ` (${currencySymbol}${formatNumber(acc.balance)}) → General Reserves`
+                    }
+                  />
                 </div>
               )}
 

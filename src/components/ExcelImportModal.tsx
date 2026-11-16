@@ -23,6 +23,7 @@ import {
   isStructuredBudgetSheet,
   downloadSampleExcelTemplate,
 } from '../utils/excelImportParser';
+import { CustomSelect } from './CustomSelect';
 
 interface ExcelImportModalProps {
   isOpen: boolean;
@@ -312,27 +313,27 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                   <label className="block text-[10px] sm:text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate mb-1">
                     1. Worksheet Tab ({sheetNames.length})
                   </label>
-                  <select
+                  <CustomSelect
                     value={selectedSheet}
                     onChange={(e) => handleSheetChange(e.target.value)}
-                    className="w-full h-8 sm:h-9 px-2 sm:px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-semibold text-xs"
+                    className="w-full h-8 sm:h-9 px-2 sm:px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                   >
                     {sheetNames.map((name) => (
                       <option key={name} value={name}>
                         {name}
                       </option>
                     ))}
-                  </select>
+                  </CustomSelect>
                 </div>
 
                 <div className="min-w-0">
                   <label className="block text-[10px] sm:text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate mb-1">
                     2. Target Period ({year})
                   </label>
-                  <select
+                  <CustomSelect
                     value={targetPeriod}
                     onChange={(e) => handlePeriodChange(e.target.value)}
-                    className="w-full h-8 sm:h-9 px-2 sm:px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-semibold text-xs"
+                    className="w-full h-8 sm:h-9 px-2 sm:px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                   >
                     <optgroup label="Monthly (12)">
                       {MONTH_NAMES.map((m) => (
@@ -348,7 +349,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                         </option>
                       ))}
                     </optgroup>
-                  </select>
+                  </CustomSelect>
                 </div>
 
                 <div className="min-w-0">
@@ -441,10 +442,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Item / Description Column <span className="text-rose-500">*</span>
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.itemCol}
                         onChange={(e) => handleUpdateMapping({ itemCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>-- Select Column --</option>
                         {columns.map((c) => (
@@ -452,7 +453,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Actual Cost / Amount Column (Required) */}
@@ -460,10 +461,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Actual Amount Column <span className="text-rose-500">*</span>
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.actualCol}
                         onChange={(e) => handleUpdateMapping({ actualCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>-- Select Column --</option>
                         {columns.map((c) => (
@@ -471,7 +472,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Category Column */}
@@ -479,10 +480,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Category Column (Optional)
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.categoryCol}
                         onChange={(e) => handleUpdateMapping({ categoryCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>None (Use Default: {mapping.defaultCategory})</option>
                         {columns.map((c) => (
@@ -490,7 +491,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Entry Type Column */}
@@ -498,10 +499,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Entry Type Column (Optional)
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.typeCol}
                         onChange={(e) => handleUpdateMapping({ typeCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>None (Use Type Rule Below)</option>
                         {columns.map((c) => (
@@ -509,7 +510,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Estimated / Planned Amount Column */}
@@ -517,10 +518,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Estimated / Budget Column (Optional)
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.estimatedCol}
                         onChange={(e) => handleUpdateMapping({ estimatedCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>None (₱0 Estimated)</option>
                         {columns.map((c) => (
@@ -528,7 +529,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Payment Method Column */}
@@ -536,10 +537,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Payment Method Column (Optional)
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.paymentMethodCol}
                         onChange={(e) => handleUpdateMapping({ paymentMethodCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>None (Default: {mapping.defaultPaymentMethod})</option>
                         {columns.map((c) => (
@@ -547,7 +548,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Reference / Notes Column */}
@@ -555,10 +556,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Reference / Notes Column (Optional)
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.referenceCol}
                         onChange={(e) => handleUpdateMapping({ referenceCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>None</option>
                         {columns.map((c) => (
@@ -566,7 +567,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Date Column */}
@@ -574,10 +575,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Date Column (Optional)
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.dateCol}
                         onChange={(e) => handleUpdateMapping({ dateCol: parseInt(e.target.value, 10) })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value={-1}>None (Default to {targetPeriod} {year})</option>
                         {columns.map((c) => (
@@ -585,7 +586,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                             Col {c.letter}: {c.headerLabel} {c.sampleValue ? `(e.g. ${c.sampleValue.slice(0, 18)})` : ''}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     {/* Default Entry Type Rule */}
@@ -593,18 +594,18 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Entry Type Detection Rule
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.defaultEntryType}
                         onChange={(e) =>
                           handleUpdateMapping({ defaultEntryType: e.target.value as DefaultTypeBehavior })
                         }
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] font-medium"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         <option value="auto">Auto-detect (Income / Expense / Funds)</option>
                         <option value="expense">Import All as Expenses</option>
                         <option value="income">Import All as Income</option>
                         <option value="saving">Import All as Funds (Savings)</option>
-                      </select>
+                      </CustomSelect>
                     </div>
                   </div>
 
@@ -614,36 +615,36 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                       <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                         Fallback Expense Category
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.defaultCategory}
                         onChange={(e) => handleUpdateMapping({ defaultCategory: e.target.value })}
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px]"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         {EXPENSE_CATEGORIES.map((cat) => (
                           <option key={cat} value={cat}>
                             {cat}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     <div>
                       <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                         Fallback Payment Method
                       </label>
-                      <select
+                      <CustomSelect
                         value={mapping.defaultPaymentMethod}
                         onChange={(e) =>
                           handleUpdateMapping({ defaultPaymentMethod: e.target.value as PaymentMethod })
                         }
-                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px]"
+                        className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white text-[11px] sm:text-xs font-medium"
                       >
                         {PAYMENT_METHODS.map((pm) => (
                           <option key={pm} value={pm}>
                             {pm}
                           </option>
                         ))}
-                      </select>
+                      </CustomSelect>
                     </div>
 
                     <div className="flex items-end pb-1">
