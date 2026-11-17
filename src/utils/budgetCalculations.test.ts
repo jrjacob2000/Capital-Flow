@@ -32,6 +32,10 @@ import {
   roundCurrency,
   resolveDefaultReallocateSourceFund,
   resolveReallocateFundAccountAndAmount,
+  getHoldingAccountsForReallocateFund,
+  sortLedgerTransactionsForAggregation,
+  applyFundSliceOutflow,
+  reconcileFundAndAccountSlices,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -5356,7 +5360,7 @@ describe('42. Reallocate Goal Fund Default Bank Account & Available Amount Resol
       amountStr: '15000',
     });
 
-    // 2. Selecting Maya for Emergency Fund (where Emergency Fund has 0 balance) -> empty amountStr
+    // 2. Passing a non-holding account (Maya, where Emergency Fund has 0 balance) falls back to primary holding account (SeaBank: 30,000)
     const efInMaya = resolveReallocateFundAccountAndAmount(
       'Emergency Fund',
       sampleCategoryFunds,
@@ -5364,9 +5368,9 @@ describe('42. Reallocate Goal Fund Default Bank Account & Available Amount Resol
       'acc-maya'
     );
     assert.deepEqual(efInMaya, {
-      accountId: 'acc-maya',
-      availableAmount: 0,
-      amountStr: '',
+      accountId: 'acc-seabank',
+      availableAmount: 30000,
+      amountStr: '30000',
     });
 
     // 3. Selecting All / Unspecified Account ('') for Emergency Fund -> total 45,000 balance
@@ -5381,6 +5385,47 @@ describe('42. Reallocate Goal Fund Default Bank Account & Available Amount Resol
       availableAmount: 45000,
       amountStr: '45000',
     });
+  });
+
+  it('filters holding Bank Accounts so only accounts with positive balance for the selected Goal Fund are selectable', () => {
+    const allAccounts = [
+      { id: 'acc-bpi', name: 'BPI Family' },
+      { id: 'acc-seabank', name: 'SeaBank' },
+      { id: 'acc-maya', name: 'Maya Savings' },
+    ];
+
+    // Emergency Fund resides in SeaBank (30,000) and BPI (15,000) -> 2 holding accounts ordered by slice amount
+    const efHolding = getHoldingAccountsForReallocateFund(
+      'Emergency Fund',
+      allAccounts,
+      sampleCategoryFunds,
+      sampleUnallocated
+    );
+    assert.deepEqual(
+      efHolding.map((a) => a.id),
+      ['acc-seabank', 'acc-bpi']
+    );
+
+    // Car Maintenance resides only in Maya (8,250.75) -> 1 holding account (locked in UI)
+    const carHolding = getHoldingAccountsForReallocateFund(
+      'Car Maintenance',
+      allAccounts,
+      sampleCategoryFunds,
+      sampleUnallocated
+    );
+    assert.deepEqual(
+      carHolding.map((a) => a.id),
+      ['acc-maya']
+    );
+
+    // Empty Travel Fund has 0 balance -> 0 holding accounts
+    const emptyHolding = getHoldingAccountsForReallocateFund(
+      'Empty Travel Fund',
+      allAccounts,
+      sampleCategoryFunds,
+      sampleUnallocated
+    );
+    assert.deepEqual(emptyHolding, []);
   });
 
   it('resolves the default source Goal Fund when opening the Reallocate modal from the top toolbar', () => {
@@ -5405,3 +5450,318 @@ describe('42. Reallocate Goal Fund Default Bank Account & Available Amount Resol
     );
   });
 });
+
+describe('43. Bank Account Card Earmarked Fund Edge Cases (Zeroed Fund & Cross-Account Reconciliation)', () => {
+  it('clears all Bank Account earmarked slices when a Goal Fund is zeroed out, even if the outflow was recorded on a different Bank Account', () => {
+    const accounts = [
+      { id: 'acc-bpi', name: 'BPI Family', balance: 10000, color: '#3b82f6' },
+      { id: 'acc-seabank', name: 'SeaBank', balance: 5000, color: '#10b981' },
+    ];
+
+    // Vacation Fund received +5,000 in SeaBank, then was zeroed via a 5,000 reallocation to Emergency Fund
+    // where the transaction had accountId = 'acc-bpi' (legacy default account before v1.25.18)
+    const vacationAccounts = new Map([
+      ['acc-seabank', { accountId: 'acc-seabank', accountName: 'SeaBank', amount: 5000 }],
+    ]);
+    const emergencyAccounts = new Map<string, { accountId: string; accountName: string; amount: number }>();
+
+    // Deduct 5,000 from Vacation Fund (prefers BPI, spills over to actual holder SeaBank)
+    const deducted = applyFundSliceOutflow(vacationAccounts, 'acc-bpi', 'BPI Family', 5000);
+    assert.deepEqual(deducted, [
+      { accountId: 'acc-seabank', accountName: 'SeaBank', amount: 5000 },
+    ]);
+
+    // Credit Emergency Fund in the holding account (SeaBank) where the cash actually resided
+    for (const d of deducted) {
+      emergencyAccounts.set(d.accountId, {
+        accountId: d.accountId,
+        accountName: d.accountName,
+        amount: d.amount,
+      });
+    }
+
+    const { reconciledFunds } = reconcileFundAndAccountSlices(
+      [
+        {
+          id: 'fund-vac',
+          name: 'Vacation Fund',
+          category: 'Family, Travel & Education Funds',
+          color: '#f59e0b',
+          inflow: 5000,
+          outflow: 5000,
+          accounts: vacationAccounts,
+          txCount: 2,
+        },
+        {
+          id: 'fund-ef',
+          name: 'Emergency Fund',
+          category: 'Emergency & Safety Net',
+          color: '#10b981',
+          inflow: 5000,
+          outflow: 0,
+          accounts: emergencyAccounts,
+          txCount: 1,
+        },
+      ],
+      accounts,
+      15000
+    );
+
+    const vac = reconciledFunds.find((f) => f.name === 'Vacation Fund')!;
+    const ef = reconciledFunds.find((f) => f.name === 'Emergency Fund')!;
+
+    // Vacation Fund is zeroed -> 0 balance and 0 bank account slices (never appears as Earmarked on SeaBank)
+    assert.equal(vac.currentBalance, 0);
+    assert.deepEqual(vac.accounts, []);
+
+    // Emergency Fund holds the 5,000 in SeaBank
+    assert.equal(ef.currentBalance, 5000);
+    assert.equal(ef.accounts.length, 1);
+    assert.equal(ef.accounts[0].accountId, 'acc-seabank');
+    assert.equal(ef.accounts[0].amount, 5000);
+  });
+
+  it('reconciles positive account slices down to net balance when an outflow occurred prior to an inflow or on another account', () => {
+    const accounts = [
+      { id: 'acc-bpi', name: 'BPI Family', balance: 10000 },
+      { id: 'acc-maya', name: 'Maya Savings', balance: 8000 },
+    ];
+
+    // Suppose raw map has +8,000 in Maya and -5,000 in BPI (net = 3,000)
+    const rawMap = new Map([
+      ['acc-maya', { accountId: 'acc-maya', accountName: 'Maya Savings', amount: 8000 }],
+      ['acc-bpi', { accountId: 'acc-bpi', accountName: 'BPI Family', amount: -5000 }],
+    ]);
+
+    const { reconciledFunds } = reconcileFundAndAccountSlices(
+      [
+        {
+          id: 'fund-car',
+          name: 'Car Maintenance',
+          category: 'Home, Vehicle & Maintenance Funds',
+          color: '#6366f1',
+          inflow: 8000,
+          outflow: 5000,
+          accounts: rawMap,
+          txCount: 2,
+        },
+      ],
+      accounts,
+      18000
+    );
+
+    const car = reconciledFunds[0];
+    assert.equal(car.currentBalance, 3000);
+    assert.equal(car.accounts.length, 1);
+    assert.equal(car.accounts[0].accountId, 'acc-maya');
+    assert.equal(car.accounts[0].amount, 3000);
+  });
+
+  it('shifts earmarked slices when a Bank Account is zeroed via Transfer so a ₱0 Bank Account never displays ghost earmarked funds', () => {
+    // SeaBank had 6,000 earmarked to Travel Fund, then transferred all 6,000 to BPI (leaving SeaBank at 0)
+    const accounts = [
+      { id: 'acc-seabank', name: 'SeaBank', balance: 0 },
+      { id: 'acc-bpi', name: 'BPI Family', balance: 6000 },
+    ];
+    const travelAccounts = new Map([
+      ['acc-seabank', { accountId: 'acc-seabank', accountName: 'SeaBank', amount: 6000 }],
+    ]);
+
+    const { reconciledFunds } = reconcileFundAndAccountSlices(
+      [
+        {
+          id: 'fund-travel',
+          name: 'Travel Fund',
+          category: 'Family, Travel & Education Funds',
+          color: '#06b6d4',
+          inflow: 6000,
+          outflow: 0,
+          accounts: travelAccounts,
+          txCount: 1,
+        },
+      ],
+      accounts,
+      6000,
+      [{ accountId: 'acc-seabank', toAccountId: 'acc-bpi', amount: 6000 }]
+    );
+
+    const travel = reconciledFunds[0];
+    assert.equal(travel.currentBalance, 6000);
+    // SeaBank (0 balance) no longer holds Travel Fund; it moved to BPI (6,000 balance)
+    assert.equal(travel.accounts.length, 1);
+    assert.equal(travel.accounts[0].accountId, 'acc-bpi');
+    assert.equal(travel.accounts[0].amount, 6000);
+  });
+
+  it('orders same-day inflows before transfers, reallocations, and withdrawals during aggregation', () => {
+    const txs = [
+      { id: '1', date: '2026-11-16', source: 'withdrawal' },
+      { id: '2', date: '2026-11-16', source: 'reallocation' },
+      { id: '3', date: '2026-11-16', source: 'budget_sync' },
+      { id: '4', date: '2026-11-16', source: 'transfer' },
+    ];
+    const sorted = sortLedgerTransactionsForAggregation(txs);
+    assert.deepEqual(
+      sorted.map((t) => t.source),
+      ['budget_sync', 'transfer', 'reallocation', 'withdrawal']
+    );
+  });
+});
+
+describe('44. Ledger Transaction Mutation Running Totals & Budget Synchronization Edge Cases', () => {
+  it('recalculates runningTotalCapital chronologically across add, update, and delete ledger transaction mutations', () => {
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const { newAccount } = FinanceStorageService.addSavingsAccount({
+      name: 'SeaBank',
+      type: 'Digital Bank (High-Yield)',
+      balance: 0,
+      color: '#10b981',
+      apy: 4.5,
+    });
+
+    // 1. Add manual deposit of 10,000
+    const { newTx: depTx } = FinanceStorageService.addLedgerTransaction({
+      date: '2026-03-01',
+      year: 2026,
+      period: 'Mar',
+      amount: 10000,
+      accountId: newAccount.id,
+      accountName: newAccount.name,
+      source: 'manual_deposit',
+      category: 'Emergency Fund',
+      note: 'Initial deposit',
+    });
+    assert.equal(depTx.runningTotalCapital, 10000);
+
+    // 2. Add withdrawal of 2,500
+    const { ledger: afterWithdraw, newTx: withTx } = FinanceStorageService.addLedgerTransaction({
+      date: '2026-03-10',
+      year: 2026,
+      period: 'Mar',
+      amount: 2500,
+      accountId: newAccount.id,
+      accountName: newAccount.name,
+      source: 'withdrawal',
+      category: 'Emergency Fund',
+      note: 'Withdrawal: Emergency Fund',
+    });
+    const latestAfterWithdraw = afterWithdraw.transactions.find((t) => t.id === withTx.id)!;
+    assert.equal(latestAfterWithdraw.runningTotalCapital, 7500);
+
+    // 3. Update deposit from 10,000 to 12,000 -> withdrawal runningTotalCapital updates to 9,500
+    const { ledger: afterUpdate } = FinanceStorageService.updateLedgerTransaction(
+      depTx.id,
+      { amount: 12000 },
+      2026
+    );
+    const updatedWithTx = afterUpdate.transactions.find((t) => t.id === withTx.id)!;
+    assert.equal(updatedWithTx.runningTotalCapital, 9500);
+
+    // 4. Delete withdrawal -> runningTotalCapital is 12,000
+    const { ledger: afterDelete } = FinanceStorageService.deleteLedgerTransaction(withTx.id, 2026);
+    assert.equal(afterDelete.transactions.length, 1);
+    assert.equal(afterDelete.transactions[0].runningTotalCapital, 12000);
+  });
+
+  it('synchronizes a linked budget_sync entry to Unallocated Cash Pool when edited to General Reserves / Starting Capital in Ledger History', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const { newAccount } = FinanceStorageService.addSavingsAccount({
+      name: 'BPI',
+      type: 'Traditional Bank (Savings / Checking)',
+      balance: 0,
+      color: '#3b82f6',
+      apy: 1.0,
+    });
+
+    const savingEntry = makeEntry({
+      id: 'save-sync-unalloc-1',
+      year: 2026,
+      period: 'Apr',
+      periodIndex: 3,
+      date: '2026-04-15',
+      type: 'saving',
+      category: 'Emergency & Safety Net',
+      item: 'Emergency Fund',
+      estimatedCost: 5000,
+      actualCost: 5000,
+      amount: 5000,
+      status: 'Paid',
+      savingAccountId: newAccount.id,
+      savingAccountName: newAccount.name,
+    });
+
+    FinanceStorageService.saveLocalBudget({
+      ...budget,
+      isPersonalizedTemplate: true,
+      entries: [savingEntry],
+    });
+    FinanceStorageService.accumulateBudgetSavingToLedger(savingEntry, false);
+
+    // Edit the synced ledger transaction's category to 'General Reserves / Starting Capital'
+    const { updatedBudget } = FinanceStorageService.updateLedgerTransaction(
+      `tx-${savingEntry.id}`,
+      { category: 'General Reserves / Starting Capital' },
+      2026
+    );
+
+    assert.ok(updatedBudget);
+    const syncedEntry = updatedBudget!.entries.find((e) => e.id === savingEntry.id)!;
+    assert.equal(syncedEntry.item, 'General Reserves / Starting Capital');
+    assert.equal(syncedEntry.category, 'Unallocated Cash Pool');
+  });
+
+  it('automatically self-heals existing legacy reallocation transactions saved with a non-holding Bank Account ID when loading the ledger', () => {
+    FinanceStorageService.startFreshBlankWorkspace(2026);
+    const { newAccount: accBpi } = FinanceStorageService.addSavingsAccount({
+      name: 'BPI',
+      type: 'Traditional Bank (Savings / Checking)',
+      balance: 10000,
+      color: '#3b82f6',
+      apy: 1.0,
+    });
+    const { newAccount: accSeaBank } = FinanceStorageService.addSavingsAccount({
+      name: 'SeaBank',
+      type: 'Digital Bank (High-Yield)',
+      balance: 0,
+      color: '#10b981',
+      apy: 4.5,
+    });
+
+    // 1. Deposit 5,000 into Vacation Fund in SeaBank
+    FinanceStorageService.addLedgerTransaction({
+      date: '2026-02-01',
+      year: 2026,
+      period: 'Feb',
+      amount: 5000,
+      accountId: accSeaBank.id,
+      accountName: accSeaBank.name,
+      source: 'manual_deposit',
+      category: 'Vacation Fund',
+      note: 'Deposit Vacation Fund',
+    });
+
+    // 2. Simulate a legacy reallocation from Vacation Fund to Emergency Fund that was saved with accBpi.id (where Vacation Fund held 0)
+    const { newTx: legacyRealloc } = FinanceStorageService.addLedgerTransaction({
+      date: '2026-02-10',
+      year: 2026,
+      period: 'Feb',
+      amount: 5000,
+      accountId: accBpi.id,
+      accountName: accBpi.name,
+      source: 'reallocation',
+      category: 'Vacation Fund',
+      toCategory: 'Emergency Fund',
+      note: 'Reallocated from Vacation Fund to Emergency Fund',
+    });
+
+    // Loading the ledger runs healLegacyLedgerTransactions and repairs the stored reallocation's accountId to SeaBank
+    const loadedLedger = FinanceStorageService.loadLocalSavingsLedger();
+    const healedTx = loadedLedger.transactions.find((t) => t.id === legacyRealloc.id)!;
+    assert.equal(healedTx.accountId, accSeaBank.id);
+    assert.equal(healedTx.accountName, 'SeaBank');
+  });
+});
+
+
+
+

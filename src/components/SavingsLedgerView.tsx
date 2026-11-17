@@ -39,8 +39,13 @@ import {
 } from '../services/sampleData';
 import {
   formatCurrency,
+  roundCurrency,
   resolveDefaultReallocateSourceFund,
   resolveReallocateFundAccountAndAmount,
+  getHoldingAccountsForReallocateFund,
+  sortLedgerTransactionsForAggregation,
+  applyFundSliceOutflow,
+  reconcileFundAndAccountSlices,
 } from '../utils/budgetCalculations';
 import { AccountSelectDropdown } from './AccountSelectDropdown';
 import { CustomSelect } from './CustomSelect';
@@ -239,8 +244,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
   const [editTxDate, setEditTxDate] = useState('');
   const [editTxNote, setEditTxNote] = useState('');
   const [editTxAccountId, setEditTxAccountId] = useState('');
+  const [editTxToAccountId, setEditTxToAccountId] = useState('');
   const [editTxCategory, setEditTxCategory] = useState('');
   const [editTxCustomCategory, setEditTxCustomCategory] = useState('');
+  const [editTxToCategory, setEditTxToCategory] = useState('');
+  const [editTxCustomToCategory, setEditTxCustomToCategory] = useState('');
 
   // Compound simulator state
   const [simYears, setSimYears] = useState(10);
@@ -277,8 +285,22 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setEditTxDate(tx.date);
     setEditTxNote(tx.note);
     setEditTxAccountId(tx.accountId);
-    setEditTxCategory(tx.category || '');
+    setEditTxToAccountId(
+      tx.toAccountId ||
+        ledger.accounts.find((a) => a.id !== tx.accountId)?.id ||
+        ledger.accounts[0]?.id ||
+        ''
+    );
+    const rawCat = (tx.category || '').trim();
+    setEditTxCategory(
+      rawCat.toLowerCase() === 'general reserves / starting capital' ? '' : rawCat
+    );
     setEditTxCustomCategory('');
+    const rawToCat = (tx.toCategory || '').trim();
+    setEditTxToCategory(
+      rawToCat.toLowerCase() === 'general reserves / starting capital' ? '' : rawToCat
+    );
+    setEditTxCustomToCategory('');
   };
 
   const parseDateYearAndPeriod = (dateStr: string): { year: number; period: string } => {
@@ -299,7 +321,52 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     const targetAcc = ledger.accounts.find((a) => a.id === editTxAccountId) || ledger.accounts[0];
     const resolvedCategory =
       editTxCategory === '__custom__' ? editTxCustomCategory.trim() : editTxCategory.trim();
+    const resolvedToCategory =
+      editTxToCategory === '__custom__'
+        ? editTxCustomToCategory.trim()
+        : editTxToCategory.trim();
     const { year, period } = parseDateYearAndPeriod(editTxDate);
+
+    if (editingTx.source === 'transfer') {
+      const targetToAcc =
+        ledger.accounts.find((a) => a.id === editTxToAccountId) ||
+        ledger.accounts.find((a) => a.id !== (targetAcc ? targetAcc.id : editingTx.accountId)) ||
+        ledger.accounts[0];
+      onUpdateTransaction(editingTx.id, {
+        amount: amt,
+        date: editTxDate,
+        year,
+        period,
+        note: editTxNote.trim() || editingTx.note,
+        category: editingTx.category,
+        accountId: targetAcc ? targetAcc.id : editingTx.accountId,
+        accountName: targetAcc ? targetAcc.name : editingTx.accountName,
+        toAccountId: targetToAcc ? targetToAcc.id : editingTx.toAccountId,
+        toAccountName: targetToAcc ? targetToAcc.name : editingTx.toAccountName,
+      });
+      setEditingTx(null);
+      return;
+    }
+
+    if (editingTx.source === 'reallocation') {
+      const finalFromCat = resolvedCategory || 'General Reserves / Starting Capital';
+      const finalToCat = resolvedToCategory || 'General Reserves / Starting Capital';
+      if (finalFromCat.toLowerCase() === finalToCat.toLowerCase()) return;
+      onUpdateTransaction(editingTx.id, {
+        amount: amt,
+        date: editTxDate,
+        year,
+        period,
+        note: editTxNote.trim() || `Reallocated from ${finalFromCat} to ${finalToCat}`,
+        category: finalFromCat,
+        toCategory: finalToCat,
+        accountId: targetAcc ? targetAcc.id : editingTx.accountId,
+        accountName: targetAcc ? targetAcc.name : editingTx.accountName,
+      });
+      setEditingTx(null);
+      return;
+    }
+
     onUpdateTransaction(editingTx.id, {
       amount: amt,
       date: editTxDate,
@@ -308,7 +375,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       note: editTxNote.trim() || editingTx.note,
       category:
         resolvedCategory ||
-        (editingTx.source === 'withdrawal' ? 'General Reserves / Starting Capital' : undefined),
+        (editingTx.source === 'withdrawal' ||
+        editingTx.source === 'budget_sync' ||
+        Boolean(editingTx.category)
+          ? 'General Reserves / Starting Capital'
+          : undefined),
       accountId: targetAcc ? targetAcc.id : editingTx.accountId,
       accountName: targetAcc ? targetAcc.name : editingTx.accountName,
     });
@@ -468,7 +539,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           const fundName = resolveCanonicalSinkingFundName(
             rawItem,
             entry.category,
-            knownCanonicalPool
+            knownCanonicalPool,
+            !budget?.isPersonalizedTemplate
           );
           if (
             fundName.trim().toLowerCase() === 'general reserves / starting capital' ||
@@ -483,28 +555,39 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         });
     }
 
-    // 3. Process all ledger transactions
-    ledger.transactions.forEach((tx) => {
+    // 3. Process all ledger transactions in chronological order (inflows -> transfers -> reallocations -> withdrawals on same day)
+    const chronologicalTxs = sortLedgerTransactionsForAggregation(ledger.transactions);
+    const transferTxs: { accountId: string; toAccountId?: string; amount: number }[] = [];
+
+    chronologicalTxs.forEach((tx) => {
       const amt = tx.amount || 0;
+      if (amt <= 0) return;
       const accObj = ledger.accounts.find((a) => a.id === tx.accountId);
       const accName = accObj ? accObj.name : tx.accountName;
 
       if (tx.source === 'transfer') {
-        if (tx.category) {
-          const canonicalKey = resolveCanonicalSinkingFundName(tx.category, tx.category, knownCanonicalPool).toLowerCase();
-          const targetFund = fundMap.get(canonicalKey);
-          if (targetFund) {
-            targetFund.txCount += 1;
-            const fromAcc = targetFund.accounts.get(tx.accountId) || { accountId: tx.accountId, accountName: accName, amount: 0 };
-            fromAcc.amount -= amt;
-            targetFund.accounts.set(tx.accountId, fromAcc);
-            if (tx.toAccountId) {
-              const toAccObj = ledger.accounts.find((a) => a.id === tx.toAccountId);
-              const toAccName = toAccObj ? toAccObj.name : (tx.toAccountName || 'Account');
-              const toAcc = targetFund.accounts.get(tx.toAccountId) || { accountId: tx.toAccountId, accountName: toAccName, amount: 0 };
-              toAcc.amount += amt;
-              targetFund.accounts.set(tx.toAccountId, toAcc);
-            }
+        transferTxs.push({
+          accountId: tx.accountId,
+          toAccountId: tx.toAccountId,
+          amount: amt,
+        });
+        if (
+          tx.category &&
+          tx.category.trim().toLowerCase() !== 'general reserves / starting capital'
+        ) {
+          const targetFund = getOrCreateFund(tx.category, tx.category);
+          targetFund.txCount += 1;
+          applyFundSliceOutflow(targetFund.accounts, tx.accountId, accName, amt);
+          if (tx.toAccountId) {
+            const toAccObj = ledger.accounts.find((a) => a.id === tx.toAccountId);
+            const toAccName = toAccObj ? toAccObj.name : (tx.toAccountName || 'Account');
+            const toAcc = targetFund.accounts.get(tx.toAccountId) || {
+              accountId: tx.toAccountId,
+              accountName: toAccName,
+              amount: 0,
+            };
+            toAcc.amount = roundCurrency(toAcc.amount + amt);
+            targetFund.accounts.set(tx.toAccountId, toAcc);
           }
         }
         return;
@@ -513,8 +596,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       if (tx.source === 'reallocation') {
         const fromFundName = tx.category || 'General Reserves / Starting Capital';
         const toFundName = tx.toCategory || 'General Reserves / Starting Capital';
-        const isFromUnallocated = fromFundName.trim().toLowerCase() === 'general reserves / starting capital';
-        const isToUnallocated = toFundName.trim().toLowerCase() === 'general reserves / starting capital';
+        const isFromUnallocated =
+          fromFundName.trim().toLowerCase() === 'general reserves / starting capital';
+        const isToUnallocated =
+          toFundName.trim().toLowerCase() === 'general reserves / starting capital';
+
+        let deductedSlices: { accountId: string; accountName: string; amount: number }[] = [];
 
         if (!isFromUnallocated) {
           const fromFund = getOrCreateFund(fromFundName);
@@ -522,12 +609,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           if (!fromFund.latestDate || new Date(tx.date) > new Date(fromFund.latestDate)) {
             fromFund.latestDate = tx.date;
           }
-          fromFund.outflow += amt;
-          if (tx.accountId) {
-            const fromAcc = fromFund.accounts.get(tx.accountId) || { accountId: tx.accountId, accountName: accName, amount: 0 };
-            fromAcc.amount -= amt;
-            fromFund.accounts.set(tx.accountId, fromAcc);
-          }
+          fromFund.outflow = roundCurrency(fromFund.outflow + amt);
+          deductedSlices = applyFundSliceOutflow(
+            fromFund.accounts,
+            tx.accountId,
+            accName,
+            amt
+          );
         }
 
         if (!isToUnallocated) {
@@ -536,10 +624,26 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           if (!toFund.latestDate || new Date(tx.date) > new Date(toFund.latestDate)) {
             toFund.latestDate = tx.date;
           }
-          toFund.inflow += amt;
-          if (tx.accountId) {
-            const toAcc = toFund.accounts.get(tx.accountId) || { accountId: tx.accountId, accountName: accName, amount: 0 };
-            toAcc.amount += amt;
+          toFund.inflow = roundCurrency(toFund.inflow + amt);
+          if (!isFromUnallocated && deductedSlices.length > 0) {
+            deductedSlices.forEach((slice) => {
+              const sliceAccObj = ledger.accounts.find((a) => a.id === slice.accountId);
+              const sliceAccName = sliceAccObj ? sliceAccObj.name : slice.accountName;
+              const toAcc = toFund.accounts.get(slice.accountId) || {
+                accountId: slice.accountId,
+                accountName: sliceAccName,
+                amount: 0,
+              };
+              toAcc.amount = roundCurrency(toAcc.amount + slice.amount);
+              toFund.accounts.set(slice.accountId, toAcc);
+            });
+          } else if (tx.accountId) {
+            const toAcc = toFund.accounts.get(tx.accountId) || {
+              accountId: tx.accountId,
+              accountName: accName,
+              amount: 0,
+            };
+            toAcc.amount = roundCurrency(toAcc.amount + amt);
             toFund.accounts.set(tx.accountId, toAcc);
           }
         }
@@ -558,15 +662,25 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         category = tx.category && tx.category.trim() ? 'Savings / Yield' : 'Yield & Interest';
       } else if (tx.source === 'withdrawal') {
         const rawWithdrawCat = (tx.category || '').trim();
+        const cleanedWithdrawNote = tx.note
+          .replace(/^Withdrawal:\s*/i, '')
+          .split(' — ')[0]
+          .trim();
         if (
           !rawWithdrawCat ||
           rawWithdrawCat.toLowerCase() === 'general reserves / starting capital' ||
           rawWithdrawCat.toLowerCase() === 'general unallocated withdrawal' ||
           WITHDRAWAL_REASONS.some((r) => r.toLowerCase() === rawWithdrawCat.toLowerCase())
         ) {
-          const matchedKnown = rawWithdrawCat
-            ? findClosestSinkingFundMatch(rawWithdrawCat, knownCanonicalPool)
-            : null;
+          const matchedKnown =
+            (rawWithdrawCat
+              ? findClosestSinkingFundMatch(rawWithdrawCat, knownCanonicalPool)
+              : null) ||
+            (cleanedWithdrawNote &&
+            cleanedWithdrawNote.toLowerCase() !== 'general reserves / starting capital' &&
+            !WITHDRAWAL_REASONS.some((r) => r.toLowerCase() === cleanedWithdrawNote.toLowerCase())
+              ? findClosestSinkingFundMatch(cleanedWithdrawNote, knownCanonicalPool)
+              : null);
           if (!matchedKnown) {
             return;
           }
@@ -575,9 +689,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         } else {
           fundName =
             resolveCanonicalSinkingFundName(
-              rawWithdrawCat || tx.note.replace(/^Withdrawal:\s*/i, '').trim(),
+              rawWithdrawCat || cleanedWithdrawNote,
               rawWithdrawCat,
-              knownCanonicalPool
+              knownCanonicalPool,
+              !budget?.isPersonalizedTemplate
             ) || 'General Withdrawal';
           category = rawWithdrawCat || 'Withdrawal';
         }
@@ -586,6 +701,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           ? budget?.entries?.find((e) => e.id === tx.budgetEntryId)
           : undefined;
         if (linkedEntry) {
+          if (
+            linkedEntry.status === 'Pending' ||
+            (linkedEntry.actualCost ?? linkedEntry.amount ?? 0) <= 0
+          ) {
+            return;
+          }
           const rawLinkedItem = (linkedEntry.item || linkedEntry.description || '').trim();
           if (rawLinkedItem.toLowerCase() === 'general reserves / starting capital') {
             return;
@@ -593,7 +714,8 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           fundName = resolveCanonicalSinkingFundName(
             rawLinkedItem,
             linkedEntry.category,
-            knownCanonicalPool
+            knownCanonicalPool,
+            !budget?.isPersonalizedTemplate
           );
           if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
             return;
@@ -603,8 +725,14 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
           const cleanNote = tx.note
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
+            .split(' — ')[0]
             .trim();
-          const canonicalNote = resolveCanonicalSinkingFundName(cleanNote, undefined, knownCanonicalPool);
+          const canonicalNote = resolveCanonicalSinkingFundName(
+            cleanNote,
+            undefined,
+            knownCanonicalPool,
+            !budget?.isPersonalizedTemplate
+          );
           if (cleanNote && fundMap.has(canonicalNote.toLowerCase())) {
             fundName = canonicalNote;
           } else {
@@ -647,65 +775,27 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       }
 
       if (tx.source === 'withdrawal') {
-        fund.outflow += amt;
-        const currentAcc = fund.accounts.get(tx.accountId) || { accountId: tx.accountId, accountName: accName, amount: 0 };
-        currentAcc.amount -= amt;
-        fund.accounts.set(tx.accountId, currentAcc);
+        fund.outflow = roundCurrency(fund.outflow + amt);
+        applyFundSliceOutflow(fund.accounts, tx.accountId, accName, amt);
       } else {
-        fund.inflow += amt;
-        const currentAcc = fund.accounts.get(tx.accountId) || { accountId: tx.accountId, accountName: accName, amount: 0 };
-        currentAcc.amount += amt;
+        fund.inflow = roundCurrency(fund.inflow + amt);
+        const currentAcc = fund.accounts.get(tx.accountId) || {
+          accountId: tx.accountId,
+          accountName: accName,
+          amount: 0,
+        };
+        currentAcc.amount = roundCurrency(currentAcc.amount + amt);
         fund.accounts.set(tx.accountId, currentAcc);
       }
     });
 
-    // 4. Compute results
-    const result: CategoryFundSummary[] = [];
-    let categorizedNetSum = 0;
-
-    fundMap.forEach((f) => {
-      if (
-        f.category?.trim().toLowerCase() === 'unallocated cash pool' ||
-        f.name.trim().toLowerCase() === 'unallocated cash pool' ||
-        f.name.trim().toLowerCase() === 'general reserves / starting capital'
-      ) {
-        return;
-      }
-      const net = Math.max(0, Math.round((f.inflow - f.outflow) * 100) / 100);
-      categorizedNetSum = Math.round((categorizedNetSum + net) * 100) / 100;
-
-      const accList = Array.from(f.accounts.values())
-        .filter((a) => a.amount > 0.005)
-        .map((a) => {
-          const accInfo = ledger.accounts.find((acc) => acc.id === a.accountId);
-          const roundedAmt = Math.round(a.amount * 100) / 100;
-          return {
-            accountId: a.accountId,
-            accountName: a.accountName,
-            accountType: accInfo?.type,
-            accountColor: accInfo?.color || '#10b981',
-            amount: roundedAmt,
-            percentage: net > 0 ? (roundedAmt / net) * 100 : 0,
-          };
-        })
-        .sort((a, b) => b.amount - a.amount);
-
-      result.push({
-        id: f.id,
-        name: f.name,
-        category: f.category,
-        color: f.color,
-        totalInflow: Math.round(f.inflow * 100) / 100,
-        totalOutflow: Math.round(f.outflow * 100) / 100,
-        currentBalance: net,
-        percentageOfTotal: totalCapital > 0 ? (net / totalCapital) * 100 : 0,
-        accounts: accList,
-        transactionCount: f.txCount,
-        latestDate: f.latestDate,
-        plannedAnnualTarget: f.plannedAnnualTarget,
-        savedThisYear: f.savedThisYear,
-      });
-    });
+    // 4. Reconcile fund net balances and per-account slices so zeroed funds or transferred accounts never leave ghost earmarked slices
+    const { reconciledFunds: result, categorizedNetSum } = reconcileFundAndAccountSlices(
+      Array.from(fundMap.values()),
+      ledger.accounts,
+      totalCapital,
+      transferTxs
+    );
 
     // Unallocated remainder (opening balances or unassigned capital)
     const rawUnallocatedRemainder = Math.max(0, Math.round((totalCapital - categorizedNetSum) * 100) / 100);
@@ -1061,6 +1151,7 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     if (transferFromAccountId === transferToAccountId) return;
 
     const fromAcc = ledger.accounts.find((a) => a.id === transferFromAccountId) || ledger.accounts[0];
+    if (!fromAcc || amountNum > roundCurrency(fromAcc.balance) + 0.005) return;
     const toAcc =
       ledger.accounts.find((a) => a.id === transferToAccountId) ||
       ledger.accounts.find((a) => a.id !== fromAcc.id) ||
@@ -1094,6 +1185,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
         ? reallocateCustomCategory.trim()
         : reallocateToCategory.trim();
     if (!targetCat || reallocateFromCategory === targetCat) return;
+
+    const sourceFund =
+      reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
+        ? unallocatedFund
+        : categoryFunds.find((f) => f.name === reallocateFromCategory);
+    const accSlice = reallocateAccountId
+      ? sourceFund?.accounts.find((a) => a.accountId === reallocateAccountId)
+      : undefined;
+    const maxAvail =
+      accSlice && accSlice.amount > 0 ? accSlice.amount : sourceFund?.currentBalance || 0;
+    if (amountNum > roundCurrency(maxAvail) + 0.005) return;
 
     const acc = ledger.accounts.find((a) => a.id === reallocateAccountId);
     const { year, period } = parseDateYearAndPeriod(reallocateDate);
@@ -1705,16 +1807,18 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               const txCount = getAccountTransactionCount(acc.id);
 
               const allocatedSlices = categoryFunds
-                .filter((cf) => cf.id !== 'fund-general-unallocated')
+                .filter((cf) => cf.id !== 'fund-general-unallocated' && cf.currentBalance > 0.005)
                 .map((cf) => {
                   const match = cf.accounts.find((a) => a.accountId === acc.id);
-                  return match && match.amount > 0
-                    ? { name: cf.name, color: cf.color, amount: match.amount }
+                  return match && match.amount > 0.005
+                    ? { name: cf.name, color: cf.color, amount: roundCurrency(match.amount) }
                     : null;
                 })
                 .filter(Boolean) as { name: string; color: string; amount: number }[];
-              const allocatedTotal = allocatedSlices.reduce((s, item) => s + item.amount, 0);
-              const unallocatedAmt = Math.max(0, acc.balance - allocatedTotal);
+              const allocatedTotal = roundCurrency(
+                allocatedSlices.reduce((s, item) => s + item.amount, 0)
+              );
+              const unallocatedAmt = Math.max(0, roundCurrency(acc.balance - allocatedTotal));
 
               return (
                 <div
@@ -2692,7 +2796,22 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       return (
                         <CustomSelect
                           value={withdrawCategory}
-                          onChange={(e) => setWithdrawCategory(e.target.value)}
+                          onChange={(e) => {
+                            const nextCat = e.target.value;
+                            setWithdrawCategory(nextCat);
+                            const isNextGeneral =
+                              nextCat.trim().toLowerCase() === 'general reserves / starting capital';
+                            const nextFundObj = isNextGeneral
+                              ? unallocatedFund
+                              : categoryFunds.find((f) => f.name === nextCat);
+                            if (nextFundObj && nextFundObj.accounts.length > 0) {
+                              const heldInCurr =
+                                nextFundObj.accounts.find((a) => a.accountId === withdrawAccountId)?.amount || 0;
+                              if (heldInCurr <= 0 && nextFundObj.accounts[0].amount > 0) {
+                                setWithdrawAccountId(nextFundObj.accounts[0].accountId);
+                              }
+                            }
+                          }}
                           className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                         >
                           {(fundsInSelectedBank.length > 0 || unallocInSelectedBank > 0) && (
@@ -2945,6 +3064,20 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
                 </div>
 
+                {(() => {
+                  const fromAcc = ledger.accounts.find((a) => a.id === transferFromAccountId) || ledger.accounts[0];
+                  const tAmt = parseFloat(transferAmount) || 0;
+                  if (!fromAcc || tAmt <= roundCurrency(fromAcc.balance) + 0.005) return null;
+                  return (
+                    <div className="p-2 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                      <span>
+                        Exceeds source account balance ({currencySymbol}{formatNumber(fromAcc.balance)}).
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 <div>
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">Memo (Optional)</label>
@@ -2968,7 +3101,17 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    disabled={(() => {
+                      const fromAcc = ledger.accounts.find((a) => a.id === transferFromAccountId) || ledger.accounts[0];
+                      const tAmt = parseFloat(transferAmount) || 0;
+                      return (
+                        !fromAcc ||
+                        tAmt <= 0 ||
+                        tAmt > roundCurrency(fromAcc.balance) + 0.005 ||
+                        transferFromAccountId === transferToAccountId
+                      );
+                    })()}
+                    className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <ArrowLeftRight className="w-3.5 h-3.5" />
                     <span>Complete Transfer</span>
@@ -3607,40 +3750,98 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 />
               )}
 
-              <div>
-                <div className="flex items-center justify-between h-4 mb-1">
-                  <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
-                    Bank Account Holding This Fund
-                  </label>
-                </div>
-                <AccountSelectDropdown
-                  value={reallocateAccountId}
-                  onChange={(nextAccId) => {
-                    const { accountId: resolvedId, amountStr: nextAmtStr } =
-                      resolveSourceFundAccountAndAmount(reallocateFromCategory, nextAccId);
-                    setReallocateAccountId(resolvedId);
-                    setReallocateAmount(nextAmtStr);
-                  }}
-                  accounts={ledger.accounts}
-                  currencySymbol={currencySymbol}
-                  emptyOption={{
-                    value: '',
-                    label: 'All / Unspecified Account',
-                  }}
-                  getAccountLabelSuffix={(acc) => {
-                    const isFromUnallocated =
-                      reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
-                    const sourceFundObj = isFromUnallocated
-                      ? unallocatedFund
-                      : categoryFunds.find((f) => f.name === reallocateFromCategory);
-                    const heldInAcc =
-                      sourceFundObj?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
-                    return ` (${currencySymbol}${formatNumber(acc.balance)} · In ${
-                      isFromUnallocated ? 'Unallocated' : reallocateFromCategory
-                    }: ${currencySymbol}${formatNumber(heldInAcc)})`;
-                  }}
-                />
-              </div>
+              {(() => {
+                const isFromUnallocated =
+                  reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital';
+                const sourceFundObj = isFromUnallocated
+                  ? unallocatedFund
+                  : categoryFunds.find((f) => f.name === reallocateFromCategory);
+                const holdingAccounts = getHoldingAccountsForReallocateFund(
+                  reallocateFromCategory,
+                  ledger.accounts,
+                  categoryFunds,
+                  unallocatedFund
+                );
+                const singleHoldingAcc =
+                  holdingAccounts.length === 1
+                    ? holdingAccounts[0]
+                    : reallocateAccountId
+                    ? ledger.accounts.find((a) => a.id === reallocateAccountId)
+                    : undefined;
+                const singleHeldAmount = singleHoldingAcc
+                  ? sourceFundObj?.accounts.find((a) => a.accountId === singleHoldingAcc.id)?.amount || 0
+                  : sourceFundObj?.currentBalance || 0;
+
+                return (
+                  <div>
+                    <div className="flex items-center justify-between gap-2 h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        Bank Account Holding This Fund
+                      </label>
+                      {holdingAccounts.length === 1 ? (
+                        <span className="text-[10px] font-medium text-slate-400 dark:text-slate-500 shrink-0">
+                          Locked to holding account
+                        </span>
+                      ) : holdingAccounts.length > 1 ? (
+                        <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 shrink-0">
+                          Split across {holdingAccounts.length} accounts
+                        </span>
+                      ) : null}
+                    </div>
+                    {holdingAccounts.length <= 1 ? (
+                      <div
+                        className="w-full h-8 sm:h-9 px-2.5 bg-slate-100/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 rounded-xl flex items-center justify-between gap-2 text-xs text-slate-700 dark:text-slate-200 cursor-not-allowed select-none"
+                        title="Reallocation moves funds between Goal Funds inside the same Bank Account. Use Transfer to move money between different Bank Accounts."
+                      >
+                        {singleHoldingAcc ? (
+                          <span className="flex items-center gap-1.5 min-w-0 truncate">
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: singleHoldingAcc.color || '#10b981' }}
+                            />
+                            <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">
+                              {singleHoldingAcc.name}
+                            </span>
+                            <span className="text-[9px] sm:text-[10px] font-normal text-slate-400 dark:text-slate-500 shrink-0">
+                              · {singleHoldingAcc.type}
+                            </span>
+                            <span className="text-slate-500 dark:text-slate-400 truncate">
+                              ({currencySymbol}{formatNumber(singleHoldingAcc.balance)} · In{' '}
+                              {isFromUnallocated ? 'Unallocated' : reallocateFromCategory}:{' '}
+                              {currencySymbol}{formatNumber(singleHeldAmount)})
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 dark:text-slate-400 truncate">
+                            All / Unspecified Account (In{' '}
+                            {isFromUnallocated ? 'Unallocated' : reallocateFromCategory}:{' '}
+                            {currencySymbol}{formatNumber(singleHeldAmount)})
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <AccountSelectDropdown
+                        value={reallocateAccountId}
+                        onChange={(nextAccId) => {
+                          const { accountId: resolvedId, amountStr: nextAmtStr } =
+                            resolveSourceFundAccountAndAmount(reallocateFromCategory, nextAccId);
+                          setReallocateAccountId(resolvedId);
+                          setReallocateAmount(nextAmtStr);
+                        }}
+                        accounts={holdingAccounts}
+                        currencySymbol={currencySymbol}
+                        getAccountLabelSuffix={(acc) => {
+                          const heldInAcc =
+                            sourceFundObj?.accounts.find((a) => a.accountId === acc.id)?.amount || 0;
+                          return ` (${currencySymbol}${formatNumber(acc.balance)} · In ${
+                            isFromUnallocated ? 'Unallocated' : reallocateFromCategory
+                          }: ${currencySymbol}${formatNumber(heldInAcc)})`;
+                        }}
+                      />
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
                 <div className="min-w-0">
@@ -3697,6 +3898,28 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                   </div>
                 </div>
               </div>
+
+              {(() => {
+                const rAmt = parseFloat(reallocateAmount) || 0;
+                const sourceFund =
+                  reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
+                    ? unallocatedFund
+                    : categoryFunds.find((f) => f.name === reallocateFromCategory);
+                const accSlice = reallocateAccountId
+                  ? sourceFund?.accounts.find((a) => a.accountId === reallocateAccountId)
+                  : undefined;
+                const maxAvail =
+                  accSlice && accSlice.amount > 0 ? accSlice.amount : sourceFund?.currentBalance || 0;
+                if (rAmt <= 0 || rAmt <= roundCurrency(maxAvail) + 0.005) return null;
+                return (
+                  <div className="p-2 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-200 text-[11px] flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                    <span>
+                      Exceeds available balance ({currencySymbol}{formatNumber(maxAvail)}).
+                    </span>
+                  </div>
+                );
+              })()}
 
               {/* Live Before -> After Reallocation Preview */}
               {(() => {
@@ -3774,13 +3997,26 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={
-                    !reallocateToCategory ||
-                    reallocateToCategory === reallocateFromCategory ||
-                    (reallocateToCategory === '__custom__' && !reallocateCustomCategory.trim()) ||
-                    !reallocateAmount
-                  }
-                  className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-semibold rounded-xl cursor-pointer shadow-xs"
+                  disabled={(() => {
+                    const rAmt = parseFloat(reallocateAmount) || 0;
+                    const sourceFund =
+                      reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
+                        ? unallocatedFund
+                        : categoryFunds.find((f) => f.name === reallocateFromCategory);
+                    const accSlice = reallocateAccountId
+                      ? sourceFund?.accounts.find((a) => a.accountId === reallocateAccountId)
+                      : undefined;
+                    const maxAvail =
+                      accSlice && accSlice.amount > 0 ? accSlice.amount : sourceFund?.currentBalance || 0;
+                    return (
+                      !reallocateToCategory ||
+                      reallocateToCategory === reallocateFromCategory ||
+                      (reallocateToCategory === '__custom__' && !reallocateCustomCategory.trim()) ||
+                      rAmt <= 0 ||
+                      rAmt > roundCurrency(maxAvail) + 0.005
+                    );
+                  })()}
+                  className="h-8 sm:h-9 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl cursor-pointer shadow-xs"
                 >
                   Confirm Reallocation
                 </button>
@@ -3807,6 +4043,44 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
               </button>
             </div>
             <form onSubmit={handleSaveEditTx} className="mt-3 space-y-2.5 sm:space-y-3">
+              {editingTx.source === 'transfer' ? (
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        From Bank Account
+                      </label>
+                    </div>
+                    <AccountSelectDropdown
+                      value={editTxAccountId}
+                      onChange={(newFrom) => {
+                        setEditTxAccountId(newFrom);
+                        if (newFrom === editTxToAccountId) {
+                          const other = ledger.accounts.find((a) => a.id !== newFrom);
+                          if (other) setEditTxToAccountId(other.id);
+                        }
+                      }}
+                      accounts={ledger.accounts}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        To Bank Account
+                      </label>
+                    </div>
+                    <AccountSelectDropdown
+                      value={editTxToAccountId}
+                      onChange={setEditTxToAccountId}
+                      accounts={ledger.accounts.filter((a) => a.id !== editTxAccountId)}
+                      currencySymbol={currencySymbol}
+                      showBalance={true}
+                    />
+                  </div>
+                </div>
+              ) : (
                 <div>
                   <div className="flex items-center justify-between h-4 mb-1">
                     <label className="text-slate-600 dark:text-slate-300 font-semibold">
@@ -3821,11 +4095,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                     showBalance={true}
                   />
                 </div>
-                {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
-                  <div>
+              )}
+              {editingTx.source === 'reallocation' && (
+                <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                  <div className="min-w-0">
                     <div className="flex items-center justify-between h-4 mb-1">
-                      <label className="text-slate-600 dark:text-slate-300 font-semibold">
-                        Goal Fund
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        From Goal Fund
                       </label>
                     </div>
                     <CustomSelect
@@ -3833,19 +4109,101 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       onChange={(e) => setEditTxCategory(e.target.value)}
                       className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                     >
-                      <option value="">General Reserves / Starting Capital (Unallocated)</option>
+                      <option value="">General Reserves / Starting Capital</option>
                       {Array.from(
                         new Set([
                           ...allKnownGoalFundNames,
-                          ...(editingTx.category ? [editingTx.category] : []),
+                          ...(editingTx.category &&
+                          editingTx.category.trim().toLowerCase() !== 'general reserves / starting capital'
+                            ? [editingTx.category]
+                            : []),
                         ])
                       ).map((cat) => (
-                        <option key={cat} value={cat}>
+                        <option key={`edit-from-${cat}`} value={cat}>
                           {cat}
                         </option>
                       ))}
                       <option value="__custom__">+ New Goal Fund...</option>
                     </CustomSelect>
+                    {editTxCategory === '__custom__' && (
+                      <input
+                        type="text"
+                        required
+                        placeholder="Enter source fund name..."
+                        value={editTxCustomCategory}
+                        onChange={(e) => setEditTxCustomCategory(e.target.value)}
+                        className="mt-2 w-full h-8 sm:h-9 px-2.5 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between h-4 mb-1">
+                      <label className="text-slate-600 dark:text-slate-300 font-semibold truncate">
+                        To Goal Fund
+                      </label>
+                    </div>
+                    <CustomSelect
+                      value={editTxToCategory}
+                      onChange={(e) => setEditTxToCategory(e.target.value)}
+                      className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
+                    >
+                      <option value="">General Reserves / Starting Capital</option>
+                      {Array.from(
+                        new Set([
+                          ...allKnownGoalFundNames,
+                          ...(editingTx.toCategory &&
+                          editingTx.toCategory.trim().toLowerCase() !== 'general reserves / starting capital'
+                            ? [editingTx.toCategory]
+                            : []),
+                        ])
+                      ).map((cat) => (
+                        <option key={`edit-to-${cat}`} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                      <option value="__custom__">+ New Goal Fund...</option>
+                    </CustomSelect>
+                    {editTxToCategory === '__custom__' && (
+                      <input
+                        type="text"
+                        required
+                        placeholder="Enter target fund name..."
+                        value={editTxCustomToCategory}
+                        onChange={(e) => setEditTxCustomToCategory(e.target.value)}
+                        className="mt-2 w-full h-8 sm:h-9 px-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-700 rounded-xl text-slate-900 dark:text-white font-medium outline-none"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+              {editingTx.source !== 'transfer' && editingTx.source !== 'reallocation' && (
+                <div>
+                  <div className="flex items-center justify-between h-4 mb-1">
+                    <label className="text-slate-600 dark:text-slate-300 font-semibold">
+                      Goal Fund
+                    </label>
+                  </div>
+                  <CustomSelect
+                    value={editTxCategory}
+                    onChange={(e) => setEditTxCategory(e.target.value)}
+                    className="w-full h-8 sm:h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
+                  >
+                    <option value="">General Reserves / Starting Capital (Unallocated)</option>
+                    {Array.from(
+                      new Set([
+                        ...allKnownGoalFundNames,
+                        ...(editingTx.category &&
+                        editingTx.category.trim().toLowerCase() !== 'general reserves / starting capital'
+                          ? [editingTx.category]
+                          : []),
+                      ])
+                    ).map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                    <option value="__custom__">+ New Goal Fund...</option>
+                  </CustomSelect>
                   {editTxCategory === '__custom__' && (
                     <input
                       type="text"

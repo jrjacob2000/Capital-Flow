@@ -42,13 +42,21 @@ import {
   stripDefaultStarterTemplates,
   deriveCategoryBudgetsFromTemplates,
   resolveCanonicalSinkingFundName,
+  collectActiveSinkingFundNames,
   normalizeSavingCategoryGroup,
   DEFAULT_STARTER_EPOCH,
   isDefaultStarterBudget,
   isDefaultStarterTemplateData,
   isDefaultStarterLedger,
 } from './sampleData';
-import { getPeriodItemExclusionKeys, shouldTemplateDisplayInBudget } from '../utils/budgetCalculations';
+import {
+  getPeriodItemExclusionKeys,
+  shouldTemplateDisplayInBudget,
+  sortLedgerTransactionsForAggregation,
+  applyFundSliceOutflow,
+  roundCurrency,
+  FundAccountSliceEntry,
+} from '../utils/budgetCalculations';
 import { auth, sanitizeErrorForLog } from './firebase';
 import { FirestoreSyncService } from './firestoreService';
 
@@ -1215,11 +1223,151 @@ export class FinanceStorageService {
   /**
    * Load savings ledger from in-memory cloud runtime or localStorage fallback.
    */
+  /**
+   * Self-heals legacy ledger transactions (such as reallocations recorded prior to v1.25.18
+   * whose accountId defaulted to a Bank Account holding 0 of the source Goal Fund).
+   */
+  static healLegacyLedgerTransactions(ledger: SavingsLedgerData): boolean {
+    if (!ledger || !Array.isArray(ledger.transactions) || ledger.transactions.length === 0) {
+      return false;
+    }
+
+    let migrated = false;
+    const accounts = Array.isArray(ledger.accounts) ? ledger.accounts : [];
+    const fundSlices = new Map<string, Map<string, FundAccountSliceEntry>>();
+
+    const getFundMap = (rawName?: string): Map<string, FundAccountSliceEntry> | null => {
+      const trimmed = (rawName || '').trim();
+      if (!trimmed || trimmed.toLowerCase() === 'general reserves / starting capital') {
+        return null;
+      }
+      const key = trimmed.toLowerCase();
+      if (!fundSlices.has(key)) {
+        fundSlices.set(key, new Map());
+      }
+      return fundSlices.get(key)!;
+    };
+
+    const ordered = sortLedgerTransactionsForAggregation(ledger.transactions);
+
+    for (const tx of ordered) {
+      const amt = tx.amount || 0;
+      if (amt <= 0) continue;
+      const accObj = accounts.find((a) => a.id === tx.accountId);
+      const accName = accObj ? accObj.name : tx.accountName;
+
+      if (tx.source === 'transfer') {
+        const fMap = getFundMap(tx.category);
+        if (fMap) {
+          applyFundSliceOutflow(fMap, tx.accountId, accName, amt);
+          if (tx.toAccountId) {
+            const toAccObj = accounts.find((a) => a.id === tx.toAccountId);
+            const toAccName = toAccObj ? toAccObj.name : (tx.toAccountName || 'Account');
+            const cur = fMap.get(tx.toAccountId) || {
+              accountId: tx.toAccountId,
+              accountName: toAccName,
+              amount: 0,
+            };
+            cur.amount = roundCurrency(cur.amount + amt);
+            fMap.set(tx.toAccountId, cur);
+          }
+        }
+        continue;
+      }
+
+      if (tx.source === 'reallocation') {
+        const fromMap = getFundMap(tx.category);
+        const toMap = getFundMap(tx.toCategory);
+        let deducted: FundAccountSliceEntry[] = [];
+
+        if (fromMap) {
+          const heldInTxAcc = tx.accountId ? (fromMap.get(tx.accountId)?.amount || 0) : 0;
+          if (heldInTxAcc <= 0.005) {
+            const positiveHolders = Array.from(fromMap.values())
+              .filter((s) => s.amount > 0.005)
+              .sort((a, b) => b.amount - a.amount);
+            if (positiveHolders.length > 0) {
+              const primary = positiveHolders[0];
+              const matchedAcc = accounts.find((a) => a.id === primary.accountId);
+              const targetTx = ledger.transactions.find((t) => t.id === tx.id);
+              if (targetTx && targetTx.accountId !== primary.accountId) {
+                targetTx.accountId = primary.accountId;
+                targetTx.accountName = matchedAcc ? matchedAcc.name : primary.accountName;
+                tx.accountId = targetTx.accountId;
+                tx.accountName = targetTx.accountName;
+                migrated = true;
+              }
+            }
+          }
+          deducted = applyFundSliceOutflow(fromMap, tx.accountId, tx.accountName, amt);
+        }
+
+        if (toMap) {
+          if (deducted.length > 0) {
+            for (const d of deducted) {
+              const cur = toMap.get(d.accountId) || {
+                accountId: d.accountId,
+                accountName: d.accountName,
+                amount: 0,
+              };
+              cur.amount = roundCurrency(cur.amount + d.amount);
+              toMap.set(d.accountId, cur);
+            }
+          } else if (tx.accountId) {
+            const cur = toMap.get(tx.accountId) || {
+              accountId: tx.accountId,
+              accountName: accName,
+              amount: 0,
+            };
+            cur.amount = roundCurrency(cur.amount + amt);
+            toMap.set(tx.accountId, cur);
+          }
+        }
+        continue;
+      }
+
+      const rawFund =
+        tx.category ||
+        tx.note
+          .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal):\s*/i, '')
+          .split(' — ')[0]
+          .trim();
+      const fMap = getFundMap(rawFund);
+      if (!fMap) continue;
+
+      if (tx.source === 'withdrawal') {
+        applyFundSliceOutflow(fMap, tx.accountId, accName, amt);
+      } else if (tx.accountId) {
+        const cur = fMap.get(tx.accountId) || {
+          accountId: tx.accountId,
+          accountName: accName,
+          amount: 0,
+        };
+        cur.amount = roundCurrency(cur.amount + amt);
+        fMap.set(tx.accountId, cur);
+      }
+    }
+
+    return migrated;
+  }
+
+  /**
+   * Load savings ledger from in-memory cloud runtime or localStorage fallback.
+   */
   static loadLocalSavingsLedger(): SavingsLedgerData {
     FinanceStorageService.checkAndPerformAutoClean();
 
     if (FinanceStorageService.cloudMemoryActive && FinanceStorageService.cloudMemoryLedger) {
-      return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryLedger)) as SavingsLedgerData;
+      const cloudCopy = JSON.parse(
+        JSON.stringify(FinanceStorageService.cloudMemoryLedger)
+      ) as SavingsLedgerData;
+      if (FinanceStorageService.healLegacyLedgerTransactions(cloudCopy)) {
+        FinanceStorageService.saveLocalSavingsLedger(cloudCopy, {
+          isDefaultStarter: Boolean(cloudCopy.isDefaultStarterData),
+          preserveTimestamp: true,
+        });
+      }
+      return cloudCopy;
     }
 
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_LEDGER);
@@ -1257,6 +1405,9 @@ export class FinanceStorageService {
             return updated;
           });
         }
+        if (FinanceStorageService.healLegacyLedgerTransactions(parsed)) {
+          ledgerMigrated = true;
+        }
         const isStarter = isDefaultStarterLedger(parsed);
         if (isStarter) {
           if (!parsed.isDefaultStarterData || parsed.lastUpdated !== DEFAULT_STARTER_EPOCH) {
@@ -1283,7 +1434,13 @@ export class FinanceStorageService {
     }
 
     if (FinanceStorageService.cloudMemoryLedger) {
-      return JSON.parse(JSON.stringify(FinanceStorageService.cloudMemoryLedger)) as SavingsLedgerData;
+      const snapshotCopy = JSON.parse(
+        JSON.stringify(FinanceStorageService.cloudMemoryLedger)
+      ) as SavingsLedgerData;
+      if (FinanceStorageService.healLegacyLedgerTransactions(snapshotCopy)) {
+        FinanceStorageService.cloudMemoryLedger = JSON.parse(JSON.stringify(snapshotCopy));
+      }
+      return snapshotCopy;
     }
 
     const budget2026 = FinanceStorageService.loadLocalBudget(2026);
@@ -1578,9 +1735,17 @@ export class FinanceStorageService {
       const safeAccName = targetAccount ? targetAccount.name : (entry.savingAccountName || 'Savings Account');
       const rawItemTrim = (entry.item || entry.description || '').trim();
       const isUnallocatedCategory = (entry.category || '').trim().toLowerCase() === 'unallocated cash pool';
-      const canonicalFund = isUnallocatedCategory || rawItemTrim.toLowerCase() === 'general reserves / starting capital'
-        ? 'General Reserves / Starting Capital'
-        : resolveCanonicalSinkingFundName(rawItemTrim, entry.category);
+      const activeBudget = FinanceStorageService.loadLocalBudget(entry.year);
+      const activePool = collectActiveSinkingFundNames(activeBudget, ledger);
+      const canonicalFund =
+        isUnallocatedCategory || rawItemTrim.toLowerCase() === 'general reserves / starting capital'
+          ? 'General Reserves / Starting Capital'
+          : resolveCanonicalSinkingFundName(
+              rawItemTrim,
+              entry.category,
+              activePool,
+              !activeBudget?.isPersonalizedTemplate
+            );
       const customRef =
         entry.reference && entry.reference.trim() && entry.reference.trim() !== 'Auto-filled from template'
           ? entry.reference.trim()
@@ -1647,23 +1812,28 @@ export class FinanceStorageService {
       }
     }
 
-    // Recalculate runningTotalCapital chronologically across all transactions
+    FinanceStorageService.recalculateLedgerRunningTotals(ledger);
+    FinanceStorageService.saveLocalSavingsLedger(ledger);
+    return ledger;
+  }
+
+  /**
+   * Recalculates runningTotalCapital chronologically across all ledger transactions
+   */
+  static recalculateLedgerRunningTotals(ledger: SavingsLedgerData): void {
     let runningTotal = ledger.initialCapital || 0;
     const sorted = [...ledger.transactions].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
     sorted.forEach((tx) => {
       if (tx.source === 'withdrawal') {
-        runningTotal = Math.max(0, runningTotal - tx.amount);
+        runningTotal = Math.max(0, Math.round((runningTotal - tx.amount) * 100) / 100);
       } else if (tx.source !== 'transfer' && tx.source !== 'reallocation') {
-        runningTotal += tx.amount;
+        runningTotal = Math.round((runningTotal + tx.amount) * 100) / 100;
       }
       tx.runningTotalCapital = runningTotal;
     });
     ledger.transactions = sorted;
-
-    FinanceStorageService.saveLocalSavingsLedger(ledger);
-    return ledger;
   }
 
   /**
@@ -1705,6 +1875,7 @@ export class FinanceStorageService {
     };
     currentLedger.transactions.push(newTx);
     FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, newTx, false);
+    FinanceStorageService.recalculateLedgerRunningTotals(currentLedger);
     FinanceStorageService.saveLocalSavingsLedger(currentLedger);
     return { ledger: currentLedger, newTx };
   }
@@ -1730,6 +1901,7 @@ export class FinanceStorageService {
     };
     currentLedger.transactions[txIndex] = newTx;
     FinanceStorageService.applyTxBalanceEffect(currentLedger.accounts, newTx, false);
+    FinanceStorageService.recalculateLedgerRunningTotals(currentLedger);
 
     // If this transaction is linked to a loan payment (e.g. receivable collection deposit or borrowed payment deduction), keep accountId/amount/date/category in sync
     if (Array.isArray(currentLedger.loans)) {
@@ -1761,13 +1933,17 @@ export class FinanceStorageService {
             newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
               ? newTx.category.trim()
               : e.item;
+          const isUnallocatedUpdate =
+            (updatedFundItem || '').trim().toLowerCase() === 'general reserves / starting capital';
           return {
             ...e,
             item: updatedFundItem,
             description: updatedFundItem || e.description,
             category:
               newTx.category && newTx.category.trim() && newTx.category !== oldTx.category
-                ? normalizeSavingCategoryGroup(newTx.category.trim(), e.category)
+                ? isUnallocatedUpdate
+                  ? 'Unallocated Cash Pool'
+                  : normalizeSavingCategoryGroup(newTx.category.trim(), e.category)
                 : e.category,
             amount: newTx.amount,
             actualCost: newTx.amount,
@@ -1884,6 +2060,7 @@ export class FinanceStorageService {
       }
     }
 
+    FinanceStorageService.recalculateLedgerRunningTotals(latestLedger);
     FinanceStorageService.saveLocalSavingsLedger(latestLedger);
     return { ledger: latestLedger, updatedBudget };
   }

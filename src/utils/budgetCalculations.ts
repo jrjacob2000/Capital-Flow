@@ -1118,11 +1118,43 @@ export function resolveDefaultReallocateSourceFund(
 }
 
 /**
+ * Returns the subset of Bank Accounts where the given Goal Fund holds a positive balance (> 0),
+ * ordered by the fund's holding slices (highest balance first).
+ */
+export function getHoldingAccountsForReallocateFund<T extends { id: string }>(
+  fundName: string,
+  allAccounts: T[],
+  categoryFunds: ReallocateFundSummaryLike[],
+  unallocatedFund?: ReallocateFundSummaryLike
+): T[] {
+  const sourceFundObj =
+    fundName.trim().toLowerCase() === 'general reserves / starting capital'
+      ? unallocatedFund
+      : categoryFunds.find((f) => f.name === fundName);
+
+  if (!sourceFundObj || !Array.isArray(sourceFundObj.accounts)) {
+    return [];
+  }
+
+  const positiveSlices = sourceFundObj.accounts.filter((a) => a.amount > 0);
+  const result: T[] = [];
+  for (const slice of positiveSlices) {
+    const matchedAcc = allAccounts.find((acc) => acc.id === slice.accountId);
+    if (matchedAcc && !result.some((r) => r.id === matchedAcc.id)) {
+      result.push(matchedAcc);
+    }
+  }
+  return result;
+}
+
+/**
  * Resolves the Bank Account holding a Goal Fund and the available balance to allocate:
  * - When preferredAccountId is undefined (opening modal, changing From Fund, or switching direction):
  *   defaults to the primary Bank Account where the fund resides (highest positive slice) and its available balance.
- * - When preferredAccountId is a specific accountId:
+ * - When preferredAccountId is a specific accountId that holds a positive balance (> 0) for the fund:
  *   uses that accountId and defaults the amount to the fund's available balance in that account.
+ * - When preferredAccountId is a specific accountId with 0 balance for the fund:
+ *   falls back to the primary Bank Account where the fund resides so a non-holding account cannot be selected.
  * - When preferredAccountId is '' ('All / Unspecified Account'):
  *   uses '' and defaults the amount to the fund's total currentBalance.
  */
@@ -1151,21 +1183,23 @@ export function resolveReallocateFundAccountAndAmount(
 
   if (preferredAccountId !== undefined) {
     const specificSlice = sourceFundObj?.accounts.find(
-      (a) => a.accountId === preferredAccountId
+      (a) => a.accountId === preferredAccountId && a.amount > 0
     );
-    const sliceAvail = roundCurrency(
-      explicitAmount !== undefined ? explicitAmount : specificSlice?.amount ?? 0
-    );
-    return {
-      accountId: preferredAccountId,
-      availableAmount: sliceAvail,
-      amountStr: sliceAvail > 0 ? String(sliceAvail) : '',
-    };
+    if (specificSlice) {
+      const sliceAvail = roundCurrency(
+        explicitAmount !== undefined ? explicitAmount : specificSlice.amount
+      );
+      return {
+        accountId: preferredAccountId,
+        availableAmount: sliceAvail,
+        amountStr: sliceAvail > 0 ? String(sliceAvail) : '',
+      };
+    }
   }
 
   const primarySlice =
     sourceFundObj?.accounts.find((a) => a.amount > 0) || sourceFundObj?.accounts?.[0];
-  const resolvedAccId = primarySlice ? primarySlice.accountId : '';
+  const resolvedAccId = primarySlice && primarySlice.amount > 0 ? primarySlice.accountId : '';
   const availAmount = roundCurrency(
     explicitAmount !== undefined
       ? explicitAmount
@@ -1180,4 +1214,375 @@ export function resolveReallocateFundAccountAndAmount(
     amountStr: availAmount > 0 ? String(availAmount) : '',
   };
 }
+
+export interface FundAccountSliceEntry {
+  accountId: string;
+  accountName: string;
+  amount: number;
+}
+
+export interface ReconcilableFundInput {
+  id: string;
+  name: string;
+  category: string;
+  color: string;
+  inflow: number;
+  outflow: number;
+  accounts: Map<string, FundAccountSliceEntry>;
+  txCount: number;
+  latestDate?: string;
+  plannedAnnualTarget?: number;
+  savedThisYear?: number;
+}
+
+export interface ReconciledFundAccountSlice {
+  accountId: string;
+  accountName: string;
+  accountType?: string;
+  accountColor?: string;
+  amount: number;
+  percentage: number;
+}
+
+export interface ReconciledFundSummary {
+  id: string;
+  name: string;
+  category: string;
+  color: string;
+  totalInflow: number;
+  totalOutflow: number;
+  currentBalance: number;
+  percentageOfTotal: number;
+  accounts: ReconciledFundAccountSlice[];
+  transactionCount: number;
+  latestDate?: string;
+  plannedAnnualTarget?: number;
+  savedThisYear?: number;
+}
+
+/**
+ * Sorts ledger transactions chronologically ascending, ordering same-day transactions
+ * as: inflows (budget_sync, manual_deposit, interest_yield) -> transfer -> reallocation -> withdrawal.
+ */
+export function sortLedgerTransactionsForAggregation<
+  T extends { date: string; source: string }
+>(transactions: T[]): T[] {
+  const sourceOrder = (source: string): number => {
+    if (
+      source === 'budget_sync' ||
+      source === 'manual_deposit' ||
+      source === 'interest_yield'
+    ) {
+      return 0;
+    }
+    if (source === 'transfer') return 1;
+    if (source === 'reallocation') return 2;
+    if (source === 'withdrawal') return 3;
+    return 4;
+  };
+
+  return [...transactions].sort((a, b) => {
+    const timeA = new Date(a.date).getTime();
+    const timeB = new Date(b.date).getTime();
+    const safeA = Number.isNaN(timeA) ? 0 : timeA;
+    const safeB = Number.isNaN(timeB) ? 0 : timeB;
+    if (safeA !== safeB) {
+      return safeA - safeB;
+    }
+    return sourceOrder(a.source) - sourceOrder(b.source);
+  });
+}
+
+/**
+ * Deducts an outflow (withdrawal, transfer, or reallocation) from a Goal Fund's per-account slices.
+ * Prioritizes preferredAccountId up to its positive slice balance, then spills over to any other
+ * bank account slices holding a positive balance for this fund so ghost positive slices are never left behind.
+ * Returns the exact account deductions made so reallocations can credit the target fund in the holding account(s).
+ */
+export function applyFundSliceOutflow(
+  accountsMap: Map<string, FundAccountSliceEntry>,
+  preferredAccountId: string | undefined,
+  preferredAccountName: string,
+  amount: number
+): FundAccountSliceEntry[] {
+  let rem = roundCurrency(Math.max(0, amount));
+  const deductions: FundAccountSliceEntry[] = [];
+  if (rem <= 0) return deductions;
+
+  const prefId = (preferredAccountId || '').trim();
+  if (prefId) {
+    const prefSlice = accountsMap.get(prefId);
+    if (prefSlice && prefSlice.amount > 0.005) {
+      const take = roundCurrency(Math.min(rem, prefSlice.amount));
+      prefSlice.amount = roundCurrency(prefSlice.amount - take);
+      accountsMap.set(prefId, prefSlice);
+      rem = roundCurrency(rem - take);
+      deductions.push({
+        accountId: prefId,
+        accountName: prefSlice.accountName || preferredAccountName,
+        amount: take,
+      });
+    }
+  }
+
+  if (rem > 0.005) {
+    const positiveHolders = Array.from(accountsMap.values())
+      .filter((s) => s.amount > 0.005 && s.accountId !== prefId)
+      .sort((a, b) => b.amount - a.amount);
+
+    for (const holder of positiveHolders) {
+      if (rem <= 0.005) break;
+      const take = roundCurrency(Math.min(rem, holder.amount));
+      holder.amount = roundCurrency(holder.amount - take);
+      accountsMap.set(holder.accountId, holder);
+      rem = roundCurrency(rem - take);
+      deductions.push({
+        accountId: holder.accountId,
+        accountName: holder.accountName,
+        amount: take,
+      });
+    }
+  }
+
+  if (rem > 0.005 && prefId) {
+    const fallback = accountsMap.get(prefId) || {
+      accountId: prefId,
+      accountName: preferredAccountName,
+      amount: 0,
+    };
+    fallback.amount = roundCurrency(fallback.amount - rem);
+    accountsMap.set(prefId, fallback);
+    deductions.push({
+      accountId: prefId,
+      accountName: fallback.accountName || preferredAccountName,
+      amount: rem,
+    });
+  }
+
+  return deductions;
+}
+
+/**
+ * Reconciles Goal Fund balances and per-Bank-Account slices:
+ * 1. Any Goal Fund with net balance <= 0 has its account slices cleared (never shows as Earmarked when zeroed).
+ * 2. Any Goal Fund where positive slices exceed its net balance has the excess absorbed so sum(slices) === net.
+ * 3. Any Bank Account where earmarked slices exceed the account's physical balance shifts the overflow
+ *    to receiving/available Bank Accounts with free unallocated capacity, or caps slices at the account's balance.
+ */
+export function reconcileFundAndAccountSlices(
+  rawFunds: ReconcilableFundInput[],
+  accounts: {
+    id: string;
+    name: string;
+    type?: string;
+    color?: string;
+    balance: number;
+  }[],
+  totalCapital: number,
+  transfers?: { accountId: string; toAccountId?: string; amount: number }[]
+): {
+  reconciledFunds: ReconciledFundSummary[];
+  categorizedNetSum: number;
+} {
+  const reconciledFunds: ReconciledFundSummary[] = [];
+
+  for (const f of rawFunds) {
+    if (
+      f.category?.trim().toLowerCase() === 'unallocated cash pool' ||
+      f.name.trim().toLowerCase() === 'unallocated cash pool' ||
+      f.name.trim().toLowerCase() === 'general reserves / starting capital'
+    ) {
+      continue;
+    }
+
+    const net = Math.max(0, roundCurrency(f.inflow - f.outflow));
+
+    // Guarantee 1: A zeroed Goal Fund (net <= 0.005) has zero slices in any bank account
+    if (net <= 0.005) {
+      reconciledFunds.push({
+        id: f.id,
+        name: f.name,
+        category: f.category,
+        color: f.color,
+        totalInflow: roundCurrency(f.inflow),
+        totalOutflow: roundCurrency(f.outflow),
+        currentBalance: 0,
+        percentageOfTotal: 0,
+        accounts: [],
+        transactionCount: f.txCount,
+        latestDate: f.latestDate,
+        plannedAnnualTarget: f.plannedAnnualTarget,
+        savedThisYear: f.savedThisYear,
+      });
+      continue;
+    }
+
+    // Collect positive slices for existing accounts (or fallback)
+    const positiveSlices = Array.from(f.accounts.values())
+      .filter((a) => a.amount > 0.005)
+      .map((a) => ({
+        accountId: a.accountId,
+        accountName: a.accountName,
+        amount: roundCurrency(a.amount),
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    // Guarantee 2: Sum of positive account slices for a fund never exceeds its net balance
+    const posSum = roundCurrency(
+      positiveSlices.reduce((sum, s) => sum + s.amount, 0)
+    );
+    if (posSum > net + 0.005) {
+      let excess = roundCurrency(posSum - net);
+      for (let i = positiveSlices.length - 1; i >= 0 && excess > 0.005; i--) {
+        const deduct = roundCurrency(Math.min(positiveSlices[i].amount, excess));
+        positiveSlices[i].amount = roundCurrency(positiveSlices[i].amount - deduct);
+        excess = roundCurrency(excess - deduct);
+      }
+    }
+
+    const accList: ReconciledFundAccountSlice[] = positiveSlices
+      .filter((a) => a.amount > 0.005)
+      .map((a) => {
+        const accInfo = accounts.find((acc) => acc.id === a.accountId);
+        return {
+          accountId: a.accountId,
+          accountName: accInfo ? accInfo.name : a.accountName,
+          accountType: accInfo?.type,
+          accountColor: accInfo?.color || '#10b981',
+          amount: a.amount,
+          percentage: net > 0 ? (a.amount / net) * 100 : 0,
+        };
+      })
+      .sort((a, b) => b.amount - a.amount);
+
+    reconciledFunds.push({
+      id: f.id,
+      name: f.name,
+      category: f.category,
+      color: f.color,
+      totalInflow: roundCurrency(f.inflow),
+      totalOutflow: roundCurrency(f.outflow),
+      currentBalance: net,
+      percentageOfTotal: totalCapital > 0 ? (net / totalCapital) * 100 : 0,
+      accounts: accList,
+      transactionCount: f.txCount,
+      latestDate: f.latestDate,
+      plannedAnnualTarget: f.plannedAnnualTarget,
+      savedThisYear: f.savedThisYear,
+    });
+  }
+
+  // Guarantee 3: Per-Bank-Account capacity & transfer overflow reconciliation
+  const getUsedInAccount = (accountId: string): number =>
+    roundCurrency(
+      reconciledFunds.reduce((sum, rf) => {
+        const match = rf.accounts.find((a) => a.accountId === accountId);
+        return sum + (match ? match.amount : 0);
+      }, 0)
+    );
+
+  for (const acc of accounts) {
+    const accCap = Math.max(0, roundCurrency(acc.balance));
+    const usedInAcc = getUsedInAccount(acc.id);
+    if (usedInAcc <= accCap + 0.005) continue;
+
+    let overflow = roundCurrency(usedInAcc - accCap);
+
+    // Prioritize destination accounts that received transfers from this account
+    const transferTargetIds = new Set(
+      (transfers || [])
+        .filter((t) => t.accountId === acc.id && t.toAccountId)
+        .map((t) => t.toAccountId!)
+    );
+
+    for (const rf of reconciledFunds) {
+      if (overflow <= 0.005) break;
+      const sliceIdx = rf.accounts.findIndex((a) => a.accountId === acc.id);
+      if (sliceIdx === -1) continue;
+
+      const slice = rf.accounts[sliceIdx];
+      let sliceToMove = roundCurrency(Math.min(slice.amount, overflow));
+      if (sliceToMove <= 0.005) continue;
+
+      const candidateTargets = accounts
+        .filter((other) => other.id !== acc.id)
+        .map((other) => ({
+          acc: other,
+          free: Math.max(0, roundCurrency(other.balance - getUsedInAccount(other.id))),
+          isTransferTarget: transferTargetIds.has(other.id),
+        }))
+        .filter((c) => c.free > 0.005)
+        .sort((a, b) => {
+          if (a.isTransferTarget !== b.isTransferTarget) {
+            return a.isTransferTarget ? -1 : 1;
+          }
+          return b.free - a.free;
+        });
+
+      for (const target of candidateTargets) {
+        if (sliceToMove <= 0.005) break;
+        const shiftAmt = roundCurrency(Math.min(sliceToMove, target.free));
+        if (shiftAmt <= 0.005) continue;
+
+        slice.amount = roundCurrency(slice.amount - shiftAmt);
+        sliceToMove = roundCurrency(sliceToMove - shiftAmt);
+        overflow = roundCurrency(overflow - shiftAmt);
+
+        const existingTargetSlice = rf.accounts.find(
+          (a) => a.accountId === target.acc.id
+        );
+        if (existingTargetSlice) {
+          existingTargetSlice.amount = roundCurrency(
+            existingTargetSlice.amount + shiftAmt
+          );
+        } else {
+          rf.accounts.push({
+            accountId: target.acc.id,
+            accountName: target.acc.name,
+            accountType: target.acc.type,
+            accountColor: target.acc.color || '#10b981',
+            amount: shiftAmt,
+            percentage: 0,
+          });
+        }
+      }
+
+      // If overflow still remains in this account because total account balances are lower than earmarked sums, cap the slice
+      if (sliceToMove > 0.005 && overflow > 0.005) {
+        const capDeduct = roundCurrency(Math.min(slice.amount, sliceToMove));
+        slice.amount = roundCurrency(slice.amount - capDeduct);
+        overflow = roundCurrency(overflow - capDeduct);
+      }
+    }
+  }
+
+  let categorizedNetSum = 0;
+  for (const rf of reconciledFunds) {
+    rf.accounts = rf.accounts
+      .filter((a) => a.amount > 0.005)
+      .sort((a, b) => b.amount - a.amount);
+
+    const slicesSum = roundCurrency(
+      rf.accounts.reduce((sum, a) => sum + a.amount, 0)
+    );
+    // Keep currentBalance synced if slices were capped by a zeroed bank account
+    if (rf.accounts.length === 0 && accounts.length > 0 && totalCapital < rf.currentBalance) {
+      rf.currentBalance = 0;
+    } else if (slicesSum > 0 && slicesSum < rf.currentBalance) {
+      rf.currentBalance = slicesSum;
+    }
+
+    rf.percentageOfTotal =
+      totalCapital > 0 ? (rf.currentBalance / totalCapital) * 100 : 0;
+    for (const a of rf.accounts) {
+      a.percentage =
+        rf.currentBalance > 0 ? (a.amount / rf.currentBalance) * 100 : 0;
+    }
+    categorizedNetSum = roundCurrency(categorizedNetSum + rf.currentBalance);
+  }
+
+  return { reconciledFunds, categorizedNetSum };
+}
+
+
 
