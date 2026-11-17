@@ -20,6 +20,7 @@ import {
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
   resolveFundCategoryWithTemplates,
+  stripDefaultStarterTemplates,
   DEFAULT_SINKING_FUND_NAMES,
   MONTH_NAMES,
   BIWEEKLY_PERIODS,
@@ -198,17 +199,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       }
     >();
 
+    const activeSavingTemplates = (
+      budget?.isPersonalizedTemplate
+        ? stripDefaultStarterTemplates(budget.itemTemplates)
+        : budget?.itemTemplates || []
+    ).filter((t) => t.type === 'saving');
+
     const knownCanonicalPool = Array.from(
       new Set([
-        ...DEFAULT_SINKING_FUND_NAMES,
-        ...(budget?.itemTemplates || [])
-          .filter((t) => t.type === 'saving')
-          .map((t) => resolveCanonicalSinkingFundName(t.item, t.category, DEFAULT_SINKING_FUND_NAMES)),
+        ...(budget?.isPersonalizedTemplate ? [] : DEFAULT_SINKING_FUND_NAMES),
+        ...activeSavingTemplates.map((t) =>
+          resolveCanonicalSinkingFundName(
+            t.item,
+            t.category,
+            budget?.isPersonalizedTemplate ? [] : DEFAULT_SINKING_FUND_NAMES,
+            !budget?.isPersonalizedTemplate
+          )
+        ),
       ])
     );
 
     const getOrCreateFund = (name: string, category: string = 'Short-Term & General Savings', customColor?: string) => {
-      const canonical = resolveCanonicalSinkingFundName(name, category, knownCanonicalPool);
+      const canonical = resolveCanonicalSinkingFundName(
+        name,
+        category,
+        knownCanonicalPool,
+        !budget?.isPersonalizedTemplate
+      );
       const trimmed = canonical.trim();
       const key = trimmed.toLowerCase();
       if (!knownCanonicalPool.some((p) => p.toLowerCase() === key)) {
@@ -235,25 +252,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       return fundMap.get(key)!;
     };
 
-    if (budget?.itemTemplates) {
-      budget.itemTemplates
-        .filter((t) => t.type === 'saving')
-        .forEach((tpl, idx) => {
-          if (
-            tpl.item.trim().toLowerCase() === 'general reserves / starting capital' ||
-            (tpl.category || '').trim().toLowerCase() === 'unallocated cash pool'
-          ) {
-            return;
-          }
-          const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
-          const annualMultiplier =
-            tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both') ? 24 : 12;
-          fund.plannedAnnualTarget = Math.max(
-            fund.plannedAnnualTarget || 0,
-            (tpl.defaultEstimatedCost || 0) * annualMultiplier
-          );
-        });
-    }
+    activeSavingTemplates.forEach((tpl, idx) => {
+      if (
+        tpl.item.trim().toLowerCase() === 'general reserves / starting capital' ||
+        (tpl.category || '').trim().toLowerCase() === 'unallocated cash pool'
+      ) {
+        return;
+      }
+      const fund = getOrCreateFund(tpl.item, tpl.category || 'General Savings', FUND_COLORS[idx % FUND_COLORS.length]);
+      const annualMultiplier =
+        tpl.frequency === 'bi-weekly' && (!tpl.biweeklyPeriod || tpl.biweeklyPeriod === 'both') ? 24 : 12;
+      fund.plannedAnnualTarget = Math.max(
+        fund.plannedAnnualTarget || 0,
+        (tpl.defaultEstimatedCost || 0) * annualMultiplier
+      );
+    });
 
     if (budget?.entries) {
       budget.entries
@@ -375,15 +388,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             .replace(/^Budget Sync:\s*/i, '')
             .replace(/^Manual Deposit:\s*/i, '')
             .replace(/^Direct Deposit:\s*/i, '')
+            .split(' — ')[0]
             .trim();
           const rawCatTrim = (tx.category || '').trim();
           if (rawCatTrim.toLowerCase() === 'general reserves / starting capital') {
             return;
           }
-          fundName =
-            tx.source === 'manual_deposit' && rawCatTrim
-              ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, knownCanonicalPool)
-              : resolveCanonicalSinkingFundName(cleanNote, tx.category, knownCanonicalPool);
+          fundName = rawCatTrim
+            ? resolveCanonicalSinkingFundName(
+                rawCatTrim,
+                cleanNote,
+                knownCanonicalPool,
+                !budget?.isPersonalizedTemplate
+              )
+            : resolveCanonicalSinkingFundName(
+                cleanNote,
+                tx.category,
+                knownCanonicalPool,
+                !budget?.isPersonalizedTemplate
+              );
           if (fundName.trim().toLowerCase() === 'general reserves / starting capital') {
             return;
           }

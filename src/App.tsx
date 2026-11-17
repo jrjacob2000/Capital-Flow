@@ -2748,6 +2748,8 @@ export default function App() {
             onRestorePeriodItems={handleRestorePeriodItems}
             onUpdateCategories={handleUpdateCategories}
             onUpdateTemplates={handleUpdateTemplates}
+            onRenameOrMergeFund={handleRenameOrMergeFund}
+            onDeleteFund={handleDeleteFund}
             currencySymbol="₱"
           />
         )}

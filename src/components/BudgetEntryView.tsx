@@ -52,6 +52,13 @@ interface BudgetEntryViewProps {
     renamed?: { type: EntryType; oldName: string; newName: string }
   ) => void;
   onUpdateTemplates: (templates: BudgetItemTemplate[]) => void;
+  onRenameOrMergeFund?: (
+    oldName: string,
+    newName: string,
+    newMonthlyTarget?: number,
+    newSavingCategory?: string
+  ) => void;
+  onDeleteFund?: (fundName: string, reassignToFund?: string) => void;
   currencySymbol?: string;
 }
 
@@ -69,6 +76,8 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
   onRestorePeriodItems,
   onUpdateCategories,
   onUpdateTemplates,
+  onRenameOrMergeFund,
+  onDeleteFund,
   currencySymbol = '₱',
 }) => {
   // Determine the default period cleanly without hardcoded month fallbacks
@@ -184,6 +193,8 @@ export const BudgetEntryView: React.FC<BudgetEntryViewProps> = ({
         onRestorePeriodItems={onRestorePeriodItems}
         onUpdateCategories={onUpdateCategories}
         onUpdateTemplates={onUpdateTemplates}
+        onRenameOrMergeFund={onRenameOrMergeFund}
+        onDeleteFund={onDeleteFund}
         currencySymbol={currencySymbol}
       />
     </div>

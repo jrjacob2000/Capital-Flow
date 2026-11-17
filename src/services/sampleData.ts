@@ -1652,7 +1652,8 @@ export function resolveFundCategoryWithTemplates(
 export function resolveCanonicalSinkingFundName(
   rawItemName?: string,
   rawCategory?: string,
-  knownFunds: string[] = [...DEFAULT_SINKING_FUND_NAMES]
+  knownFunds: string[] = [...DEFAULT_SINKING_FUND_NAMES],
+  includeDefaultsInPool: boolean = true
 ): string {
   const itemClean = (rawItemName || '')
     .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
@@ -1668,13 +1669,13 @@ export function resolveCanonicalSinkingFundName(
 
   const pool = Array.from(
     new Set([
-      ...DEFAULT_SINKING_FUND_NAMES,
       ...knownFunds.filter(
         (f) =>
           Boolean(f) &&
           f !== 'Savings / Envelope' &&
           !SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === f.trim().toLowerCase())
       ),
+      ...(includeDefaultsInPool ? DEFAULT_SINKING_FUND_NAMES : []),
     ])
   );
 
@@ -1707,5 +1708,186 @@ export function resolveCanonicalSinkingFundName(
   return itemClean;
 }
 
+/**
+ * Collects the canonical list of active Sinking / Goal Funds from the user's templates,
+ * budget entries, and savings ledger transactions without injecting hardcoded starter
+ * funds once the user has personalized templates or active funds.
+ */
+export function collectActiveSinkingFundNames(
+  budget?: YearBudgetData,
+  ledger?: SavingsLedgerData
+): string[] {
+  const names = new Map<string, string>();
+  const excludedGroupNames = new Set<string>([
+    'general reserves / starting capital',
+    'unallocated cash pool',
+    'unallocated capital',
+    'savings / envelope',
+    ...SAVING_CATEGORIES.map((sc) => sc.toLowerCase()),
+    ...(budget?.customCategories?.saving || [])
+      .map((sc) => sc.trim().toLowerCase())
+      .filter(Boolean),
+  ]);
 
+  const activeTemplates = budget?.isPersonalizedTemplate
+    ? stripDefaultStarterTemplates(budget.itemTemplates)
+    : budget?.itemTemplates || [];
 
+  const savingTemplates = activeTemplates.filter((t) => t.type === 'saving');
+
+  const explicitTemplateFunds = savingTemplates
+    .filter((t) => (t.category || '').trim().toLowerCase() !== 'unallocated cash pool')
+    .map((t) => (t.item || '').trim())
+    .filter(
+      (item) =>
+        Boolean(item) &&
+        !GENERIC_SAVING_ALIASES.has(item.toLowerCase()) &&
+        !excludedGroupNames.has(item.toLowerCase())
+    );
+
+  const hasUserDefinedFunds =
+    Boolean(budget?.isPersonalizedTemplate) ||
+    savingTemplates.length > 0 ||
+    (budget?.entries || []).some((e) => e.type === 'saving') ||
+    (ledger?.transactions || []).some(
+      (tx) => tx.source !== 'withdrawal' && tx.source !== 'transfer'
+    );
+
+  const dynamicPool = Array.from(
+    new Set(hasUserDefinedFunds ? explicitTemplateFunds : [...DEFAULT_SINKING_FUND_NAMES])
+  );
+  const includeDefaults = !hasUserDefinedFunds;
+
+  const addFundName = (raw?: string) => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return;
+    const lower = trimmed.toLowerCase();
+    if (excludedGroupNames.has(lower)) return;
+    if (!names.has(lower)) {
+      names.set(lower, trimmed);
+      if (!dynamicPool.some((p) => p.toLowerCase() === lower)) {
+        dynamicPool.push(trimmed);
+      }
+    }
+  };
+
+  savingTemplates.forEach((t) => {
+    if ((t.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
+    const resolved = resolveCanonicalSinkingFundName(
+      t.item,
+      t.category,
+      dynamicPool,
+      includeDefaults
+    );
+    addFundName(resolved);
+  });
+
+  (budget?.entries || [])
+    .filter((e) => e.type === 'saving')
+    .forEach((e) => {
+      if ((e.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
+      const rawItem = (e.item || e.description || '').trim();
+      if (!rawItem || rawItem.toLowerCase() === 'general reserves / starting capital') return;
+      const resolved = resolveCanonicalSinkingFundName(
+        rawItem,
+        e.category,
+        dynamicPool,
+        includeDefaults
+      );
+      addFundName(resolved);
+    });
+
+  (ledger?.transactions || []).forEach((tx) => {
+    if (tx.source === 'withdrawal' || tx.source === 'transfer') return;
+    const rawCatTrim = (tx.category || '').trim();
+    if (
+      rawCatTrim.toLowerCase() === 'general reserves / starting capital' ||
+      rawCatTrim.toLowerCase() === 'unallocated cash pool'
+    ) {
+      return;
+    }
+
+    if (tx.source === 'reallocation') {
+      if (tx.toCategory) {
+        const toTrim = tx.toCategory.trim();
+        if (toTrim.toLowerCase() !== 'general reserves / starting capital') {
+          addFundName(
+            resolveCanonicalSinkingFundName(toTrim, toTrim, dynamicPool, includeDefaults)
+          );
+        }
+      }
+      return;
+    }
+
+    if (tx.budgetEntryId && budget?.entries) {
+      const linkedEntry = budget.entries.find((e) => e.id === tx.budgetEntryId);
+      if (linkedEntry) {
+        if ((linkedEntry.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
+        const linkedItem = (linkedEntry.item || linkedEntry.description || '').trim();
+        if (!linkedItem || linkedItem.toLowerCase() === 'general reserves / starting capital') {
+          return;
+        }
+        addFundName(
+          resolveCanonicalSinkingFundName(
+            linkedItem,
+            linkedEntry.category,
+            dynamicPool,
+            includeDefaults
+          )
+        );
+        return;
+      }
+      if (!tx.year || tx.year === budget.year) {
+        return;
+      }
+    }
+
+    if (tx.source === 'interest_yield') {
+      if (rawCatTrim) {
+        addFundName(
+          resolveCanonicalSinkingFundName(
+            rawCatTrim,
+            'Savings / Yield',
+            dynamicPool,
+            includeDefaults
+          )
+        );
+      }
+      return;
+    }
+
+    const cleanNote = (tx.note || '')
+      .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
+      .split(' — ')[0]
+      .trim();
+
+    if (rawCatTrim) {
+      const resolvedCat = resolveCanonicalSinkingFundName(
+        rawCatTrim,
+        cleanNote,
+        dynamicPool,
+        includeDefaults
+      );
+      addFundName(resolvedCat);
+    } else if (cleanNote && tx.source === 'budget_sync') {
+      addFundName(
+        resolveCanonicalSinkingFundName(cleanNote, tx.category, dynamicPool, includeDefaults)
+      );
+    }
+
+    if (tx.toCategory) {
+      const toTrim = tx.toCategory.trim();
+      if (toTrim.toLowerCase() !== 'general reserves / starting capital') {
+        addFundName(
+          resolveCanonicalSinkingFundName(toTrim, toTrim, dynamicPool, includeDefaults)
+        );
+      }
+    }
+  });
+
+  if (!hasUserDefinedFunds && names.size === 0) {
+    DEFAULT_SINKING_FUND_NAMES.forEach((d) => addFundName(d));
+  }
+
+  return Array.from(names.values());
+}

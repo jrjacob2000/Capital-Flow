@@ -48,7 +48,7 @@ import {
   findClosestSinkingFundMatch,
   normalizeSavingCategoryGroup,
   resolveFundCategoryWithTemplates,
-  DEFAULT_SINKING_FUND_NAMES,
+  collectActiveSinkingFundNames,
 } from '../services/sampleData';
 import { CategoryAndTemplateManagerModal } from './CategoryAndTemplateManagerModal';
 import { CarryOverModal } from './CarryOverModal';
@@ -132,6 +132,13 @@ interface BudgetSpreadsheetViewProps {
     renamed?: { type: 'income' | 'expense' | 'saving'; oldName: string; newName: string }
   ) => void;
   onUpdateTemplates: (templates: BudgetItemTemplate[]) => void;
+  onRenameOrMergeFund?: (
+    oldName: string,
+    newName: string,
+    newMonthlyTarget?: number,
+    newSavingCategory?: string
+  ) => void;
+  onDeleteFund?: (fundName: string, reassignToFund?: string) => void;
   currencySymbol?: string;
 }
 
@@ -151,11 +158,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   onRestorePeriodItems,
   onUpdateCategories,
   onUpdateTemplates,
+  onRenameOrMergeFund,
+  onDeleteFund,
   currencySymbol = '₱',
 }) => {
   // Modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
+  const [managerInitialTab, setManagerInitialTab] = useState<
+    'estimates' | 'expense_cats' | 'income_cats' | 'saving_cats'
+  >('estimates');
   const [isCarryOverModalOpen, setIsCarryOverModalOpen] = useState(false);
   const [isImportExcelOpen, setIsImportExcelOpen] = useState(false);
   const [modalPeriod, setModalPeriod] = useState<string>(selectedPeriod);
@@ -333,75 +345,10 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
   const [isCreatingNewSinkingFund, setIsCreatingNewSinkingFund] = useState<boolean>(false);
   const [isCreatingCustomCategory, setIsCreatingCustomCategory] = useState<boolean>(false);
 
-  const existingSinkingFunds = useMemo(() => {
-    const names = new Map<string, string>();
-    const basePool = [...DEFAULT_SINKING_FUND_NAMES];
-    const addFundName = (raw?: string) => {
-      const trimmed = (raw || '').trim();
-      if (!trimmed) return;
-      const lower = trimmed.toLowerCase();
-      if (
-        lower === 'general reserves / starting capital' ||
-        lower === 'unallocated cash pool' ||
-        SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === lower)
-      ) {
-        return;
-      }
-      if (!names.has(lower)) {
-        names.set(lower, trimmed);
-      }
-    };
-
-    const allSavingTemplates = [
-      ...itemTemplates.filter((t) => t.type === 'saving'),
-      ...(budget.itemTemplates || []).filter((t) => t.type === 'saving'),
-    ];
-    allSavingTemplates.forEach((t) => {
-      const resolved = resolveCanonicalSinkingFundName(t.item, t.category, basePool);
-      addFundName(resolved);
-    });
-
-    const combinedPool = Array.from(new Set([...Array.from(names.values()), ...basePool]));
-    (budget.entries || [])
-      .filter((e) => e.type === 'saving')
-      .forEach((e) => {
-        const resolved = resolveCanonicalSinkingFundName(
-          e.item || e.description,
-          e.category,
-          combinedPool
-        );
-        addFundName(resolved);
-      });
-
-    (ledger?.transactions || []).forEach((tx) => {
-      if (tx.source === 'withdrawal' || tx.source === 'transfer') return;
-      const cleanNote = (tx.note || '')
-        .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
-        .trim();
-      const rawCatTrim = (tx.category || '').trim();
-      if (rawCatTrim && rawCatTrim.toLowerCase() !== 'general reserves / starting capital') {
-        const resolvedCat =
-          tx.source === 'manual_deposit'
-            ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, combinedPool)
-            : resolveCanonicalSinkingFundName(cleanNote || rawCatTrim, rawCatTrim, combinedPool);
-        addFundName(resolvedCat);
-      } else if (cleanNote && tx.source === 'budget_sync') {
-        addFundName(resolveCanonicalSinkingFundName(cleanNote, tx.category, combinedPool));
-      }
-      if (tx.toCategory) {
-        const resolved = resolveCanonicalSinkingFundName(
-          tx.toCategory,
-          tx.toCategory,
-          combinedPool
-        );
-        addFundName(resolved);
-      }
-    });
-
-    basePool.forEach((d) => addFundName(d));
-
-    return Array.from(names.values());
-  }, [itemTemplates, budget.itemTemplates, budget.entries, ledger?.transactions]);
+  const existingSinkingFunds = useMemo(
+    () => collectActiveSinkingFundNames(budget, ledger),
+    [budget, ledger]
+  );
 
   const getSavingFundCategory = useCallback(
     (fundName: string) =>
@@ -3941,17 +3888,31 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                       <label className="text-[11px] text-slate-600 dark:text-slate-400 font-semibold truncate">
                         {modalType === 'saving' ? 'Goal Fund' : 'Item / Description'}
                       </label>
-                      {modalType === 'saving' && isCreatingNewSinkingFund && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsCreatingNewSinkingFund(false);
-                            setFormItem(existingSinkingFunds[0] || formCategory || 'General Savings');
-                          }}
-                          className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
-                        >
-                          Existing
-                        </button>
+                      {modalType === 'saving' && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isCreatingNewSinkingFund && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCreatingNewSinkingFund(false);
+                                setFormItem(existingSinkingFunds[0] || formCategory || 'General Savings');
+                              }}
+                              className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                            >
+                              Existing
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setManagerInitialTab('saving_cats');
+                              setIsManagerModalOpen(true);
+                            }}
+                            className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
+                          >
+                            Manage
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -4111,7 +4072,16 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
                         )}
                         <button
                           type="button"
-                          onClick={() => setIsManagerModalOpen(true)}
+                          onClick={() => {
+                            setManagerInitialTab(
+                              modalType === 'income'
+                                ? 'income_cats'
+                                : modalType === 'saving'
+                                ? 'saving_cats'
+                                : 'expense_cats'
+                            );
+                            setIsManagerModalOpen(true);
+                          }}
                           className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer shrink-0 leading-none"
                         >
                           Edit
@@ -4567,8 +4537,11 @@ export const BudgetSpreadsheetView: React.FC<BudgetSpreadsheetViewProps> = ({
         budget={budget}
         ledger={ledger}
         accounts={accounts}
+        initialTab={managerInitialTab}
         onUpdateCategories={onUpdateCategories}
         onUpdateTemplates={onUpdateTemplates}
+        onRenameOrMergeFund={onRenameOrMergeFund}
+        onDeleteFund={onDeleteFund}
         currencySymbol={currencySymbol}
       />
 

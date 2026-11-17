@@ -41,6 +41,7 @@ import {
   deriveCategoryBudgetsFromTemplates,
   stripDefaultStarterTemplates,
   isDefaultStarterBudget,
+  collectActiveSinkingFundNames,
 } from '../services/sampleData';
 import { FinanceStorageService } from '../services/storageService';
 import {
@@ -5101,3 +5102,166 @@ describe('40. Standardized CustomSelect & AccountSelectDropdown Option Integrity
   });
 });
 
+describe('41. Active Goal Fund Dropdown Deduplication (collectActiveSinkingFundNames)', () => {
+  beforeEach(() => {
+    memoryStorage.clear();
+    FinanceStorageService.setCloudSessionActive(false);
+  });
+
+  it('excludes hardcoded starter funds and reference suffixes when the user has personalized funds', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const customBudget = {
+      ...budget,
+      isPersonalizedTemplate: true,
+      itemTemplates: [
+        {
+          id: 'tpl-custom-car',
+          type: 'saving' as const,
+          category: 'Vehicle & Maintenance Sinking Funds',
+          item: 'Car Maintenance',
+          defaultEstimatedCost: 4000,
+          frequency: 'monthly' as const,
+        },
+        {
+          id: 'tpl-custom-mp2',
+          type: 'saving' as const,
+          category: 'Long-Term & Wealth Investments',
+          item: 'MP2 Investment',
+          defaultEstimatedCost: 5000,
+          frequency: 'monthly' as const,
+        },
+      ],
+      entries: [
+        makeEntry({
+          id: 'ent-car-jan',
+          year: 2026,
+          period: 'Jan',
+          periodIndex: 0,
+          date: '2026-01-15',
+          type: 'saving',
+          category: 'Vehicle & Maintenance Sinking Funds',
+          item: 'Car Maintenance',
+          estimatedCost: 4000,
+          actualCost: 4000,
+          amount: 4000,
+          status: 'Paid',
+          reference: 'BPI Ref #991',
+        }),
+      ],
+    };
+
+    const ledger = FinanceStorageService.accumulateBudgetSavingToLedger(
+      customBudget.entries[0],
+      false
+    );
+
+    const activeFunds = collectActiveSinkingFundNames(customBudget, ledger);
+    assert.deepEqual(activeFunds, ['Car Maintenance', 'MP2 Investment']);
+    // Hardcoded starter funds (e.g. 'Car Maintenance Fund', 'Pag-IBIG MP2', 'Emergency Fund') must NOT be injected
+    assert.equal(activeFunds.includes('Car Maintenance Fund'), false);
+    assert.equal(activeFunds.includes('Pag-IBIG MP2'), false);
+    assert.equal(activeFunds.includes('Emergency Fund'), false);
+    // Reference suffix ('Car Maintenance — BPI Ref #991') must NOT spawn a duplicate fund
+    assert.equal(activeFunds.some((f) => f.includes('BPI Ref')), false);
+  });
+
+  it('completely removes a deleted fund from collectActiveSinkingFundNames even when ledger transactions had reference suffixes', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    let currentBudget: typeof budget = {
+      ...budget,
+      isPersonalizedTemplate: true,
+      itemTemplates: [
+        {
+          id: 'tpl-house',
+          type: 'saving' as const,
+          category: 'Home & Property Sinking Funds',
+          item: 'House Repair Fund',
+          defaultEstimatedCost: 3000,
+          frequency: 'monthly' as const,
+        },
+        {
+          id: 'tpl-travel',
+          type: 'saving' as const,
+          category: 'Family, Travel & Education Funds',
+          item: 'Japan Travel Fund',
+          defaultEstimatedCost: 6000,
+          frequency: 'monthly' as const,
+        },
+      ],
+    };
+    FinanceStorageService.saveLocalBudget(currentBudget);
+
+    const added = FinanceStorageService.addMultipleBudgetEntries(currentBudget, [
+      {
+        year: 2026,
+        period: 'Jan',
+        periodIndex: 0,
+        date: '2026-01-20',
+        type: 'saving',
+        category: 'Home & Property Sinking Funds',
+        item: 'House Repair Fund',
+        description: 'House Repair Fund',
+        estimatedCost: 3000,
+        actualCost: 3000,
+        amount: 3000,
+        difference: 0,
+        paymentMethod: 'Bank Transfer',
+        status: 'Paid',
+        reference: 'Jan Transfer',
+      },
+    ]);
+    currentBudget = added.budget;
+
+    const deleted = FinanceStorageService.deleteSinkingFund(
+      currentBudget,
+      'House Repair Fund',
+      'General Reserves / Starting Capital'
+    );
+
+    const remainingFunds = collectActiveSinkingFundNames(deleted.budget, deleted.ledger);
+    assert.deepEqual(remainingFunds, ['Japan Travel Fund']);
+    assert.equal(remainingFunds.includes('House Repair Fund'), false);
+  });
+
+  it('deduplicates plural/typo variations across budget entries and ledger transactions using dynamicPool', () => {
+    const { budget } = FinanceStorageService.startFreshBlankWorkspace(2026);
+    const customBudget: typeof budget = {
+      ...budget,
+      isPersonalizedTemplate: true,
+      itemTemplates: [],
+      entries: [
+        makeEntry({
+          id: 'ent-vac-1',
+          year: 2026,
+          period: 'Jan',
+          periodIndex: 0,
+          date: '2026-01-15',
+          type: 'saving',
+          category: 'Family, Travel & Education Funds',
+          item: 'Palawan Vacation Fund',
+          estimatedCost: 5000,
+          actualCost: 5000,
+          amount: 5000,
+          status: 'Paid',
+        }),
+        makeEntry({
+          id: 'ent-vac-2',
+          year: 2026,
+          period: 'Feb',
+          periodIndex: 1,
+          date: '2026-02-15',
+          type: 'saving',
+          category: 'Family, Travel & Education Funds',
+          item: 'Palawan Vacation Funds',
+          estimatedCost: 5000,
+          actualCost: 5000,
+          amount: 5000,
+          status: 'Paid',
+        }),
+      ],
+    };
+
+    const activeFunds = collectActiveSinkingFundNames(customBudget);
+    assert.deepEqual(activeFunds, ['Palawan Vacation Fund']);
+  });
+});

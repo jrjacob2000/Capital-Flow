@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Tag,
   Plus,
@@ -38,11 +38,11 @@ import {
   SAVING_CATEGORIES,
   PAYMENT_METHODS,
   DEFAULT_ITEM_TEMPLATES,
-  DEFAULT_SINKING_FUND_NAMES,
   resolveCanonicalSinkingFundName,
   normalizeSavingCategoryGroup,
   resolveFundCategoryWithTemplates,
   stripDefaultStarterTemplates,
+  collectActiveSinkingFundNames,
 } from '../services/sampleData';
 import {
   resolveTemplateBudgetVisibility,
@@ -59,6 +59,7 @@ interface CategoryAndTemplateManagerModalProps {
   budget: YearBudgetData;
   ledger?: SavingsLedgerData;
   accounts?: SavingsAccount[];
+  initialTab?: 'estimates' | 'expense_cats' | 'income_cats' | 'saving_cats';
   onUpdateCategories: (
     customCats: {
       expense: string[];
@@ -68,6 +69,13 @@ interface CategoryAndTemplateManagerModalProps {
     renamed?: { type: EntryType; oldName: string; newName: string }
   ) => void;
   onUpdateTemplates: (templates: BudgetItemTemplate[]) => void;
+  onRenameOrMergeFund?: (
+    oldName: string,
+    newName: string,
+    newMonthlyTarget?: number,
+    newSavingCategory?: string
+  ) => void;
+  onDeleteFund?: (fundName: string, reassignToFund?: string) => void;
   currencySymbol?: string;
 }
 
@@ -77,11 +85,20 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
   budget,
   ledger,
   accounts = [],
+  initialTab = 'estimates',
   onUpdateCategories,
   onUpdateTemplates,
+  onRenameOrMergeFund,
+  onDeleteFund,
   currencySymbol = '₱',
 }) => {
-  const [activeTab, setActiveTab] = useState<'estimates' | 'expense_cats' | 'income_cats' | 'saving_cats'>('estimates');
+  const [activeTab, setActiveTab] = useState<'estimates' | 'expense_cats' | 'income_cats' | 'saving_cats'>(initialTab);
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   // Categories state (uses customCategories when present so deleted default categories do not reappear)
   const templates: BudgetItemTemplate[] = budget?.isPersonalizedTemplate
@@ -114,68 +131,10 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
     ])
   ).filter(Boolean);
 
-  const existingSinkingFunds = useMemo(() => {
-    const names = new Map<string, string>();
-    const basePool = [...DEFAULT_SINKING_FUND_NAMES];
-    const addFundName = (raw?: string) => {
-      const trimmed = (raw || '').trim();
-      if (!trimmed) return;
-      const lower = trimmed.toLowerCase();
-      if (
-        lower === 'general reserves / starting capital' ||
-        lower === 'unallocated cash pool' ||
-        SAVING_CATEGORIES.some((sc) => sc.toLowerCase() === lower)
-      ) {
-        return;
-      }
-      if (!names.has(lower)) {
-        names.set(lower, trimmed);
-      }
-    };
-
-    const allSavingTemplates = [
-      ...templates.filter((t) => t.type === 'saving'),
-      ...(budget?.itemTemplates || []).filter((t) => t.type === 'saving'),
-    ];
-    allSavingTemplates.forEach((t) => {
-      if ((t.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
-      addFundName(resolveCanonicalSinkingFundName(t.item, t.category, basePool));
-    });
-
-    const combinedPool = Array.from(new Set([...Array.from(names.values()), ...basePool]));
-    (budget?.entries || [])
-      .filter((e) => e.type === 'saving')
-      .forEach((e) => {
-        if ((e.category || '').trim().toLowerCase() === 'unallocated cash pool') return;
-        addFundName(
-          resolveCanonicalSinkingFundName(e.item || e.description, e.category, combinedPool)
-        );
-      });
-
-    (ledger?.transactions || []).forEach((tx) => {
-      if (tx.source === 'withdrawal' || tx.source === 'transfer') return;
-      const cleanNote = (tx.note || '')
-        .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
-        .trim();
-      const rawCatTrim = (tx.category || '').trim();
-      if (rawCatTrim && rawCatTrim.toLowerCase() !== 'general reserves / starting capital') {
-        const resolvedCat =
-          tx.source === 'manual_deposit'
-            ? resolveCanonicalSinkingFundName(rawCatTrim, cleanNote, combinedPool)
-            : resolveCanonicalSinkingFundName(cleanNote || rawCatTrim, rawCatTrim, combinedPool);
-        addFundName(resolvedCat);
-      } else if (cleanNote && tx.source === 'budget_sync') {
-        addFundName(resolveCanonicalSinkingFundName(cleanNote, tx.category, combinedPool));
-      }
-      if (tx.toCategory) {
-        addFundName(resolveCanonicalSinkingFundName(tx.toCategory, tx.toCategory, combinedPool));
-      }
-    });
-
-    basePool.forEach((d) => addFundName(d));
-
-    return Array.from(names.values());
-  }, [templates, budget?.itemTemplates, budget?.entries, ledger?.transactions]);
+  const existingSinkingFunds = useMemo(
+    () => collectActiveSinkingFundNames(budget, ledger),
+    [budget, ledger]
+  );
 
   const getTplFundCategory = (fundName: string) =>
     resolveFundCategoryWithTemplates(
@@ -185,9 +144,10 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
       budget?.customCategories?.saving
     );
 
-  // Category editing state
+  // Category & Fund editing state
   const [newCatName, setNewCatName] = useState('');
   const [editingCat, setEditingCat] = useState<{ original: string; current: string } | null>(null);
+  const [editingFundItem, setEditingFundItem] = useState<{ original: string; current: string } | null>(null);
 
   // Template editing/add state
   const [isTemplateFormOpen, setIsTemplateFormOpen] = useState(false);
@@ -1457,6 +1417,150 @@ export const CategoryAndTemplateManagerModal: React.FC<CategoryAndTemplateManage
                   </div>
                 ))}
               </div>
+
+              {/* Active Goal Funds in Dropdown (Only on Goal Categories tab) */}
+              {activeTab === 'saving_cats' && (
+                <div className="pt-2 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <PiggyBank className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>Active Goal Funds in Dropdown ({existingSinkingFunds.length})</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Rename, merge, or delete individual Goal Funds that appear in the Budget &amp; Ledger dropdowns.
+                      </p>
+                    </div>
+                  </div>
+
+                  {existingSinkingFunds.length === 0 ? (
+                    <div className="p-4 text-center text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs">
+                      No active Goal Funds yet. Add a Goal Fund from the Budget Sheet or Estimated Items tab.
+                    </div>
+                  ) : (
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
+                      {existingSinkingFunds.map((fundName) => {
+                        const fundGroup = getTplFundCategory(fundName);
+                        return (
+                          <div
+                            key={fundName}
+                            className="p-2.5 sm:p-3 flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors min-w-0"
+                          >
+                            {editingFundItem?.original === fundName ? (
+                              <div className="flex items-center gap-1.5 sm:gap-2 flex-1 min-w-0">
+                                <input
+                                  type="text"
+                                  value={editingFundItem.current}
+                                  onChange={(e) =>
+                                    setEditingFundItem({
+                                      ...editingFundItem,
+                                      current: e.target.value,
+                                    })
+                                  }
+                                  className="px-2.5 py-1 bg-white dark:bg-slate-900 border border-emerald-400 rounded-lg flex-1 min-w-0 text-xs"
+                                  placeholder="Rename or type existing fund to merge..."
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const nextClean = editingFundItem.current.trim();
+                                    if (nextClean && nextClean !== editingFundItem.original) {
+                                      if (onRenameOrMergeFund) {
+                                        onRenameOrMergeFund(editingFundItem.original, nextClean);
+                                      } else {
+                                        const updated = templates.map((t) =>
+                                          t.type === 'saving' &&
+                                          t.item.trim().toLowerCase() ===
+                                            editingFundItem.original.toLowerCase()
+                                            ? { ...t, item: nextClean }
+                                            : t
+                                        );
+                                        onUpdateTemplates(updated);
+                                      }
+                                    }
+                                    setEditingFundItem(null);
+                                  }}
+                                  className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 shrink-0 cursor-pointer"
+                                  title="Save or Merge Fund"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingFundItem(null)}
+                                  className="p-1.5 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg shrink-0 cursor-pointer"
+                                  title="Cancel"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col min-w-0 flex-1">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                    {fundName}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate pl-4">
+                                  {fundGroup}
+                                </span>
+                              </div>
+                            )}
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingFundItem({ original: fundName, current: fundName })
+                                }
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg cursor-pointer"
+                                title="Rename or merge fund"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteConfirm({
+                                    isOpen: true,
+                                    title: 'Delete Goal Fund?',
+                                    description: `Are you sure you want to remove "${fundName}" from your Goal Funds dropdown? Any existing entries or balance for this fund will be returned to General Reserves / Starting Capital (Unallocated).`,
+                                    affectedItems: [`${fundName} (${fundGroup})`],
+                                    onConfirm: () => {
+                                      if (onDeleteFund) {
+                                        onDeleteFund(
+                                          fundName,
+                                          'General Reserves / Starting Capital'
+                                        );
+                                      } else {
+                                        const updated = templates.filter(
+                                          (t) =>
+                                            !(
+                                              t.type === 'saving' &&
+                                              t.item.trim().toLowerCase() ===
+                                                fundName.trim().toLowerCase()
+                                            )
+                                        );
+                                        onUpdateTemplates(updated);
+                                      }
+                                      setDeleteConfirm((prev) => ({ ...prev, isOpen: false }));
+                                    },
+                                  });
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                title="Delete fund"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

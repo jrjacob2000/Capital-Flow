@@ -2089,7 +2089,7 @@ export class FinanceStorageService {
       const s = (rawSecondary || '').trim();
       if (!p && !s) return false;
       if (p.toLowerCase() === oldLower || s.toLowerCase() === oldLower) return true;
-      const resolved = resolveCanonicalSinkingFundName(p || s, s || p).toLowerCase();
+      const resolved = resolveCanonicalSinkingFundName(p || s, s || p, [oldClean]).toLowerCase();
       return resolved === oldLower || resolved === oldCanonicalLower;
     };
 
@@ -2100,6 +2100,10 @@ export class FinanceStorageService {
         const cleanNote = (tx.note || '')
           .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
           .trim();
+        const cleanNoteBase = cleanNote.split(' — ')[0].trim();
+        const cleanNoteSuffix = cleanNote.includes(' — ')
+          ? ` — ${cleanNote.split(' — ').slice(1).join(' — ').trim()}`
+          : '';
         const catTrim = (tx.category || '').trim();
         const toCatTrim = (tx.toCategory || '').trim();
         const isUncategorizedYieldTarget =
@@ -2110,8 +2114,8 @@ export class FinanceStorageService {
         if (
           isUncategorizedYieldTarget ||
           catTrim.toLowerCase() === oldLower ||
-          (catTrim && matchesOldFund(catTrim, cleanNote)) ||
-          (!catTrim && cleanNote && matchesOldFund(cleanNote, tx.category))
+          (catTrim && matchesOldFund(catTrim, cleanNoteBase)) ||
+          (!catTrim && cleanNoteBase && matchesOldFund(cleanNoteBase, tx.category))
         ) {
           updated.category = newClean;
           ledgerChanged = true;
@@ -2120,16 +2124,13 @@ export class FinanceStorageService {
           updated.toCategory = newClean;
           ledgerChanged = true;
         }
-        if (cleanNote.toLowerCase() === oldLower || matchesOldFund(cleanNote)) {
-          updated.note = tx.note
-            ? tx.note.replace(
-                new RegExp(oldClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
-                newClean
-              )
-            : newClean;
-          if (updated.note === tx.note && cleanNote.toLowerCase() !== newLower) {
-            updated.note = newClean;
-          }
+        if (
+          cleanNote.toLowerCase() === oldLower ||
+          cleanNoteBase.toLowerCase() === oldLower ||
+          matchesOldFund(cleanNote) ||
+          matchesOldFund(cleanNoteBase)
+        ) {
+          updated.note = `${newClean}${cleanNoteSuffix}`;
           ledgerChanged = true;
         }
         return updated;
@@ -2263,7 +2264,7 @@ export class FinanceStorageService {
       const s = (rawSecondary || '').trim();
       if (!p && !s) return false;
       if (p.toLowerCase() === targetLower || s.toLowerCase() === targetLower) return true;
-      const resolved = resolveCanonicalSinkingFundName(p || s, s || p).toLowerCase();
+      const resolved = resolveCanonicalSinkingFundName(p || s, s || p, [targetClean]).toLowerCase();
       return resolved === targetLower || resolved === targetCanonicalLower;
     };
 
@@ -2275,6 +2276,10 @@ export class FinanceStorageService {
         const cleanNote = (tx.note || '')
           .replace(/^(Budget Sync|Manual Deposit|Direct Deposit|Withdrawal|Yield):\s*/i, '')
           .trim();
+        const cleanNoteBase = cleanNote.split(' — ')[0].trim();
+        const cleanNoteSuffix = cleanNote.includes(' — ')
+          ? ` — ${cleanNote.split(' — ').slice(1).join(' — ').trim()}`
+          : '';
         const isUncategorizedYieldTarget =
           tx.source === 'interest_yield' &&
           !catTrim &&
@@ -2283,12 +2288,15 @@ export class FinanceStorageService {
         const catMatches =
           isUncategorizedYieldTarget ||
           catTrim.toLowerCase() === targetLower ||
-          (catTrim && matchesTargetFund(catTrim, cleanNote)) ||
-          (!catTrim && cleanNote && matchesTargetFund(cleanNote, tx.category));
+          (catTrim && matchesTargetFund(catTrim, cleanNoteBase)) ||
+          (!catTrim && cleanNoteBase && matchesTargetFund(cleanNoteBase, tx.category));
         const toCatMatches =
           toCatTrim.toLowerCase() === targetLower || (toCatTrim && matchesTargetFund(toCatTrim));
         const noteMatches =
-          cleanNote.toLowerCase() === targetLower || (cleanNote && matchesTargetFund(cleanNote));
+          cleanNote.toLowerCase() === targetLower ||
+          cleanNoteBase.toLowerCase() === targetLower ||
+          (cleanNote && matchesTargetFund(cleanNote)) ||
+          (cleanNoteBase && matchesTargetFund(cleanNoteBase));
 
         if (catMatches || toCatMatches || noteMatches) {
           ledgerChanged = true;
@@ -2299,8 +2307,8 @@ export class FinanceStorageService {
           if (toCatMatches) {
             updated.toCategory = destination;
           }
-          if (noteMatches) {
-            updated.note = destination;
+          if (noteMatches || catMatches) {
+            updated.note = noteMatches ? `${destination}${cleanNoteSuffix}` : destination;
           }
           return updated;
         }
