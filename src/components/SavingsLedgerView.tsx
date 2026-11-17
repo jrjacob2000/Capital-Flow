@@ -37,7 +37,11 @@ import {
   DEFAULT_SINKING_FUND_NAMES,
   MONTH_NAMES,
 } from '../services/sampleData';
-import { formatCurrency } from '../utils/budgetCalculations';
+import {
+  formatCurrency,
+  resolveDefaultReallocateSourceFund,
+  resolveReallocateFundAccountAndAmount,
+} from '../utils/budgetCalculations';
 import { AccountSelectDropdown } from './AccountSelectDropdown';
 import { CustomSelect } from './CustomSelect';
 
@@ -924,8 +928,30 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setIsTransactionModalOpen(true);
   };
 
-  const handleOpenReallocateModal = (fromFund?: string, toFund?: string, accountId?: string, amount?: number) => {
-    const source = fromFund || 'General Reserves / Starting Capital';
+  const resolveSourceFundAccountAndAmount = (
+    fundName: string,
+    preferredAccountId?: string,
+    explicitAmount?: number
+  ): { accountId: string; amountStr: string } =>
+    resolveReallocateFundAccountAndAmount(
+      fundName,
+      categoryFunds,
+      unallocatedFund,
+      preferredAccountId,
+      explicitAmount
+    );
+
+  const handleOpenReallocateModal = (
+    fromFund?: string,
+    toFund?: string,
+    accountId?: string,
+    amount?: number
+  ) => {
+    const source = resolveDefaultReallocateSourceFund(
+      categoryFunds,
+      unallocatedFund,
+      fromFund
+    );
     setReallocateFromCategory(source);
     const otherNamedFund = categoryFunds.find(
       (f) => f.id !== 'fund-general-unallocated' && f.name !== source
@@ -940,21 +966,13 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
       setReallocateToCategory('__custom__');
     }
 
-    const sourceFundObj =
-      source.trim().toLowerCase() === 'general reserves / starting capital'
-        ? unallocatedFund
-        : categoryFunds.find((f) => f.name === source);
-    const firstSourceAcc = sourceFundObj?.accounts?.[0];
-    setReallocateAccountId(
-      accountId !== undefined ? accountId : (firstSourceAcc ? firstSourceAcc.accountId : '')
+    const { accountId: nextAccId, amountStr: nextAmtStr } = resolveSourceFundAccountAndAmount(
+      source,
+      accountId,
+      amount
     );
-    if (amount !== undefined) {
-      setReallocateAmount(String(amount));
-    } else if (source === 'General Reserves / Starting Capital' && firstSourceAcc) {
-      setReallocateAmount(String(firstSourceAcc.amount));
-    } else {
-      setReallocateAmount('');
-    }
+    setReallocateAccountId(nextAccId);
+    setReallocateAmount(nextAmtStr);
     setIsReallocateModalOpen(true);
   };
 
@@ -965,18 +983,11 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
     setReallocateFromCategory(nextFrom);
     setReallocateToCategory(prevFrom);
 
-    const nextSourceObj =
-      nextFrom.trim().toLowerCase() === 'general reserves / starting capital'
-        ? unallocatedFund
-        : categoryFunds.find((f) => f.name === nextFrom);
-    if (nextSourceObj && nextSourceObj.accounts.length > 0) {
-      const hasCurrentAcc = nextSourceObj.accounts.some(
-        (a) => a.accountId === reallocateAccountId && a.amount > 0
-      );
-      if (!hasCurrentAcc) {
-        setReallocateAccountId(nextSourceObj.accounts[0].accountId);
-      }
-    }
+    const { accountId: nextAccId, amountStr: nextAmtStr } = resolveSourceFundAccountAndAmount(
+      nextFrom
+    );
+    setReallocateAccountId(nextAccId);
+    setReallocateAmount(nextAmtStr);
   };
 
   const handleRecordDeposit = (e: React.FormEvent) => {
@@ -1567,22 +1578,22 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                                 <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
                                   {currencySymbol}{formatNumber(acc.amount)}
                                 </span>
-                                {isUnallocated && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleOpenReallocateModal(
-                                        'General Reserves / Starting Capital',
-                                        undefined,
-                                        acc.accountId,
-                                        acc.amount
-                                      )
-                                    }
-                                    className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                                  >
-                                    Allocate
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenReallocateModal(
+                                      isUnallocated
+                                        ? 'General Reserves / Starting Capital'
+                                        : fund.name,
+                                      undefined,
+                                      acc.accountId,
+                                      acc.amount
+                                    )
+                                  }
+                                  className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                                >
+                                  {isUnallocated ? 'Allocate' : 'Reallocate'}
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1609,20 +1620,12 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                       type="button"
                       onClick={() => {
                         const firstAcc = fund.accounts[0];
-                        if (isUnallocated) {
-                          handleOpenReallocateModal(
-                            'General Reserves / Starting Capital',
-                            undefined,
-                            firstAcc ? firstAcc.accountId : '',
-                            firstAcc ? firstAcc.amount : fund.currentBalance
-                          );
-                        } else {
-                          handleOpenReallocateModal(
-                            fund.name,
-                            undefined,
-                            firstAcc ? firstAcc.accountId : ''
-                          );
-                        }
+                        handleOpenReallocateModal(
+                          isUnallocated ? 'General Reserves / Starting Capital' : fund.name,
+                          undefined,
+                          firstAcc ? firstAcc.accountId : undefined,
+                          firstAcc ? firstAcc.amount : fund.currentBalance
+                        );
                       }}
                       className="min-h-[36px] px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50/70 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-950 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
                     >
@@ -3498,18 +3501,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                                 : '__custom__'
                           );
                         }
-                        const nextSourceObj =
-                          nextFrom.trim().toLowerCase() === 'general reserves / starting capital'
-                            ? unallocatedFund
-                            : categoryFunds.find((f) => f.name === nextFrom);
-                        if (nextSourceObj && nextSourceObj.accounts.length > 0) {
-                          const hasAcc = nextSourceObj.accounts.some(
-                            (a) => a.accountId === reallocateAccountId && a.amount > 0
-                          );
-                          if (!hasAcc) {
-                            setReallocateAccountId(nextSourceObj.accounts[0].accountId);
-                          }
-                        }
+                        const { accountId: nextAccId, amountStr: nextAmtStr } =
+                          resolveSourceFundAccountAndAmount(nextFrom);
+                        setReallocateAccountId(nextAccId);
+                        setReallocateAmount(nextAmtStr);
                       }}
                       className="w-full min-w-0 h-8 sm:h-9 px-2 sm:px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] sm:text-xs font-medium text-slate-900 dark:text-white outline-none"
                     >
@@ -3621,16 +3616,10 @@ export const SavingsLedgerView: React.FC<SavingsLedgerViewProps> = ({
                 <AccountSelectDropdown
                   value={reallocateAccountId}
                   onChange={(nextAccId) => {
-                    setReallocateAccountId(nextAccId);
-                    if (
-                      nextAccId &&
-                      reallocateFromCategory.trim().toLowerCase() === 'general reserves / starting capital'
-                    ) {
-                      const accUnalloc = unallocatedFund?.accounts.find((a) => a.accountId === nextAccId);
-                      if (accUnalloc && accUnalloc.amount > 0) {
-                        setReallocateAmount(String(accUnalloc.amount));
-                      }
-                    }
+                    const { accountId: resolvedId, amountStr: nextAmtStr } =
+                      resolveSourceFundAccountAndAmount(reallocateFromCategory, nextAccId);
+                    setReallocateAccountId(resolvedId);
+                    setReallocateAmount(nextAmtStr);
                   }}
                   accounts={ledger.accounts}
                   currencySymbol={currencySymbol}

@@ -1081,3 +1081,103 @@ export function roundCurrency(val: number): number {
   const num = Number(val) || 0;
   return Math.round((num + Number.EPSILON) * 100) / 100;
 }
+
+export interface ReallocateFundSliceLike {
+  accountId: string;
+  amount: number;
+}
+
+export interface ReallocateFundSummaryLike {
+  id?: string;
+  name: string;
+  currentBalance: number;
+  accounts: ReallocateFundSliceLike[];
+}
+
+/**
+ * Resolves the default source Goal Fund when opening the Reallocate modal.
+ * Prioritizes an explicit fromFund if provided; otherwise defaults to General Reserves
+ * when unallocated balance > 0, or the first Goal Fund with a positive balance.
+ */
+export function resolveDefaultReallocateSourceFund(
+  categoryFunds: ReallocateFundSummaryLike[],
+  unallocatedFund?: ReallocateFundSummaryLike,
+  explicitFromFund?: string
+): string {
+  if (explicitFromFund && explicitFromFund.trim()) {
+    return explicitFromFund.trim();
+  }
+  if (unallocatedFund && unallocatedFund.currentBalance > 0) {
+    return 'General Reserves / Starting Capital';
+  }
+  const firstPositiveFund = categoryFunds.find((f) => f.currentBalance > 0);
+  if (firstPositiveFund) {
+    return firstPositiveFund.name;
+  }
+  return 'General Reserves / Starting Capital';
+}
+
+/**
+ * Resolves the Bank Account holding a Goal Fund and the available balance to allocate:
+ * - When preferredAccountId is undefined (opening modal, changing From Fund, or switching direction):
+ *   defaults to the primary Bank Account where the fund resides (highest positive slice) and its available balance.
+ * - When preferredAccountId is a specific accountId:
+ *   uses that accountId and defaults the amount to the fund's available balance in that account.
+ * - When preferredAccountId is '' ('All / Unspecified Account'):
+ *   uses '' and defaults the amount to the fund's total currentBalance.
+ */
+export function resolveReallocateFundAccountAndAmount(
+  fundName: string,
+  categoryFunds: ReallocateFundSummaryLike[],
+  unallocatedFund?: ReallocateFundSummaryLike,
+  preferredAccountId?: string,
+  explicitAmount?: number
+): { accountId: string; availableAmount: number; amountStr: string } {
+  const sourceFundObj =
+    fundName.trim().toLowerCase() === 'general reserves / starting capital'
+      ? unallocatedFund
+      : categoryFunds.find((f) => f.name === fundName);
+
+  if (preferredAccountId === '') {
+    const totalAvail = roundCurrency(
+      explicitAmount !== undefined ? explicitAmount : sourceFundObj?.currentBalance ?? 0
+    );
+    return {
+      accountId: '',
+      availableAmount: totalAvail,
+      amountStr: totalAvail > 0 ? String(totalAvail) : '',
+    };
+  }
+
+  if (preferredAccountId !== undefined) {
+    const specificSlice = sourceFundObj?.accounts.find(
+      (a) => a.accountId === preferredAccountId
+    );
+    const sliceAvail = roundCurrency(
+      explicitAmount !== undefined ? explicitAmount : specificSlice?.amount ?? 0
+    );
+    return {
+      accountId: preferredAccountId,
+      availableAmount: sliceAvail,
+      amountStr: sliceAvail > 0 ? String(sliceAvail) : '',
+    };
+  }
+
+  const primarySlice =
+    sourceFundObj?.accounts.find((a) => a.amount > 0) || sourceFundObj?.accounts?.[0];
+  const resolvedAccId = primarySlice ? primarySlice.accountId : '';
+  const availAmount = roundCurrency(
+    explicitAmount !== undefined
+      ? explicitAmount
+      : primarySlice && primarySlice.amount > 0
+      ? primarySlice.amount
+      : sourceFundObj?.currentBalance ?? 0
+  );
+
+  return {
+    accountId: resolvedAccId,
+    availableAmount: availAmount,
+    amountStr: availAmount > 0 ? String(availAmount) : '',
+  };
+}
+

@@ -30,6 +30,8 @@ import {
   computePeriodProjectedSurplus,
   formatCurrency,
   roundCurrency,
+  resolveDefaultReallocateSourceFund,
+  resolveReallocateFundAccountAndAmount,
 } from './budgetCalculations';
 import {
   isTemplateValidForPeriod,
@@ -5263,5 +5265,143 @@ describe('41. Active Goal Fund Dropdown Deduplication (collectActiveSinkingFundN
 
     const activeFunds = collectActiveSinkingFundNames(customBudget);
     assert.deepEqual(activeFunds, ['Palawan Vacation Fund']);
+  });
+});
+
+describe('42. Reallocate Goal Fund Default Bank Account & Available Amount Resolution', () => {
+  const sampleUnallocated = {
+    id: 'fund-general-unallocated',
+    name: 'General Reserves / Starting Capital',
+    currentBalance: 18500.5,
+    accounts: [
+      { accountId: 'acc-bpi', amount: 12500.5 },
+      { accountId: 'acc-maya', amount: 6000 },
+    ],
+  };
+
+  const sampleCategoryFunds = [
+    sampleUnallocated,
+    {
+      id: 'fund-1',
+      name: 'Emergency Fund',
+      currentBalance: 45000,
+      accounts: [
+        { accountId: 'acc-seabank', amount: 30000 },
+        { accountId: 'acc-bpi', amount: 15000 },
+      ],
+    },
+    {
+      id: 'fund-2',
+      name: 'Car Maintenance',
+      currentBalance: 8250.75,
+      accounts: [{ accountId: 'acc-maya', amount: 8250.75 }],
+    },
+    {
+      id: 'fund-3',
+      name: 'Empty Travel Fund',
+      currentBalance: 0,
+      accounts: [],
+    },
+  ];
+
+  it('defaults to the primary Bank Account where the selected Goal Fund resides and its available balance', () => {
+    // 1. Opening Reallocate for Emergency Fund (no preferredAccountId passed) -> picks SeaBank (30,000)
+    const efDefault = resolveReallocateFundAccountAndAmount(
+      'Emergency Fund',
+      sampleCategoryFunds,
+      sampleUnallocated
+    );
+    assert.deepEqual(efDefault, {
+      accountId: 'acc-seabank',
+      availableAmount: 30000,
+      amountStr: '30000',
+    });
+
+    // 2. Switching From Goal Fund to Car Maintenance -> picks Maya (8,250.75)
+    const carDefault = resolveReallocateFundAccountAndAmount(
+      'Car Maintenance',
+      sampleCategoryFunds,
+      sampleUnallocated
+    );
+    assert.deepEqual(carDefault, {
+      accountId: 'acc-maya',
+      availableAmount: 8250.75,
+      amountStr: '8250.75',
+    });
+
+    // 3. Opening Reallocate for General Reserves / Starting Capital -> picks BPI (12,500.5)
+    const unallocDefault = resolveReallocateFundAccountAndAmount(
+      'General Reserves / Starting Capital',
+      sampleCategoryFunds,
+      sampleUnallocated
+    );
+    assert.deepEqual(unallocDefault, {
+      accountId: 'acc-bpi',
+      availableAmount: 12500.5,
+      amountStr: '12500.5',
+    });
+  });
+
+  it('updates available amount when switching Bank Accounts or selecting All / Unspecified Account', () => {
+    // 1. Selecting BPI for Emergency Fund -> 15,000 available in BPI
+    const efInBpi = resolveReallocateFundAccountAndAmount(
+      'Emergency Fund',
+      sampleCategoryFunds,
+      sampleUnallocated,
+      'acc-bpi'
+    );
+    assert.deepEqual(efInBpi, {
+      accountId: 'acc-bpi',
+      availableAmount: 15000,
+      amountStr: '15000',
+    });
+
+    // 2. Selecting Maya for Emergency Fund (where Emergency Fund has 0 balance) -> empty amountStr
+    const efInMaya = resolveReallocateFundAccountAndAmount(
+      'Emergency Fund',
+      sampleCategoryFunds,
+      sampleUnallocated,
+      'acc-maya'
+    );
+    assert.deepEqual(efInMaya, {
+      accountId: 'acc-maya',
+      availableAmount: 0,
+      amountStr: '',
+    });
+
+    // 3. Selecting All / Unspecified Account ('') for Emergency Fund -> total 45,000 balance
+    const efAllAccounts = resolveReallocateFundAccountAndAmount(
+      'Emergency Fund',
+      sampleCategoryFunds,
+      sampleUnallocated,
+      ''
+    );
+    assert.deepEqual(efAllAccounts, {
+      accountId: '',
+      availableAmount: 45000,
+      amountStr: '45000',
+    });
+  });
+
+  it('resolves the default source Goal Fund when opening the Reallocate modal from the top toolbar', () => {
+    // When Unallocated has positive balance, defaults to General Reserves / Starting Capital
+    assert.equal(
+      resolveDefaultReallocateSourceFund(sampleCategoryFunds, sampleUnallocated),
+      'General Reserves / Starting Capital'
+    );
+
+    // When Unallocated is 0, defaults to the first Goal Fund with a positive balance ('Emergency Fund')
+    const zeroUnalloc = { ...sampleUnallocated, currentBalance: 0, accounts: [] };
+    const fundsWithZeroUnalloc = [zeroUnalloc, ...sampleCategoryFunds.slice(1)];
+    assert.equal(
+      resolveDefaultReallocateSourceFund(fundsWithZeroUnalloc, zeroUnalloc),
+      'Emergency Fund'
+    );
+
+    // Explicit fromFund is always respected
+    assert.equal(
+      resolveDefaultReallocateSourceFund(fundsWithZeroUnalloc, zeroUnalloc, 'Car Maintenance'),
+      'Car Maintenance'
+    );
   });
 });
